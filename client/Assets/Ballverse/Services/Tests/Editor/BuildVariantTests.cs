@@ -188,6 +188,29 @@ namespace Ballverse.Services.Tests
             Assert.IsNotNull(StoreBuildCheck.StoreAdUnitsProblem(AdUnitIds.TestIosRewarded, AdUnitIds.TestIosInterstitial));
         }
 
+        [Test]
+        public void StoreBuildCheckFindsTheVariantWithoutTheCommandLineFlag()
+        {
+            string[] none = { "Unity", "-batchmode", "-executeMethod", "Ballverse.Editor.BuildScript.BuildAndroidAab" };
+
+            // The bootstrap App Bundle default: the variant is only in the build's extra defines, or nowhere at all.
+            Assert.AreEqual(BuildVariant.Store, StoreBuildCheck.ResolveVariant(new[] { BuildVariants.StoreSymbol }, "", none, true));
+            Assert.AreEqual(BuildVariant.Store, StoreBuildCheck.ResolveVariant(null, "", none, androidAppBundle: true));
+            // Menu builds pass the variant in the extra defines only.
+            Assert.AreEqual(BuildVariant.Store, StoreBuildCheck.ResolveVariant(new[] { BuildVariants.StoreSymbol }, null, null, false));
+            Assert.AreEqual(BuildVariant.OwnerTest, StoreBuildCheck.ResolveVariant(new[] { BuildVariants.OwnerTestSymbol }, "", none, true),
+                "an explicit OwnerTest App Bundle is not a Store build");
+            Assert.AreEqual(BuildVariant.Dev, StoreBuildCheck.ResolveVariant(new[] { BuildVariants.DevSymbol }, "", null, true));
+            // Player Settings symbols compile into the player too; Store wins as in BuildVariants.Current.
+            Assert.AreEqual(BuildVariant.Store, StoreBuildCheck.ResolveVariant(new[] { BuildVariants.OwnerTestSymbol },
+                "FOO; " + BuildVariants.StoreSymbol, none, false));
+            Assert.AreEqual(BuildVariant.OwnerTest, StoreBuildCheck.ResolveVariant(null, "FOO;" + BuildVariants.OwnerTestSymbol, none, true));
+            // Command line when no symbol is known; an APK or Xcode project without any of these is a Dev player.
+            Assert.AreEqual(BuildVariant.Store, StoreBuildCheck.ResolveVariant(null, "", new[] { "-ballverseVariant", "Store" }, false));
+            Assert.AreEqual(BuildVariant.OwnerTest, StoreBuildCheck.ResolveVariant(null, "", new[] { "-ballverseVariant", "OwnerTest" }, true));
+            Assert.IsNull(StoreBuildCheck.ResolveVariant(null, null, none, androidAppBundle: false));
+        }
+
         const string Manifest =
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
             "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"com.unity3d.player\">\n" +

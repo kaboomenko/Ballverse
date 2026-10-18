@@ -54,9 +54,13 @@ namespace Ballverse.Services.Tests
                 _listener.OnProductsFetched(products);
             }
 
+            /// <summary>When true, <see cref="FetchPurchases"/> throws (the read fails synchronously).</summary>
+            public bool ThrowOnFetch;
+
             public void FetchPurchases()
             {
                 FetchRequests++;
+                if (ThrowOnFetch) throw new System.InvalidOperationException("fetch failed");
             }
 
             public void Answer(params StorePurchase[] purchases)
@@ -599,6 +603,8 @@ namespace Ballverse.Services.Tests
             backend.FinishRestore();                       // restore's own read: 4
             Assert.AreEqual(4, backend.FetchRequests);
             Assert.IsNull(outcome);
+            backend.Answer();                              // the retry (read 3) is answered first
+            Assert.IsNull(outcome, "read 3 was still live when read 4 was issued");
             backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds));
             Assert.IsTrue(outcome.Value.Success);
             Assert.AreEqual(1, outcome.Value.OwnedCount);
@@ -644,6 +650,111 @@ namespace Ballverse.Services.Tests
             _clock.Advance(1);
             service.Tick();
             Assert.AreEqual("fetch_timeout", outcome.Value.ErrorCode);
+        }
+
+        [Test]
+        public void EarlierReadFailingAfterTheRestoreReadWasIssuedDoesNotDecideTheRestore()
+        {
+            var backend = new ScriptedStoreBackend { HoldRestore = true };
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            service.RefreshPurchases();                    // read A (resume read) in flight
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);
+            backend.FinishRestore();                       // restore's own read B
+            Assert.AreEqual(3, backend.FetchRequests);
+            backend.FailRead("NetworkError");              // A's failure (reads are answered in order)
+            Assert.IsNull(outcome, "A's failure is not the restore's");
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds)); // B
+            Assert.IsTrue(outcome.Value.Success);
+            Assert.AreEqual(1, outcome.Value.OwnedCount);
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoWatermark));
+        }
+
+        [Test]
+        public void EarlierReadAnsweredAfterTheRestoreReadWasIssuedDoesNotDecideTheRestore()
+        {
+            var backend = new ScriptedStoreBackend { HoldRestore = true };
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            service.RefreshPurchases();                    // read A
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);
+            backend.FinishRestore();                       // read B
+            backend.Answer();                              // A: predates the restore, nothing owned
+            Assert.IsNull(outcome, "A's answer is not the restore's");
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.RemoveExportAds)); // B
+            Assert.IsTrue(outcome.Value.Success);
+            Assert.AreEqual(1, outcome.Value.OwnedCount);
+
+            // Same order, but the restore's own read fails after A answered.
+            var backend2 = new ScriptedStoreBackend { HoldRestore = true };
+            var service2 = Create(backend2);
+            service2.Initialize();
+            backend2.Answer();
+            service2.RefreshPurchases();
+            RestoreOutcome? outcome2 = null;
+            service2.Restore(o => outcome2 = o);
+            backend2.FinishRestore();
+            backend2.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds));
+            Assert.IsNull(outcome2);
+            backend2.FailRead("NetworkError");
+            Assert.IsFalse(outcome2.Value.Success);
+            Assert.AreEqual("fetch_failed", outcome2.Value.ErrorCode);
+        }
+
+        [Test]
+        public void RestoreReadTimingOutAfterAnEarlierReadAnsweredUsesThatAnswer()
+        {
+            // Google Play may answer two concurrent reads once: the answer taken as A's is then the restore's too.
+            var backend = new ScriptedStoreBackend { HoldRestore = true };
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            service.RefreshPurchases();                    // read A
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);
+            backend.FinishRestore();                       // read B
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds)); // the only answer
+            Assert.IsNull(outcome);
+            _clock.Advance(PurchaseService.FetchTimeoutMs);
+            service.Tick();
+            Assert.IsTrue(outcome.Value.Success);
+            Assert.AreEqual(1, outcome.Value.OwnedCount);
+
+            // Without any answer after B was issued the timeout still fails the restore.
+            var backend2 = new ScriptedStoreBackend { HoldRestore = true };
+            var service2 = Create(backend2);
+            service2.Initialize();
+            backend2.Answer();
+            service2.RefreshPurchases();
+            RestoreOutcome? outcome2 = null;
+            service2.Restore(o => outcome2 = o);
+            backend2.FinishRestore();
+            backend2.FailRead("NetworkError");             // A failed
+            _clock.Advance(PurchaseService.FetchTimeoutMs);
+            service2.Tick();
+            Assert.IsFalse(outcome2.Value.Success);
+            Assert.AreEqual("fetch_timeout", outcome2.Value.ErrorCode);
+        }
+
+        [Test]
+        public void RestoreReadThatThrowsFailsTheRestoreEvenWithAnEarlierReadLive()
+        {
+            var backend = new ScriptedStoreBackend { HoldRestore = true };
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            service.RefreshPurchases();                    // read A
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);
+            backend.ThrowOnFetch = true;
+            backend.FinishRestore();                       // read B throws
+            Assert.IsFalse(outcome.Value.Success);
+            Assert.AreEqual("fetch_failed", outcome.Value.ErrorCode);
+            Assert.IsTrue(service.IsFetchingPurchases, "A is still live");
         }
 
         static List<string> ProductIdsOf(IReadOnlyList<StoreProduct> products)

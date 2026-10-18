@@ -63,9 +63,11 @@ restarts and are re-delivered by the next purchases read, like a real store acco
 offers `ApproveDeferred`, `Refund`, `AddUnconfirmed` and `ResetAccount`. Tests that pass `ServicesOptions.FakeStore` get an
 in-memory account unless `PersistFakeStore = true`.
 
-`Editor/StoreBuildCheck.cs` fails a Store build whose `ServicesConfig` lacks real units when the variant is on the command line
-(`-ballverseVariant Store`, CI). Menu builds and the App Bundle default pass the variant only inside the bootstrap build script:
-it should call `StoreBuildCheck.StoreAdUnitsProblem(...)` next to its AdMob app id check (open issue below).
+`Editor/StoreBuildCheck.cs` fails a Store build whose `ServicesConfig` lacks real units. It takes the variant from the symbols
+the player compiles with: the build's `extraScriptingDefines`, which the bootstrap build script sets for CI, menu builds and its
+defaults alike (recorded when the build starts by `BuildDefinesRecorder`, a `BuildPlayerProcessor`), and the Player Settings
+defines. Without a variant symbol it falls back to `-ballverseVariant` on the command line, and an Android App Bundle counts as
+Store (the bootstrap default), so a default Store AAB with missing or test units is refused instead of shipping with ads off.
 
 ## Initialization order (spec §7.9)
 
@@ -82,7 +84,10 @@ matters on Google Play: Unity IAP 5 reads purchases itself on each focus gain an
 issued before that would be answered into Unity IAP's cache only. A read without an answer after 20 s counts as failed (it never
 blocks later reads) and an automatic one is retried once. A restore is decided only by its own read, issued after the store's
 restore call (`AppStore.sync()` / Play restore) finished: answers, failures and timeouts of earlier reads that arrive while that
-call is running do not end it; its own read timing out fails it with `fetch_timeout`.
+call is running do not end it. Reads are answered in request order, so after its read is issued, the next answers or failures
+up to the number of earlier reads still live belong to those reads and do not end it either (their answers still update the
+rights). Its own read timing out fails it with `fetch_timeout`, unless an earlier read was answered after the restore's read was
+issued: Google Play may answer concurrent reads once, so that answer then decides the restore.
 
 ## Consent and analytics (spec §9.1)
 
@@ -129,8 +134,11 @@ If the ads plugin is imported as a `.unitypackage` instead of the UPM package, a
 
 ## Open issues
 
-- Bootstrap `BuildScript.CheckAdIds` should also fail Store builds on `StoreBuildCheck.StoreAdUnitsProblem(...)` (menu builds and
-  the App Bundle default do not put the variant on the command line). Until then a misconfigured Store build runs with ads off.
+- `StoreBuildCheck` relies on Unity calling `BuildPlayerProcessor.PrepareForBuild` with the build's options before the
+  preprocess step (Unity 6000.3 reference source: native calls `BuildPipeline.PreparePlayerBuild` for every player build). If
+  that record were missing, the Player Settings symbols, `-ballverseVariant` and the App Bundle default still apply; only an
+  APK / Xcode Store build started from the menu would then pass unchecked (and run with ads off, never test ads). Moving the
+  check into the bootstrap `BuildScript` (outside this module) would remove that dependency.
 - Compilation under `BALLVERSE_STORE` / `BALLVERSE_OWNERTEST` is checked here with the real Google Mobile Ads 11.6.0 assemblies
   and stand-ins for UnityEngine / Unity IAP 5.4.4 (signatures copied from the package) only; CI builds only OwnerTest on push.
 - A product that becomes sellable through a Remote Config change after the store connected (not possible with the release-1

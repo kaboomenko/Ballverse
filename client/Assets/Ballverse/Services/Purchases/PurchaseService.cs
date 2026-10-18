@@ -23,8 +23,11 @@ namespace Ballverse.Services
     /// <item>deferred purchases grant nothing and are listed in <see cref="PendingProductIds"/>;</item>
     /// <item>a purchases read that gets no answer within <see cref="FetchTimeoutMs"/> counts as failed, so later reads are not
     /// blocked, and an automatic one is retried once (Unity IAP on Google Play can hand the answer of an app read to its own
-    /// read on focus gain, which never reports back); a restore fails with <c>fetch_timeout</c> only when its own read (the
-    /// one issued after the store's restore finished) goes unanswered.</item>
+    /// read on focus gain, which never reports back);</item>
+    /// <item>a restore is decided by its own read, issued after the store's restore call finished. Reads are answered in
+    /// request order, so answers and failures of reads that were still live when it was issued belong to those earlier reads
+    /// and do not end it; it fails with <c>fetch_timeout</c> when its own read goes unanswered — unless an earlier read was
+    /// answered after it was issued (Google Play may answer concurrent reads once), in which case that answer decides.</item>
     /// </list>
     /// </summary>
     public sealed class PurchaseService : IPurchaseService, IStoreBackendListener, ITickable
@@ -75,6 +78,10 @@ namespace Ballverse.Services
         bool _restoring;
         // The restore's own purchases read has been issued (after the store's restore call finished).
         bool _restoreReadIssued;
+        // Earlier reads still live when the restore's read was issued: the next answers or failures are theirs.
+        int _restoreEarlierReads;
+        // An earlier read was answered after the restore's read was issued (used when the restore's read itself times out).
+        bool _restoreEarlierAnswered;
         int _restoreGeneration;
         string _restoreError;
         // Reads requested and not answered yet, minus those written off by a timeout; > 0 means a read is in flight.
@@ -277,7 +284,9 @@ namespace Ballverse.Services
         void IssueRestoreRead()
         {
             _restoreReadIssued = true;
-            FetchPurchasesNow(force: true);
+            _restoreEarlierReads = _liveReads;
+            _restoreEarlierAnswered = false;
+            FetchPurchasesNow(force: true, isRestoreRead: true);
         }
 
         /// <summary>
@@ -285,6 +294,22 @@ namespace Ballverse.Services
         /// is still running belong to earlier reads and do not end the restore.
         /// </summary>
         bool RestoreAwaitsRead => _restoring && _restoreReadIssued;
+
+        /// <summary>
+        /// Whether a read answer or failure that just arrived is the restore's own read. Reads are answered in request order, so
+        /// while reads issued before it are outstanding, the answer belongs to the oldest of them.
+        /// </summary>
+        bool IsRestoreReadResponse(bool answered)
+        {
+            if (!RestoreAwaitsRead) return false;
+            if (_restoreEarlierReads > 0)
+            {
+                _restoreEarlierReads--;
+                if (answered) _restoreEarlierAnswered = true;
+                return false;
+            }
+            return true;
+        }
 
         public void RefreshPurchases()
         {
@@ -406,7 +431,7 @@ namespace Ballverse.Services
             _pending.UnionWith(pending);
             ReplaceOwned(owned);
             foreach (var p in toConfirm) Confirm(p);
-            if (RestoreAwaitsRead) CompleteRestore(_restoreError == null, _restoreError);
+            if (IsRestoreReadResponse(answered: true)) CompleteRestore(_restoreError == null, _restoreError);
             if (!reread)
             {
                 _consecutiveRereads = 0;
@@ -453,10 +478,16 @@ namespace Ballverse.Services
 
         public void OnPurchasesFetchFailed(string reason)
         {
+            ReadFailed(reason, restoreReadThrew: false);
+        }
+
+        void ReadFailed(string reason, bool restoreReadThrew)
+        {
             if (_liveReads > 0) _liveReads--;
             if (_fetchesAnswered < _fetchesIssued) _fetchesAnswered++;
             _log.Warning(Tag, "Purchases fetch failed (" + reason + "); keeping cached rights.");
-            if (RestoreAwaitsRead) CompleteRestore(false, "fetch_failed");
+            // A restore read that threw failed synchronously: it is the restore's own read whatever else is live.
+            if (restoreReadThrew ? RestoreAwaitsRead : IsRestoreReadResponse(answered: false)) CompleteRestore(false, "fetch_failed");
         }
 
         public void OnPurchasePending(StorePurchase purchase)
@@ -539,7 +570,7 @@ namespace Ballverse.Services
 
         // ---- internals ----
 
-        void FetchPurchasesNow(bool force, bool isRetry = false)
+        void FetchPurchasesNow(bool force, bool isRetry = false, bool isRestoreRead = false)
         {
             if (_liveReads > 0 && !force) return;
             _liveReads++;
@@ -553,7 +584,7 @@ namespace Ballverse.Services
             catch (Exception e)
             {
                 _log.Error(Tag, "Store purchases fetch threw.", e);
-                OnPurchasesFetchFailed("exception");
+                ReadFailed("exception", restoreReadThrew: isRestoreRead);
             }
         }
 
@@ -566,6 +597,13 @@ namespace Ballverse.Services
             // read that times out while the store's restore call is still running is an ordinary read (retried below).
             if (RestoreAwaitsRead)
             {
+                if (_restoreEarlierAnswered)
+                {
+                    // Google Play can answer concurrent reads once: the answer taken as an earlier read's was the latest state.
+                    _log.Warning(Tag, "Purchases read for restore got no own answer in time; using the answer received after it was issued.");
+                    CompleteRestore(_restoreError == null, _restoreError);
+                    return;
+                }
                 _log.Warning(Tag, "Purchases read for restore got no answer in time.");
                 CompleteRestore(false, "fetch_timeout");
                 return;
@@ -653,6 +691,8 @@ namespace Ballverse.Services
         {
             _restoring = false;
             _restoreReadIssued = false;
+            _restoreEarlierReads = 0;
+            _restoreEarlierAnswered = false;
             var waiters = _restoreWaiters;
             _restoreWaiters = null;
             LogRestore(success, errorCode);
