@@ -44,10 +44,19 @@ namespace Ballverse.Core.Monetization
         public static IReadOnlyList<Entitlement> All => s_allView;
 
         static readonly IReadOnlyList<Entitlement> s_allView = Array.AsReadOnly(s_all);
+        static readonly ulong s_definedMask = BuildDefinedMask();
 
         public static bool IsDefined(Entitlement e)
         {
-            return Array.IndexOf(s_all, e) >= 0;
+            int v = (int)e;
+            return v >= 0 && v < 64 && ((s_definedMask >> v) & 1UL) != 0UL;
+        }
+
+        static ulong BuildDefinedMask()
+        {
+            ulong mask = 0UL;
+            foreach (var e in s_all) mask |= 1UL << (int)e;
+            return mask;
         }
 
         /// <summary>The MODE_* entitlement that unlocks a paid mode; false for modes without one (M01–M05).</summary>

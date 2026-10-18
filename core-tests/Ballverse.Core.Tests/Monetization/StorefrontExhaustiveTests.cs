@@ -22,11 +22,11 @@ namespace Ballverse.Core.Tests.Monetization
             for (int mask = 0; mask < Subsets.Count; mask++) Check(mask, NoParts);
         }
 
-        static void Check(int mask, MonetizationConfig config)
+        internal static void Check(int mask, MonetizationConfig config, bool gf = false)
         {
             var owned = Subsets.Ids(mask);
-            var s = Storefront.Build(owned, config);
-            var current = Entitlements.From(owned, config);
+            var s = Storefront.Build(owned, config, null, gf);
+            var current = Entitlements.From(owned, config, gf);
             Assert.Equal(current, s.Entitlements);
             Assert.Equal(15, s.Offers.Count);
 
@@ -37,8 +37,10 @@ namespace Ballverse.Core.Tests.Monetization
             var nonOwnedWithGain = new List<StorefrontOffer>();
             foreach (var o in s.Offers)
             {
-                var withP = new List<string>(owned) { o.ProductId };
-                Assert.Equal(Entitlements.From(withP, config).Except(current), o.Gain);
+                owned.Add(o.ProductId);
+                Assert.Equal(Entitlements.From(owned, config, gf).Except(current), o.Gain);
+                owned.RemoveAt(owned.Count - 1);
+                Assert.NotEqual(OfferHiddenReason.NotSellable, o.HiddenReason);
                 Assert.Equal(Subsets.Has(mask, o.ProductId), o.Owned);
                 if (!o.Owned && !o.Gain.IsEmpty) nonOwnedWithGain.Add(o);
 
@@ -91,11 +93,12 @@ namespace Ballverse.Core.Tests.Monetization
             // Ultimate overpay rule (§5.2 "Ultimate (он дороже, чем недостающая часть)", "только если нет режимов"), checked
             // against an independent brute-force oracle over every combination of the other 14 products.
             int partsCost = BruteForcePartsCost(current);
-            bool viaParts = config.WatermarkByParts && current.ModeCount > 0 && partsCost < ProductCatalog.UltimatePriceCents;
+            bool partsGiveWatermark = config.WatermarkByParts || config.WatermarkWithNoAds || gf;
+            bool viaParts = partsGiveWatermark && current.ModeCount > 0 && partsCost < ProductCatalog.UltimatePriceCents;
             bool cheaperSame = nonOwnedWithGain.Any(q => q != ultimate && q.Gain == ultimate.Gain);
             Assert.Equal(!ultimate.Owned && !ultimate.Gain.IsEmpty && !cheaperSame && !viaParts, ultimate.Visible);
             if (ultimate.HiddenReason == OfferHiddenReason.CheaperViaParts) Assert.True(viaParts);
-            if (!config.WatermarkByParts)
+            if (!partsGiveWatermark)
                 Assert.Equal(!current.Contains(Entitlement.NoWatermark), ultimate.Visible);
             Assert.Equal(partsCost, Storefront.CheapestPartsToComplete(current).Sum(id => ProductCatalog.Get(id).BasePriceUsdCents));
 
@@ -110,7 +113,7 @@ namespace Ballverse.Core.Tests.Monetization
             // Buying everything visible completes every entitlement: nothing becomes unreachable.
             var all = new List<string>(owned);
             all.AddRange(s.VisibleOffers.Select(o => o.ProductId));
-            Assert.Equal(EntitlementSet.AllDefined, Entitlements.From(all, config));
+            Assert.Equal(EntitlementSet.AllDefined, Entitlements.From(all, config, gf));
 
             // All Modes partial-ownership marker.
             var allModes = s.Get(ProductIds.AllModes);
@@ -197,6 +200,9 @@ namespace Ballverse.Core.Tests.Monetization
                 var a = Storefront.Build(ids);
                 var b = Storefront.Build(shuffled);
                 Assert.Equal(a.Offers.Select(Describe), b.Offers.Select(Describe));
+                var r1a = Storefront.Build(ids, MonetizationConfig.Release1);
+                var r1b = Storefront.Build(shuffled, MonetizationConfig.Release1);
+                Assert.Equal(r1a.Offers.Select(Describe), r1b.Offers.Select(Describe));
             }
         }
 

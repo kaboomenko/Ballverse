@@ -15,10 +15,14 @@ namespace Ballverse.Core.Monetization
         public IReadOnlyList<StorefrontOffer> VisibleOffers => _visible;
         /// <summary>The user's current entitlements.</summary>
         public EntitlementSet Entitlements { get; }
-        /// <summary>Every entitlement is owned: show "Всё куплено ✓" and no offers (spec §5.2 last row).</summary>
+        /// <summary>
+        /// Nothing more can be bought: the user has every entitlement that owning all sellable products would give
+        /// (spec §5.2 last row "Всё куплено ✓"; full catalog: every entitlement; release 1: NO_EXPORT_ADS, NO_INTERSTITIALS
+        /// and NO_WATERMARK). No offers are visible then.
+        /// </summary>
         public bool AllPurchased { get; }
 
-        internal StorefrontState(StorefrontOffer[] offers, EntitlementSet entitlements)
+        internal StorefrontState(StorefrontOffer[] offers, EntitlementSet entitlements, bool allPurchased)
         {
             _offers = offers;
             _offersView = System.Array.AsReadOnly(offers);
@@ -29,7 +33,7 @@ namespace Ballverse.Core.Monetization
             }
             _visible = visible.AsReadOnly();
             Entitlements = entitlements;
-            AllPurchased = entitlements.IsSupersetOf(EntitlementSet.AllDefined);
+            AllPurchased = allPurchased;
         }
 
         /// <summary>The offer for <paramref name="productId"/>, or null for unknown ids.</summary>

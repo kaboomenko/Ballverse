@@ -22,6 +22,11 @@ namespace Ballverse.Core.Monetization
         /// not complete NO_WATERMARK: "Покупатель не должен платить за то, что у него уже есть" (spec §5.2).
         /// </summary>
         AlreadyAvailable = 5,
+        /// <summary>
+        /// Not sold in this release (<see cref="MonetizationConfig.SellableProductIds"/>; release 1: single modes, All Modes
+        /// and Ultimate, which promise modes that do not ship). Owned products report <see cref="Owned"/> instead.
+        /// </summary>
+        NotSellable = 6,
     }
 
     /// <summary>One product as the smart storefront presents it (spec §5.2). Immutable.</summary>

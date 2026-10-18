@@ -39,7 +39,8 @@ namespace Ballverse.Core.Monetization
     {
         /// <summary>
         /// Ids with at least one transaction whose current state is <see cref="PurchaseState.Purchased"/> (pending and
-        /// refunded ones grant nothing; spec §5.4 "Возврат денег … право снимается"), sorted ordinal, distinct.
+        /// refunded ones grant nothing, spec §5.4 "Права не выдаются до подтверждения", "Возврат денег … право снимается";
+        /// this includes Play Billing PENDING purchases, which already carry a purchaseToken), sorted ordinal, distinct.
         /// The current state of a transaction is its last record with the same <see cref="PurchaseRecord.TransactionId"/>;
         /// a record without an id (null or empty) is taken as the current state of a transaction of its own, so pass ids when the input
         /// mixes old and updated states (e.g. iOS Transaction.updates), or pass only current states (StoreKit

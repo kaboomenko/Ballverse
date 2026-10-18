@@ -5,13 +5,17 @@ namespace Ballverse.Core.Monetization
     {
         /// <summary>Kill switch <c>watermark_enabled = false</c>: no watermark for anyone, no row.</summary>
         Hidden = 0,
-        /// <summary>No NO_WATERMARK: locked row; a tap opens the Ultimate sheet (<see cref="Storefront.WatermarkOffers"/>). Export is never blocked.</summary>
+        /// <summary>No NO_WATERMARK: locked row; a tap opens the Ultimate sheet or, per the smart storefront and the release catalog, the missing part (<see cref="Storefront.WatermarkOffers"/>; release 1: No Ads or the missing ad removal). Export is never blocked.</summary>
         Locked = 1,
         /// <summary>NO_WATERMARK owned: a switch, off (no watermark) by default.</summary>
         Toggle = 2,
     }
 
-    /// <summary>Watermark decision at export time (spec §3.10, owner decision Р13). Pure.</summary>
+    /// <summary>
+    /// Watermark decision at export time (spec §3.10, owner decision Р13). Pure. NO_WATERMARK comes from
+    /// <see cref="Entitlements.From"/>: Ultimate, the Ultimate contents by parts, or (release 1, and grandfathered after it)
+    /// No Ads / both ad removals.
+    /// </summary>
     public static class WatermarkPolicy
     {
         public static WatermarkRow GetRow(EntitlementSet entitlements, bool watermarkEnabled = true)

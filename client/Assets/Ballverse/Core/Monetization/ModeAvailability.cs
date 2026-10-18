@@ -13,16 +13,22 @@ namespace Ballverse.Core.Monetization
         Grandfathered = 2,
         /// <summary>The user owns its MODE_* entitlement.</summary>
         Entitled = 3,
+        /// <summary>
+        /// The mode does not ship in this release (<see cref="MonetizationConfig.ReleasedModes"/>; release 1: everything but
+        /// M01, M02, M05). Not playable and not sold, whatever is free, grandfathered or owned; the gallery shows no card.
+        /// </summary>
+        NotReleased = 4,
     }
 
     /// <summary>
-    /// Mode availability (spec §5.1): free by config, OR grandfathered, OR entitled.
+    /// Mode availability (spec §5.1): released in this build (owner decision, release 1) AND (free by config, OR
+    /// grandfathered, OR entitled).
     /// The grandfathered set is persisted by the caller (local flag <c>grandfathered_modes</c>); these functions are pure.
     /// </summary>
     public static class ModeAvailability
     {
         /// <summary>
-        /// Access of <paramref name="mode"/>, checked in order Free, Grandfathered, Entitled.
+        /// Access of <paramref name="mode"/>, checked in order NotReleased, Free, Grandfathered, Entitled.
         /// </summary>
         /// <param name="grandfathered">Persisted grandfathered modes; null means none.</param>
         /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
@@ -30,6 +36,7 @@ namespace Ballverse.Core.Monetization
             IEnumerable<ModeCode> grandfathered, MonetizationConfig config = null)
         {
             config = config ?? MonetizationConfig.Default;
+            if (!config.IsReleased(mode)) return ModeAccess.NotReleased;
             if (config.IsFree(mode)) return ModeAccess.Free;
             if (grandfathered != null)
             {
@@ -45,12 +52,14 @@ namespace Ballverse.Core.Monetization
         public static bool IsAvailable(ModeCode mode, EntitlementSet entitlements,
             IEnumerable<ModeCode> grandfathered, MonetizationConfig config = null)
         {
-            return GetAccess(mode, entitlements, grandfathered, config) != ModeAccess.Locked;
+            var access = GetAccess(mode, entitlements, grandfathered, config);
+            return access != ModeAccess.Locked && access != ModeAccess.NotReleased;
         }
 
         /// <summary>
         /// Call when the user uses (starts) <paramref name="mode"/>. Returns the updated grandfathered set to persist:
-        /// the input plus <paramref name="mode"/> if it is currently free by config, otherwise the input unchanged.
+        /// the input plus <paramref name="mode"/> if it is currently free by config and released (an unreleased mode cannot
+        /// be used, release 1: M03/M04), otherwise the input unchanged.
         /// Result is sorted ascending and distinct; the input is never mutated.
         /// </summary>
         public static IReadOnlyList<ModeCode> RecordUse(IEnumerable<ModeCode> grandfathered, ModeCode mode,
@@ -62,13 +71,13 @@ namespace Ballverse.Core.Monetization
             {
                 foreach (var g in grandfathered) set.Add(g);
             }
-            if (config.IsFree(mode)) set.Add(mode);
+            if (config.IsFree(mode) && config.IsReleased(mode)) set.Add(mode);
             var result = new ModeCode[set.Count];
             set.CopyTo(result);
             return result;
         }
 
-        /// <summary>Every catalog mode currently available, in code order.</summary>
+        /// <summary>Every catalog mode currently available (released and open), in code order.</summary>
         public static IReadOnlyList<ModeCode> AvailableModes(EntitlementSet entitlements,
             IEnumerable<ModeCode> grandfathered, MonetizationConfig config = null)
         {

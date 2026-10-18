@@ -4,7 +4,11 @@ using System.Collections.ObjectModel;
 
 namespace Ballverse.Core.Monetization
 {
-    /// <summary>The 1.0 product catalog with base prices and grants (spec §5.1, owner decisions Р5, Р13).</summary>
+    /// <summary>
+    /// The 1.0 product catalog with base prices and grants (spec §5.1, owner decisions Р5, Р13). Always complete, so owned
+    /// products keep their rights in every release; what a release sells is <see cref="MonetizationConfig.SellableProductIds"/>
+    /// (release 1: only the three ad products).
+    /// </summary>
     public static class ProductCatalog
     {
         public const int SingleModePriceCents = 199;

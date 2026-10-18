@@ -16,6 +16,10 @@ namespace Ballverse.Core.Monetization
         NotPaid = 3,
         /// <summary>This mode's demo was already used on the caller-supplied day: "1 демо на режим в сутки".</summary>
         UsedToday = 4,
+        /// <summary>The mode does not ship in this release (<see cref="MonetizationConfig.ReleasedModes"/>; release 1: M06–M15).</summary>
+        NotReleased = 5,
+        /// <summary>No sellable product unlocks the mode (<see cref="MonetizationConfig.IsModeSold"/>): a demo would sell nothing.</summary>
+        NotSold = 6,
     }
 
     /// <summary>
@@ -30,6 +34,12 @@ namespace Ballverse.Core.Monetization
     /// <para>
     /// "После interstitial — Никогда": every system-initiated offer here takes <c>interstitialJustShown</c> and returns
     /// nothing when it is true. The caller sets it when an interstitial closed immediately before this screen.
+    /// </para>
+    /// <para>
+    /// Release catalog: offers come from <see cref="Storefront"/>, so only <see cref="MonetizationConfig.SellableProductIds"/>
+    /// are ever offered. With <see cref="MonetizationConfig.Release1"/> the first-video quest offer never appears (All Modes
+    /// is not sold), trial demos never start (no paid mode ships) and the Done-screen line leads to No Ads or the missing ad
+    /// removal (<see cref="DoneScreenLineOffers"/>).
     /// </para>
     /// </summary>
     public static class SalePointPolicy
@@ -53,7 +63,8 @@ namespace Ballverse.Core.Monetization
         /// </para>
         /// <para>
         /// The line's target is <see cref="Storefront.WatermarkOffers"/>, which falls back to the cheaper missing parts when the
-        /// smart storefront hides Ultimate. After showing the line the caller persists <paramref name="completedExports"/>
+        /// smart storefront hides Ultimate. This check does not know the release catalog; prefer
+        /// <see cref="DoneScreenLineOffers"/>, which also suppresses the line when nothing sellable removes the watermark. After showing the line the caller persists <paramref name="completedExports"/>
         /// as the new <paramref name="lastShownAtExport"/>.
         /// </para>
         /// </summary>
@@ -76,6 +87,31 @@ namespace Ballverse.Core.Monetization
         }
 
         /// <summary>
+        /// The Done-screen line with its target (spec §5.2 "Экран «Готово» после экспорта", §3.10), limited to sellable
+        /// products: empty when the line must not show (<see cref="ShouldShowDoneScreenLine"/>) or when no sellable product
+        /// can remove the watermark; otherwise <see cref="Storefront.WatermarkOffers"/>. The spec wording "Убрать водяной
+        /// знак — Ultimate" names Ultimate, but the line must name the first returned offer (release 1: No Ads, or the
+        /// missing ad removal as the last step), never an unsold product. The caller persists
+        /// <paramref name="completedExports"/> as the new <paramref name="lastShownAtExport"/> only when the result is not empty.
+        /// </summary>
+        /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
+        /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
+        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="ownedProductIds"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">A negative export number.</exception>
+        public static IReadOnlyList<StorefrontOffer> DoneScreenLineOffers(int completedExports, int? lastShownAtExport,
+            IEnumerable<string> ownedProductIds, MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null,
+            bool watermarkGrandfathered = false, bool watermarkEnabled = true, bool interstitialJustShown = false)
+        {
+            if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
+            var owned = new List<string>(ownedProductIds);
+            var entitlements = Entitlements.From(owned, config, watermarkGrandfathered);
+            if (!ShouldShowDoneScreenLine(completedExports, lastShownAtExport, entitlements, watermarkEnabled, interstitialJustShown))
+                return Array.Empty<StorefrontOffer>();
+            return Storefront.WatermarkOffers(owned, config, grandfathered, watermarkGrandfathered);
+        }
+
+        /// <summary>
         /// Whether a demo of <paramref name="mode"/> may start (spec §5.2 "Пробный просмотр платного режима": "По умолчанию
         /// включено (вопрос В2), 1 демо на режим в сутки").
         /// <para>
@@ -84,6 +120,10 @@ namespace Ballverse.Core.Monetization
         /// so a clock moved backwards never locks demos for days. After starting a demo the caller persists
         /// <paramref name="todayIndex"/> as that mode's last demo day. Whether a preview counts as a game for interstitials
         /// is the ads rules' concern (spec §5.3.2), not this module's.
+        /// </para>
+        /// <para>
+        /// Precedence: NotPaid, NotReleased, NotLocked, NotSold, Disabled, UsedToday, Allowed. Release 1 ships no paid mode,
+        /// so every paid mode reports <see cref="TrialPreviewAccess.NotReleased"/>.
         /// </para>
         /// </summary>
         /// <param name="lastDemoDay">Day index of this mode's last demo; null = never.</param>
@@ -94,8 +134,11 @@ namespace Ballverse.Core.Monetization
         public static TrialPreviewAccess CanStartTrialPreview(ModeCode mode, EntitlementSet entitlements, int? lastDemoDay,
             int todayIndex, bool trialEnabled = true, IEnumerable<ModeCode> grandfathered = null, MonetizationConfig config = null)
         {
+            config = config ?? MonetizationConfig.Default;
             if (ProductCatalog.ForMode(mode) == null) return TrialPreviewAccess.NotPaid;
+            if (!config.IsReleased(mode)) return TrialPreviewAccess.NotReleased;
             if (ModeAvailability.IsAvailable(mode, entitlements, grandfathered, config)) return TrialPreviewAccess.NotLocked;
+            if (!config.IsModeSold(mode)) return TrialPreviewAccess.NotSold;
             if (!trialEnabled) return TrialPreviewAccess.Disabled;
             if (lastDemoDay.HasValue && lastDemoDay.Value == todayIndex) return TrialPreviewAccess.UsedToday;
             return TrialPreviewAccess.Allowed;
@@ -104,7 +147,8 @@ namespace Ballverse.Core.Monetization
         /// <summary>
         /// The offer block of the one-time screen after the first-video quest (spec §5.2 "После выполнения квеста первого
         /// ролика — Один экран с All Modes — Один раз"; spec §4.3 "без давления, кнопка «Позже» равнозначна по размеру"):
-        /// All Modes when not yet shown and the smart storefront shows it; otherwise <see cref="FirstVideoQuestScreen.None"/>.
+        /// All Modes when not yet shown and the smart storefront shows it (so never when All Modes is not sellable, e.g.
+        /// release 1); otherwise <see cref="FirstVideoQuestScreen.None"/>.
         /// <para>
         /// Scope: only the purchase offer depends on this result. The §4.3 celebration ("короткий праздничный экран") is
         /// outside Core and shown whenever the quest completes, including for All Modes / Ultimate owners and right after an
@@ -134,12 +178,14 @@ namespace Ballverse.Core.Monetization
         /// <param name="interstitialJustShown">An interstitial closed right before this screen (spec §5.2 "После interstitial").</param>
         /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
+        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static FirstVideoQuestScreen FirstVideoQuest(bool alreadyShown, IEnumerable<string> ownedProductIds,
-            bool interstitialJustShown = false, MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null)
+            bool interstitialJustShown = false, MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null,
+            bool watermarkGrandfathered = false)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
             if (alreadyShown || interstitialJustShown) return FirstVideoQuestScreen.None;
-            var all = Storefront.Build(ownedProductIds, config, grandfathered).Get(ProductIds.AllModes);
+            var all = Storefront.Build(ownedProductIds, config, grandfathered, watermarkGrandfathered).Get(ProductIds.AllModes);
             return all.Visible ? new FirstVideoQuestScreen(all.WithEmphasis(false)) : FirstVideoQuestScreen.None;
         }
     }
