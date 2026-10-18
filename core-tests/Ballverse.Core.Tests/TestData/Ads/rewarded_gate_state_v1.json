@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "credits": [
+    { "projectId": "proj-z", "source": "Retry", "expiresAtMs": 1760000600000 },
+    { "projectId": "proj-a", "source": "Reward" },
+    { "projectId": "proj-a", "source": "Retry", "expiresAtMs": 1760000600000 },
+    { "projectId": "", "source": "Reward" },
+    { "projectId": "proj-neg", "source": "Retry", "expiresAtMs": -5 },
+    { "projectId": "proj-m", "source": "Retry", "expiresAtMs": 1760000000000 },
+    { "projectId": "proj-m", "source": "Retry", "expiresAtMs": 1760000300000 }
+  ],
+  "openOfferProjectId": "proj-z"
+}

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "id": "legacy-0002",
+  "name": "Mid project",
+  "durationSec": 3,
+  "audio": { "volume": 1.2 }
+}

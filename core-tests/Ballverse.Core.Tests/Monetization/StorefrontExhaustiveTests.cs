@@ -125,15 +125,37 @@ namespace Ballverse.Core.Tests.Monetization
         /// started: both ad rights (which removes the watermark, spec §5.0.2) or the full Ultimate contents. A first purchase
         /// that completes a set on its own is not a last step.
         /// </summary>
+        // Spec §5.1 table written out as 12-bit grant masks (M06..M15 → bits 0..9, NO_EXPORT_ADS → 10, NO_INTERSTITIALS → 11),
+        // independent of ProductCatalog / Entitlements, for the last-step oracle.
+        static readonly Dictionary<string, int> s_specGrants = new Dictionary<string, int>
+        {
+            { ProductIds.ModeBallBattle, 1 << 0 }, { ProductIds.ModeLastStanding, 1 << 1 }, { ProductIds.ModeColorWar, 1 << 2 },
+            { ProductIds.ModeMultiply, 1 << 3 }, { ProductIds.ModeMazeEscape, 1 << 4 }, { ProductIds.ModeSmash, 1 << 5 },
+            { ProductIds.ModeChainReaction, 1 << 6 }, { ProductIds.ModePendulumWave, 1 << 7 }, { ProductIds.ModeOrbit, 1 << 8 },
+            { ProductIds.ModeLiquidSand, 1 << 9 }, { ProductIds.AllModes, 0x3FF },
+            { ProductIds.RemoveExportAds, 1 << 10 }, { ProductIds.RemoveInterstitialAds, 1 << 11 }, { ProductIds.NoAds, 0xC00 },
+            { ProductIds.Ultimate, 0xFFF },
+        };
+
+        /// <summary>
+        /// Spec §5.0.3 / §5.2 "последний шаг", stated on the spec table: a visible non-Ultimate offer is the last step when the
+        /// user owns exactly one of the two ad rights and the offer adds the other one ("без рекламы и без водяного знака"),
+        /// or the user owns part (not all) of the 12 Ultimate rights and the offer completes them ("все режимы" / "реклама и
+        /// водяной знак уйдут"). No paid mode is available without an entitlement in the callers' configs.
+        /// </summary>
         internal static bool ExpectedLastStep(StorefrontOffer o, IEnumerable<string> owned)
         {
             if (!o.Visible || o.ProductId == ProductIds.Ultimate) return false;
-            var direct = Entitlements.DirectGrants(owned);
-            var after = direct.Union(o.Product.Grants);
-            var sets = new[] { EntitlementSet.AdFree, Entitlements.FullUltimateContents };
-            bool result = sets.Any(set => after.IsSupersetOf(set) && !direct.IsSupersetOf(set) && !direct.Intersect(set).IsEmpty);
+            int have = 0;
+            foreach (var id in owned) have |= s_specGrants[id];
+            int after = have | s_specGrants[o.ProductId];
+            const int ads = 0xC00, full = 0xFFF;
+            int adsHad = have & ads;
+            bool adPair = (adsHad == 1 << 10 || adsHad == 1 << 11) && (after & ads) == ads;
+            bool contents = (have & full) != 0 && (have & full) != full && (after & full) == full;
+            bool result = adPair || contents;
             // Completing the ad pair always removes the watermark; completing the contents does so unless already removed.
-            if (result && !direct.IsSupersetOf(EntitlementSet.AdFree)) Assert.True(o.RemovesWatermark);
+            if (result && adsHad != ads) Assert.True(o.RemovesWatermark);
             return result;
         }
 

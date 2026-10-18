@@ -42,8 +42,8 @@ namespace Ballverse.Core.Tests.Monetization
                 var e = Entitlements.From(Subsets.Ids(mask), config);
                 bool expected = Oracle(mask);
                 Assert.True(expected == e.Contains(Entitlement.NoWatermark), "mask " + mask);
-                Assert.Equal(expected ? WatermarkRow.Toggle : WatermarkRow.Locked, WatermarkPolicy.GetRow(e));
-                Assert.Equal(!expected, WatermarkPolicy.ShouldApply(e));
+                Assert.Equal(expected ? WatermarkRow.Toggle : WatermarkRow.Locked, WatermarkRowPolicy.GetRow(e));
+                Assert.Equal(!expected, global::Ballverse.Core.Projects.WatermarkPolicy.Resolve(false, e.Contains(Entitlement.NoWatermark)));
             }
         }
 

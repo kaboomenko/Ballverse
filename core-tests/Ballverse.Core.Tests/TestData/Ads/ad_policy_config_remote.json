@@ -1,0 +1,9 @@
+{
+  "interstitialEveryNGames": 5,
+  "interstitialMinIntervalSec": 99999,
+  "interstitialGraceGames": 3,
+  "rewardedExportEnabled": false,
+  "rewardedWaitTimeoutSec": -2,
+  "rewardedRetryWindowMin": 20,
+  "unknownFutureKey": "ignored"
+}

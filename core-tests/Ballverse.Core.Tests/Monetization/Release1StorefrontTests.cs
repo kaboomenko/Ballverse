@@ -82,8 +82,8 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.True(s.AllPurchased);
             Assert.Empty(s.VisibleOffers);
             Assert.True(s.Entitlements.Contains(Entitlement.NoWatermark));
-            Assert.Equal(WatermarkRow.Toggle, WatermarkPolicy.GetRow(s.Entitlements));
-            Assert.False(WatermarkPolicy.ShouldApply(s.Entitlements));
+            Assert.Equal(WatermarkRow.Toggle, WatermarkRowPolicy.GetRow(s.Entitlements));
+            Assert.False(global::Ballverse.Core.Projects.WatermarkPolicy.Resolve(false, s.Entitlements.Contains(Entitlement.NoWatermark)));
             Assert.Empty(Storefront.WatermarkOffers(owned, R1, null));
         }
 

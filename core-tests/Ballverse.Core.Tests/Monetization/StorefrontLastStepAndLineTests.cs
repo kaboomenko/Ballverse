@@ -53,6 +53,58 @@ namespace Ballverse.Core.Tests.Monetization
         }
 
         /// <summary>
+        /// Explicit table of the "последний шаг" label (spec §5.0.3 rows, §5.2 rows): owned products → the visible offers that
+        /// carry the label. Written by hand, independent of the implementation's formula.
+        /// </summary>
+        [Theory]
+        [InlineData("r1", "", "")]
+        [InlineData("r1", ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds)]
+        [InlineData("r1", ProductIds.RemoveInterstitialAds, ProductIds.RemoveExportAds)]
+        [InlineData("r1", ProductIds.NoAds, "")]
+        [InlineData("full", "", "")]
+        [InlineData("full", ProductIds.AllModes, ProductIds.NoAds)]
+        [InlineData("full", ProductIds.NoAds, ProductIds.AllModes)]
+        [InlineData("full", ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds)]
+        [InlineData("full", ProductIds.RemoveInterstitialAds, ProductIds.RemoveExportAds)]
+        [InlineData("full", ProductIds.ModeOrbit, "")]
+        [InlineData("full", ProductIds.NoAds + "," + ProductIds.ModeOrbit, ProductIds.AllModes)]
+        [InlineData("full", ProductIds.AllModes + "," + ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds)]
+        [InlineData("full", ProductIds.AllModes + "," + ProductIds.NoAds, "")]
+        [InlineData("full", ProductIds.Ultimate, "")]
+        public void LastStep_Table(string preset, string owned, string expectedLastSteps)
+        {
+            var config = preset == "r1" ? MonetizationConfig.Release1 : MonetizationConfig.FullCatalog;
+            var ownedIds = owned.Length == 0 ? None : owned.Split(',');
+            var expected = expectedLastSteps.Length == 0 ? None : expectedLastSteps.Split(',');
+            var s = Storefront.Build(ownedIds, config, null);
+            Assert.Equal(expected, Ids(s.VisibleOffers.Where(o => o.IsLastStep)));
+        }
+
+        /// <summary>
+        /// QA probe P3: No Ads owned and M06–M14 playable without entitlements (free by config or grandfathered): the M15
+        /// single completes "все режимы" (§5.2 "No Ads | All Modes как «последний шаг: все режимы»"), so it carries the label,
+        /// and All Modes is hidden as the dearer equivalent.
+        /// </summary>
+        [Fact]
+        public void LastStep_CountsModesTheUserAlreadyPlays()
+        {
+            var nine = Enumerable.Range(6, 9).Select(m => (ModeCode)m).ToArray();
+            var free = MonetizationConfig.FullCatalog.WithFreeModes(nine);
+            foreach (var (config, grandfathered) in new[] { (free, (ModeCode[])null), (MonetizationConfig.FullCatalog, nine) })
+            {
+                var s = Storefront.Build(new[] { ProductIds.NoAds }, config, grandfathered);
+                Assert.Equal(new[] { ProductIds.ModeLiquidSand }, Ids(s.VisibleOffers));
+                Assert.True(s.Get(ProductIds.ModeLiquidSand).IsLastStep);
+                Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.AllModes).HiddenReason);
+            }
+            // Without No Ads the M15 single does not complete the contents: no label.
+            var noAdsMissing = Storefront.Build(None, free, null);
+            Assert.False(noAdsMissing.Get(ProductIds.ModeLiquidSand).IsLastStep);
+            // Available modes alone do not "start" the ad pair: No Ads stays a first ad purchase unless it completes all 12.
+            Assert.False(noAdsMissing.Get(ProductIds.NoAds).IsLastStep);
+        }
+
+        /// <summary>
         /// Later release, user owning one ad removal: the row sheet keeps display order, the Done-screen line names the $5.99
         /// missing part before Ultimate ($11.99).
         /// </summary>

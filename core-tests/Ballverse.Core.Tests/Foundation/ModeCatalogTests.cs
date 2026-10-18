@@ -14,10 +14,60 @@ namespace Ballverse.Core.Tests.Foundation
         }
 
         [Fact]
-        public void FreeByDefaultIsM01ToM05()
+        public void Release1IsM01M02M05AllFree()
         {
-            var free = ModeCatalog.All.Where(m => m.FreeByDefault).Select(m => m.Code).ToArray();
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 }, free);
+            // Owner decision Р18: release 1 ships exactly Ring Escape, Geometry Bounce and Helix Drop, all free.
+            var released = new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05 };
+            Assert.Equal(released, ModeCatalog.Released.Select(m => m.Code));
+            Assert.Equal(released, ModeCatalog.All.Where(m => m.InRelease).Select(m => m.Code));
+            Assert.Equal(released, ModeCatalog.All.Where(m => m.FreeByDefault).Select(m => m.Code));
+            foreach (var m in ModeCatalog.All)
+            {
+                Assert.Equal(m.InRelease, ModeCatalog.IsReleased(m.Code));
+                if (m.FreeByDefault) Assert.True(m.InRelease, m.Id + ": free by default but not released");
+            }
+            Assert.False(ModeCatalog.IsReleased((ModeCode)0));
+            Assert.False(ModeCatalog.IsReleased((ModeCode)16));
+        }
+
+        [Fact]
+        public void Release1IdsAndNames()
+        {
+            var m02 = ModeCatalog.Get(ModeCode.M02);
+            Assert.Equal("geometry_bounce", m02.Id);
+            Assert.Equal("Geometry Bounce", m02.NameEn);
+            Assert.Equal("Геометрия отскоков", m02.NameRu);
+            var m05 = ModeCatalog.Get(ModeCode.M05);
+            Assert.Equal("helix_drop", m05.Id);
+            Assert.Equal("Helix Drop", m05.NameEn);
+            Assert.Equal("Хеликс-дроп", m05.NameRu);
+            Assert.Equal("ring_escape", ModeCatalog.Get(ModeCode.M01).Id);
+            // Retired ids were never shipped and are not reused.
+            Assert.False(ModeCatalog.TryGetById("grow_bounce", out _));
+            Assert.False(ModeCatalog.TryGetById("spiral_drop", out _));
+            // Codes stay stable.
+            Assert.Equal(2, (int)m02.Code);
+            Assert.Equal(5, (int)m05.Code);
+        }
+
+        [Fact]
+        public void ControlFlagsOfReleasedModes()
+        {
+            // M05 Helix Drop: player control plus the automatic "Авто-ролик" / "Бот" controls (spec §2.9).
+            var m05 = ModeCatalog.Get(ModeCode.M05);
+            Assert.True(m05.Interactive);
+            Assert.True(m05.HasAutoControl);
+            Assert.False(m05.HasWinner);
+            // M01 "Соревнование" and M02 "Открытая грань" have a winner variant (spec §2.5 release 1).
+            Assert.True(ModeCatalog.Get(ModeCode.M01).HasWinner);
+            Assert.True(ModeCatalog.Get(ModeCode.M02).HasWinner);
+            foreach (var m in ModeCatalog.All)
+            {
+                if (!m.Interactive) Assert.True(m.HasAutoControl, m.Id);
+            }
+            Assert.False(ModeCatalog.Get(ModeCode.M04).HasAutoControl);
+            Assert.Throws<System.ArgumentException>(() =>
+                new ModeInfo(ModeCode.M03, "x", "X", "X", freeByDefault: true, interactive: false, hasWinner: false, inRelease: false, hasAutoControl: true));
         }
 
         [Fact]

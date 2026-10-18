@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "a0b1c2d3-e4f5-4607-8899-aabbccddeeff",
+  "name": "Battle 🔥 final",
+  "createdAt": "2026-10-18T09:00:00.125Z",
+  "updatedAt": "2026-10-18T10:30:00+03:00",
+  "clip": { "replay": "clip.bvr", "modeId": "ball_battle", "trimInTick": 120, "trimOutTick": 3720,
+            "speed": 1.25, "finaleSlowMo": { "seconds": 3, "factor": 0.25 }, "afterEnd": "slowMoReplay",
+            "soundPack": "Arcade", "melody": null,
+            "fill": "fit", "pan": [0.1, -0.2], "zoom": 1.5, "fitBackground": { "kind": "color", "color": "#101820" } },
+  "userVideo": { "file": "media/user.mov", "trimInUs": 1500000, "trimOutUs": 41500000, "offsetUs": -250000,
+                 "rotation": 270, "mirror": true, "fill": "fit", "pan": [-0.25, 0.4], "zoom": 1.75,
+                 "fitBackground": { "kind": "theme", "color": "#000000" }, "volume": 0.6, "afterEnd": "expandSim" },
+  "layout": { "type": "L5", "swap": true, "ratio": 0.5, "divider": { "px": 0, "color": "#000000", "glass": false },
+              "cornerRadius": 48, "padding": 12,
+              "pip": { "shape": "circle", "sizeFraction": 0.3, "x": 0.8, "y": 0.2,
+                       "border": { "px": 4, "color": "#FFFFFFCC" }, "shadow": false } },
+  "texts": [
+    { "id": "t1", "template": "who_survives", "text": "Кто выживет?", "font": "manrope_black",
+      "size": 96, "fill": "#FFD700", "stroke": { "px": 8, "color": "#000000CC" }, "plate": "solid",
+      "pos": [0.5, 0.1], "inUs": 0, "outUs": 3000000, "anim": "slide", "shadow": true, "align": "center" },
+    { "id": "t2", "text": "Пиши свой цвет 👇\nв комментариях", "font": "inter_bold",
+      "size": 40, "fill": "#ffffff", "plate": "none",
+      "pos": [0.5, 0.9], "inUs": 2000000, "outUs": 60000000, "shadow": false, "align": "left" }
+  ],
+  "audio": { "sim": 1.5, "user": 0.6,
+             "music": { "track": "lofi_03", "volume": 0.4, "startUs": 5000000, "fadeInUs": 1000000, "fadeOutUs": 2000000 },
+             "normalize": false, "duckMusicUnderVoice": false },
+  "output": { "aspect": "9:16", "durationMode": "manual", "manualDurationUs": 45000000, "watermark": false,
+              "resolution": 720, "fps": 30, "cover": { "atUs": 12500000, "putFirst": true } },
+  "exports": [
+    { "at": "2026-10-18T09:10:00Z", "res": 720, "fps": 30, "ms": 9100, "file": "exports/out_1.mp4" },
+    { "at": "2026-10-18T09:20:00Z", "res": 1080, "fps": 60, "ms": 31000, "file": null }
+  ]
+}

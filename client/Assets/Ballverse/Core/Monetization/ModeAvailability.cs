@@ -14,8 +14,9 @@ namespace Ballverse.Core.Monetization
         /// <summary>The user owns its MODE_* entitlement.</summary>
         Entitled = 3,
         /// <summary>
-        /// The mode does not ship in this release (<see cref="MonetizationConfig.ReleasedModes"/>; release 1: everything but
-        /// M01, M02, M05). Not playable and not sold, whatever is free, grandfathered or owned; the gallery shows no card.
+        /// The mode does not ship in this release or is disabled by <c>modes_disabled</c> (<see cref="MonetizationConfig.ReleasedModes"/>;
+        /// release 1: everything but M01, M02, M05). Not playable and not sold, whatever is free, grandfathered or owned; the
+        /// gallery shows no card.
         /// </summary>
         NotReleased = 4,
     }

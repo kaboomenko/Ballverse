@@ -70,7 +70,10 @@ namespace Ballverse.Core.Tests.Monetization
             var s = Storefront.Build(owned, NoBundles, null);
             Assert.Equal(new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds }, Ids(s.VisibleOffers));
             Assert.Equal(new[] { ProductIds.NoAds }, Ids(Storefront.WatermarkOffers(owned, NoBundles, null)));
-            Assert.False(s.VisibleOffers[0].IsLastStep);
+            // Every mode is playable (M08–M15 owned, M06/M07 free), so No Ads completes the full contents: the §5.2 "All Modes |
+            // No Ads как «последний шаг: реклама и водяной знак уйдут»" label, with the available modes counted as had.
+            Assert.True(s.VisibleOffers[0].IsLastStep);
+            Assert.False(s.Get(ProductIds.RemoveExportAds).IsLastStep);
             var u = Storefront.Build(owned, NoAllModes, M06M07);
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, u.Get(ProductIds.Ultimate).HiddenReason);
             Assert.Equal(ProductIds.NoAds, u.Get(ProductIds.Ultimate).CheaperAlternativeId);

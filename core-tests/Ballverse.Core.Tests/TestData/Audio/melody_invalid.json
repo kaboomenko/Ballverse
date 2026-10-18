@@ -1,0 +1,13 @@
+{
+  "id": "   ",
+  "name": "",
+  "notes": [
+    { "pitch": 128, "durWeight": 1, "velocity": 0.5 },
+    { "pitch": 60.5, "durWeight": 1, "velocity": 0.5 },
+    { "pitch": 60, "durWeight": 0, "velocity": 0.5 },
+    { "pitch": 60, "durWeight": -2, "velocity": 1.5 },
+    { "durWeight": 1, "velocity": 0.5 },
+    { "pitch": "64", "durWeight": 1 },
+    null
+  ]
+}

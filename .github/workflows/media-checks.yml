@@ -1,0 +1,56 @@
+name: Media checks
+
+# MediaBridge checks that run without Unity: the Android Java plugin compiled against the Android API 34 framework
+# classes (android-all from Maven Central) with -Xlint -Werror plus JVM unit checks, and the Ballverse.Media
+# EditMode tests under plain .NET 8.
+on:
+  push:
+    paths:
+      - "client/Assets/Plugins/Android/**"
+      - "client/Assets/Ballverse/Media/**"
+      - "client/Assets/Ballverse/Core/**"
+      - "core-tests/MediaJavaCheck/**"
+      - ".github/workflows/media-checks.yml"
+  pull_request:
+    paths:
+      - "client/Assets/Plugins/Android/**"
+      - "client/Assets/Ballverse/Media/**"
+      - "core-tests/MediaJavaCheck/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-java:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_ALL: org/robolectric/android-all/14-robolectric-10818077/android-all-14-robolectric-10818077.jar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Cache android-all.jar
+        uses: actions/cache@v4
+        with:
+          path: ~/android-all.jar
+          key: android-all-14-robolectric-10818077
+      - name: Download android-all.jar (Android API 34 framework classes)
+        run: |
+          if [ ! -f ~/android-all.jar ]; then
+            curl -fsSL -o ~/android-all.jar "https://repo.maven.apache.org/maven2/${ANDROID_ALL}"
+          fi
+      - name: Compile and check the Android plugin
+        run: bash core-tests/MediaJavaCheck/check.sh ~/android-all.jar
+
+  media-dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Ballverse.Media tests under .NET 8
+        run: bash "client/Assets/Ballverse/Media/Tests/DotNet~/run.sh"

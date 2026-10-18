@@ -23,11 +23,14 @@ namespace Ballverse.Core.Tests.Monetization
         }
 
         [Fact]
-        public void Release1_ShipsOnlyM01M02M05_FreeSetStaysM01ToM05()
+        public void Release1_ShipsOnlyM01M02M05_AllFreeByDefault()
         {
             var c = MonetizationConfig.Release1;
             Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05 }, c.ReleasedModes.ToArray());
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 }, c.FreeModes.ToArray());
+            // Spec §5.0.2, §9.3: free_modes defaults to M01, M02, M05; M03/M04 only via free_modes at their release.
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05 }, c.FreeModes.ToArray());
+            Assert.Empty(c.DisabledModes);
+            Assert.Empty(c.UnsoldProductIds);
             foreach (var m in AllModes)
             {
                 Assert.Equal(m == ModeCode.M01 || m == ModeCode.M02 || m == ModeCode.M05, c.IsReleased(m));
@@ -42,8 +45,11 @@ namespace Ballverse.Core.Tests.Monetization
             var t = typeof(MonetizationConfig);
             foreach (var m in t.GetMembers())
                 Assert.DoesNotContain("Watermark", m.Name);
-            Assert.Single(t.GetConstructors());
-            Assert.Equal(3, t.GetConstructors()[0].GetParameters().Length);
+            foreach (var ctor in t.GetConstructors())
+            {
+                foreach (var p in ctor.GetParameters())
+                    Assert.DoesNotContain("watermark", p.Name, StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         [Fact]
@@ -78,7 +84,7 @@ namespace Ballverse.Core.Tests.Monetization
             var widened = MonetizationConfig.Release1.WithFreeModes(new[] { ModeCode.M09 });
             Assert.True(widened.IsFree(ModeCode.M09));
             Assert.False(widened.IsReleased(ModeCode.M09));
-            Assert.Equal(6, widened.FreeModes.Count);
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05, ModeCode.M09 }, widened.FreeModes.ToArray());
         }
 
         [Fact]
@@ -90,18 +96,116 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(new[] { ModeCode.M01, ModeCode.M05 }, a.ReleasedModes.ToArray());
         }
 
+        /// <summary>Spec §5.0.4 rule (b) is a filter: a listed product promising an unreleased mode is simply not sold.</summary>
         [Fact]
-        public void SellingAProductThatPromisesAnUnreleasedModeThrows()
+        public void AProductThatPromisesAnUnreleasedModeIsNotSold()
         {
             var r1Modes = MonetizationConfig.Release1.ReleasedModes;
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.AllModes }, r1Modes));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.Ultimate }, r1Modes));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.ModeOrbit }, r1Modes));
-            // Releasing M14 allows its single, but not the bundles that also promise M06–M15.
+            foreach (var id in new[] { ProductIds.AllModes, ProductIds.Ultimate, ProductIds.ModeOrbit })
+            {
+                var c = new MonetizationConfig(new ModeCode[0], new[] { id, ProductIds.NoAds }, r1Modes);
+                Assert.False(c.IsSellable(id));
+                Assert.Equal(new[] { ProductIds.NoAds }, c.SellableProductIds.ToArray());
+                Assert.Equal(new[] { id }, c.UnsoldProductIds.ToArray());
+                var shop = Storefront.Build(new string[0], c, null);
+                Assert.Equal(OfferHiddenReason.NotSellable, shop.Get(id).HiddenReason);
+            }
+            // Releasing M14 sells its single, but not the bundles that also promise M06–M15.
             var withM14 = r1Modes.Concat(new[] { ModeCode.M14 }).ToArray();
-            var c = new MonetizationConfig(new ModeCode[0], new[] { ProductIds.ModeOrbit }, withM14);
-            Assert.True(c.IsModeSold(ModeCode.M14));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.AllModes }, withM14));
+            var m14 = new MonetizationConfig(new ModeCode[0], new[] { ProductIds.ModeOrbit, ProductIds.AllModes, ProductIds.Ultimate }, withM14);
+            Assert.True(m14.IsModeSold(ModeCode.M14));
+            Assert.Equal(new[] { ProductIds.ModeOrbit }, m14.SellableProductIds.ToArray());
+            Assert.Equal(new[] { ProductIds.AllModes, ProductIds.Ultimate }, m14.UnsoldProductIds.ToArray());
+        }
+
+        /// <summary>
+        /// QA probe P5: the build list of the full catalog with M08 missing from the build no longer throws; the M08 single,
+        /// All Modes and Ultimate are unsold, everything else is sold.
+        /// </summary>
+        [Fact]
+        public void FullListWithOneModeMissingFromTheBuildDropsItsProducts()
+        {
+            var build = AllModes.Where(m => m != ModeCode.M08).ToArray();
+            var c = new MonetizationConfig(new ModeCode[0], ProductIds.All, build);
+            var dropped = new[] { ProductIds.ModeColorWar, ProductIds.AllModes, ProductIds.Ultimate };
+            Assert.Equal(ProductIds.All.Where(id => dropped.Contains(id)).ToArray(), c.UnsoldProductIds.ToArray());
+            Assert.Equal(ProductIds.All.Where(id => !dropped.Contains(id)).ToArray(), c.SellableProductIds.ToArray());
+            Assert.False(c.IsModeSold(ModeCode.M08));
+            Assert.True(c.IsModeSold(ModeCode.M09));
+        }
+
+        /// <summary>Spec §5.0.4, §7.6: modes_disabled hides the mode and stops selling every product that grants it.</summary>
+        [Fact]
+        public void DisabledModeHidesModeAndUnsellsAllModesUltimateAndItsSingle()
+        {
+            var c = MonetizationConfig.FullCatalog.WithDisabledModes(new[] { ModeCode.M12, ModeCode.M12 });
+            Assert.Equal(new[] { ModeCode.M12 }, c.DisabledModes.ToArray());
+            Assert.False(c.IsReleased(ModeCode.M12));
+            Assert.Equal(AllModes.Where(m => m != ModeCode.M12).ToArray(), c.ReleasedModes.ToArray());
+            var dropped = new[] { ProductIds.ModeChainReaction, ProductIds.AllModes, ProductIds.Ultimate };
+            Assert.Equal(ProductIds.All.Where(id => dropped.Contains(id)).ToArray(), c.UnsoldProductIds.ToArray());
+            foreach (var id in dropped) Assert.False(c.IsSellable(id));
+
+            var shop = Storefront.Build(new string[0], c, null);
+            foreach (var id in dropped) Assert.Equal(OfferHiddenReason.NotSellable, shop.Get(id).HiddenReason);
+            Assert.True(shop.Get(ProductIds.NoAds).Visible);
+            Assert.True(shop.Get(ProductIds.ModeOrbit).Visible);
+            // An owner of M12 keeps the right, but the disabled mode is not playable (kill switch).
+            var owned = Entitlements.From(new[] { ProductIds.ModeChainReaction }, c);
+            Assert.True(owned.ContainsMode(ModeCode.M12));
+            Assert.Equal(ModeAccess.NotReleased, ModeAvailability.GetAccess(ModeCode.M12, owned, null, c));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M12, new string[0], c, null));
+
+            // Disabling a default free mode hides it too; the free set itself is unchanged.
+            var r1 = MonetizationConfig.Release1.WithDisabledModes(new[] { ModeCode.M02 });
+            Assert.True(r1.IsFree(ModeCode.M02));
+            Assert.Equal(ModeAccess.NotReleased, ModeAvailability.GetAccess(ModeCode.M02, EntitlementSet.Empty, null, r1));
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M05 }, r1.ReleasedModes.ToArray());
+            Assert.Equal(MonetizationConfig.Release1.SellableProductIds.ToArray(), r1.SellableProductIds.ToArray());
+        }
+
+        /// <summary>
+        /// Spec §5.0.4 as a property over random build lists, build modes and modes_disabled: sold = build list ∩ products
+        /// whose modes are all released and not disabled; the rest of the list is unsold; the Shop never shows an unsold one.
+        /// </summary>
+        [Fact]
+        public void SellableIsBuildListFilteredByReleasedAndNotDisabled_Random()
+        {
+            var rng = Rng.FromSeed(0x5E11AB1EUL, 11UL);
+            for (int iter = 0; iter < 400; iter++)
+            {
+                var list = ProductIds.All.Where(_ => rng.NextUInt(3) != 0).ToArray();
+                var build = AllModes.Where(_ => rng.NextUInt(4) != 0).ToArray();
+                var disabled = AllModes.Where(_ => rng.NextUInt(8) == 0).ToArray();
+                var c = new MonetizationConfig(new ModeCode[0], list.Reverse(), build, disabled);
+                var playable = build.Except(disabled).OrderBy(m => m).ToArray();
+                Assert.Equal(playable, c.ReleasedModes.ToArray());
+                var expectedSold = ProductIds.All.Where(id => list.Contains(id) && ProductCatalog.Get(id).Grants.ToArray()
+                    .All(e => !EntitlementInfo.TryGetMode(e, out var m) || playable.Contains(m))).ToArray();
+                Assert.Equal(expectedSold, c.SellableProductIds.ToArray());
+                Assert.Equal(ProductIds.All.Where(id => list.Contains(id) && !expectedSold.Contains(id)).ToArray(), c.UnsoldProductIds.ToArray());
+                var shop = Storefront.Build(new string[0], c, null);
+                foreach (var o in shop.VisibleOffers) Assert.Contains(o.ProductId, expectedSold);
+            }
+        }
+
+        [Fact]
+        public void DisabledModesAreReplacedNotAccumulatedAndSurviveWithFreeModes()
+        {
+            var c = MonetizationConfig.FullCatalog.WithDisabledModes(new[] { ModeCode.M06 }).WithFreeModes(new[] { ModeCode.M07 });
+            Assert.Equal(new[] { ModeCode.M06 }, c.DisabledModes.ToArray());
+            Assert.True(c.IsFree(ModeCode.M07));
+            Assert.False(c.IsSellable(ProductIds.AllModes));
+
+            var reenabled = c.WithDisabledModes(new ModeCode[0]);
+            Assert.Empty(reenabled.DisabledModes);
+            Assert.Equal(ProductIds.All.ToArray(), reenabled.SellableProductIds.ToArray());
+            Assert.Equal(AllModes, reenabled.ReleasedModes.ToArray());
+            Assert.True(reenabled.IsFree(ModeCode.M07));
+
+            var other = c.WithDisabledModes(new[] { ModeCode.M09 });
+            Assert.Equal(new[] { ModeCode.M09 }, other.DisabledModes.ToArray());
+            Assert.True(other.IsReleased(ModeCode.M06));
         }
 
         [Fact]
@@ -117,6 +221,9 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new ModeCode[0], AdIds, new[] { (ModeCode)16 }));
             Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new ModeCode[0], AdIds, new[] { (ModeCode)0 }));
             Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new[] { (ModeCode)99 }, AdIds, modes));
+            Assert.Throws<ArgumentNullException>(() => new MonetizationConfig(new ModeCode[0], AdIds, modes, null));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new ModeCode[0], AdIds, modes, new[] { (ModeCode)16 }));
+            Assert.Throws<ArgumentNullException>(() => MonetizationConfig.Release1.WithDisabledModes(null));
         }
 
         [Fact]
@@ -136,6 +243,9 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Throws<NotSupportedException>(() => ((IList<string>)c.SellableProductIds)[0] = ProductIds.Ultimate);
             Assert.Throws<NotSupportedException>(() => ((IList<ModeCode>)c.ReleasedModes)[0] = ModeCode.M06);
             Assert.Throws<NotSupportedException>(() => ((IList<ModeCode>)c.FreeModes)[0] = ModeCode.M06);
+            var d = MonetizationConfig.FullCatalog.WithDisabledModes(new[] { ModeCode.M06 });
+            Assert.Throws<NotSupportedException>(() => ((IList<ModeCode>)d.DisabledModes)[0] = ModeCode.M07);
+            Assert.Throws<NotSupportedException>(() => ((IList<string>)d.UnsoldProductIds)[0] = ProductIds.NoAds);
         }
 
         [Fact]

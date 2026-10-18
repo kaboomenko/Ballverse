@@ -62,7 +62,11 @@ namespace Ballverse.Core.Monetization
         /// that completes a set on its own (No Ads with nothing owned).
         /// </summary>
         public bool IsLastStep { get; }
-        /// <summary>Buying it grants NO_WATERMARK: the "+ без водяного знака" badge on No Ads and Ultimate (spec §5.0.3, §5.2, §3.10).</summary>
+        /// <summary>
+        /// Buying it grants NO_WATERMARK (spec §5.0.2, §5.0.3, §5.2, §3.10): the "+ без водяного знака" badge on No Ads and
+        /// Ultimate, and also true for the missing ad removal when one is owned (the §5.0.3 last step "без рекламы и без
+        /// водяного знака").
+        /// </summary>
         public bool RemovesWatermark => Gain.Contains(Entitlement.NoWatermark);
         /// <summary>Show larger than its neighbours (mode sheet: "крупнее — Все 10 режимов", spec §5.2).</summary>
         public bool Emphasized { get; }

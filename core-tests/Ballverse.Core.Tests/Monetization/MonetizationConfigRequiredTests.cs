@@ -97,15 +97,20 @@ namespace Ballverse.Core.Tests.Monetization
 
         /// <summary>
         /// QA round 2: the App cannot build a full-catalog config by accident (e.g. <c>new MonetizationConfig(freeModes)</c>):
-        /// the only public constructor names every catalog input and has no default.
+        /// every public constructor names every catalog input (free modes, sold products, build modes; optionally
+        /// <c>modes_disabled</c>) and has no default.
         /// </summary>
         [Fact]
-        public void OnlyPublicConstructorIsExplicit()
+        public void OnlyPublicConstructorsAreExplicit()
         {
             var ctors = typeof(MonetizationConfig).GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-            var ctor = Assert.Single(ctors);
-            Assert.Equal(3, ctor.GetParameters().Length);
-            Assert.DoesNotContain(ctor.GetParameters(), p => p.IsOptional);
+            Assert.Equal(new[] { 3, 4 }, ctors.Select(c => c.GetParameters().Length).OrderBy(n => n).ToArray());
+            foreach (var ctor in ctors)
+            {
+                var ps = ctor.GetParameters();
+                Assert.DoesNotContain(ps, p => p.IsOptional);
+                Assert.Equal(new[] { "freeModes", "sellableProductIds", "releasedModes" }, ps.Take(3).Select(p => p.Name).ToArray());
+            }
         }
 
         [Fact]

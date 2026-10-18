@@ -16,7 +16,7 @@ namespace Ballverse.Core.Monetization
         NotPaid = 3,
         /// <summary>This mode's demo was already used on the caller-supplied day: "1 демо на режим в сутки".</summary>
         UsedToday = 4,
-        /// <summary>The mode does not ship in this release (<see cref="MonetizationConfig.ReleasedModes"/>; release 1: M06–M15).</summary>
+        /// <summary>The mode does not ship in this release or is disabled (<see cref="MonetizationConfig.ReleasedModes"/>; release 1: M03, M04, M06–M15).</summary>
         NotReleased = 5,
         /// <summary>No sellable product unlocks the mode (<see cref="MonetizationConfig.IsModeSold"/>): a demo would sell nothing.</summary>
         NotSold = 6,
@@ -64,10 +64,12 @@ namespace Ballverse.Core.Monetization
         /// suppresses the line until the distance is 3 again: when in doubt, less pressure (pillar С5).
         /// </para>
         /// <para>
-        /// The line's target is <see cref="Storefront.WatermarkOffers"/>, which falls back to the cheaper missing parts when the
-        /// smart storefront hides Ultimate. This check does not know the release catalog; prefer
-        /// <see cref="DoneScreenLineOffers"/>, which also suppresses the line when nothing sellable removes the watermark. After showing the line the caller persists <paramref name="completedExports"/>
-        /// as the new <paramref name="lastShownAtExport"/>.
+        /// The line's target is <see cref="Storefront.WatermarkOffers"/>: the visible offers that remove the watermark on
+        /// their own (Ultimate, No Ads, or the missing ad removal as the last step); only when there is none, the cheapest
+        /// sellable ad removals that together grant both ad rights (spec §5.0.2). This check does not know the release
+        /// catalog; prefer <see cref="DoneScreenLineOffers"/>, which also suppresses the line when nothing sellable removes
+        /// the watermark. After showing the line the caller persists <paramref name="completedExports"/> as the new
+        /// <paramref name="lastShownAtExport"/>.
         /// </para>
         /// </summary>
         /// <param name="completedExports">Number of the export just completed (0 = none yet).</param>

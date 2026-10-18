@@ -187,15 +187,19 @@ namespace Ballverse.Core.Tests.Monetization
         }
 
         [Fact]
-        public void DoneScreenLine_TargetIsCheaperPartsWhenUltimateHidden()
+        public void DoneScreenLine_NineSingles_OpensNoAds()
         {
-            // 9 singles: Ultimate hidden as CheaperViaParts; the line opens the missing parts instead (spec §5.2).
+            // 9 singles: Ultimate hidden as CheaperViaParts. No Ads removes the watermark on its own (spec §5.0.2), so the
+            // row and the line open exactly No Ads, not the missing parts (M15 + No Ads) and not Ultimate (spec §5.2).
             var owned = ProductCatalog.All.Where(p => p.Kind == ProductKind.SingleMode && p.Mode != ModeCode.M15)
                 .Select(p => p.Id).ToArray();
             var e = Entitlements.From(owned, MonetizationConfig.FullCatalog);
             Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, e));
+            Assert.Equal(OfferHiddenReason.CheaperViaParts, Storefront.Build(owned, MonetizationConfig.FullCatalog, null).Get(ProductIds.Ultimate).HiddenReason);
             var target = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, null).Select(o => o.ProductId).ToArray();
-            Assert.DoesNotContain(ProductIds.Ultimate, target);
+            Assert.Equal(new[] { ProductIds.NoAds }, target);
+            Assert.Equal(new[] { ProductIds.NoAds },
+                SalePointPolicy.DoneScreenLineOffers(3, null, owned, MonetizationConfig.FullCatalog, null).Select(o => o.ProductId).ToArray());
             Assert.Contains(Entitlement.NoWatermark, Entitlements.From(owned.Concat(target), MonetizationConfig.FullCatalog).ToArray());
         }
 

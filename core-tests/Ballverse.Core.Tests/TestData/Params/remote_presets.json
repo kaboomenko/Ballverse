@@ -1,0 +1,29 @@
+[
+  {
+    "id": "remote.rainbow_rush",
+    "name": "Rainbow Rush",
+    "modeId": "ring_escape",
+    "values": { "trail": "rainbow", "ringCount": 250, "timeScale": 1.33, "futureParam": 7, "seed": "123456789012345678" }
+  },
+  { "id": "remote.bad_type", "name": "Bad type", "modeId": "ring_escape", "values": { "ringCount": "many" } },
+  { "id": "remote.bad_option", "name": "Bad option", "modeId": "ring_escape", "values": { "theme": "Vaporwave" } },
+  { "id": "remote.unknown_mode", "name": "Unknown mode", "modeId": "trampolines", "values": {} },
+  { "name": "No id", "modeId": "ring_escape", "values": {} },
+  { "id": "remote.no_name", "modeId": "ring_escape", "values": {} },
+  { "id": "remote.values_array", "name": "Values array", "modeId": "ring_escape", "values": [1, 2] },
+  42,
+  { "id": "remote.rainbow_rush", "name": "Duplicate", "modeId": "ring_escape", "values": {} },
+  {
+    "id": "remote.peg_rain",
+    "nameKey": "presets.peg_drop.rain",
+    "modeId": "peg_drop",
+    "isNew": false,
+    "values": { "ballCount": 2000, "layout": "funnel", "labelNames": ["a"] }
+  },
+  { "id": "remote.nan", "name": "Bad color", "modeId": "peg_drop", "values": { "ballColors": ["#FF0000", "red"] } },
+  { "id": "remote.long_name", "name": "This name is definitely longer than thirty-two characters", "modeId": "peg_drop", "values": {} },
+  { "id": "remote.null_value", "name": "Null value", "modeId": "ring_escape", "values": { "ringCount": null } },
+  { "id": "remote.object_value", "name": "Object value", "modeId": "ring_escape", "values": { "ringCount": { "v": 5 } } },
+  { "id": "remote.mixed_array", "name": "Mixed array", "modeId": "ring_escape", "values": { "ballColors": ["#FF0000", 5] } },
+  { "id": "remote.future_shape", "name": "Future shape", "modeId": "ring_escape", "values": { "futureShape": { "a": 1 }, "trail": "long" } }
+]

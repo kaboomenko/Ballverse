@@ -9,15 +9,17 @@ namespace Ballverse.Core.Tests.Monetization
     public class ModeAvailabilityTests
     {
         static readonly ModeCode[] None = new ModeCode[0];
+        static readonly ModeCode[] DefaultFree = { ModeCode.M01, ModeCode.M02, ModeCode.M05 };
 
+        /// <summary>Spec §5.0.2, §9.3: the default free set is M01, M02, M05; M03/M04 are free only via free_modes.</summary>
         [Fact]
-        public void DefaultFreeModesAreM01ToM05()
+        public void DefaultFreeModesAreM01M02M05()
         {
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 }, MonetizationConfig.FullCatalog.FreeModes.ToArray());
+            Assert.Equal(DefaultFree, MonetizationConfig.FullCatalog.FreeModes.ToArray());
             for (int m = 1; m <= 15; m++)
             {
                 var access = ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, None, MonetizationConfig.FullCatalog);
-                Assert.Equal(m <= 5 ? ModeAccess.Free : ModeAccess.Locked, access);
+                Assert.Equal(DefaultFree.Contains((ModeCode)m) ? ModeAccess.Free : ModeAccess.Locked, access);
             }
         }
 
@@ -40,13 +42,14 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void RecordUseGrandfathersOnlyFreeModes()
         {
-            var g = ModeAvailability.RecordUse(None, ModeCode.M03, MonetizationConfig.FullCatalog);
-            Assert.Equal(new[] { ModeCode.M03 }, g.ToArray());
+            var g = ModeAvailability.RecordUse(None, ModeCode.M05, MonetizationConfig.FullCatalog);
+            Assert.Equal(new[] { ModeCode.M05 }, g.ToArray());
             g = ModeAvailability.RecordUse(g, ModeCode.M07, MonetizationConfig.FullCatalog); // paid: not grandfathered
-            Assert.Equal(new[] { ModeCode.M03 }, g.ToArray());
+            g = ModeAvailability.RecordUse(g, ModeCode.M03, MonetizationConfig.FullCatalog); // not free by default
+            Assert.Equal(new[] { ModeCode.M05 }, g.ToArray());
             g = ModeAvailability.RecordUse(g, ModeCode.M01, MonetizationConfig.FullCatalog);
-            g = ModeAvailability.RecordUse(g, ModeCode.M03, MonetizationConfig.FullCatalog);
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M03 }, g.ToArray());
+            g = ModeAvailability.RecordUse(g, ModeCode.M05, MonetizationConfig.FullCatalog);
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M05 }, g.ToArray());
             Assert.Equal(new[] { ModeCode.M02 }, ModeAvailability.RecordUse(null, ModeCode.M02, MonetizationConfig.FullCatalog).ToArray());
         }
 
@@ -62,20 +65,23 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void NarrowingFreeSetKeepsGrandfatheredModes()
         {
-            var wide = new MonetizationConfig(new[] { ModeCode.M06, ModeCode.M07 });
+            var wide = new MonetizationConfig(new[] { ModeCode.M04, ModeCode.M06, ModeCode.M07 });
             var grandfathered = ModeAvailability.RecordUse(None, ModeCode.M06, wide);
             grandfathered = ModeAvailability.RecordUse(grandfathered, ModeCode.M04, wide);
 
             var narrow = new MonetizationConfig(None);
             Assert.Equal(ModeAccess.Grandfathered, ModeAvailability.GetAccess(ModeCode.M06, EntitlementSet.Empty, grandfathered, narrow));
-            Assert.Equal(ModeAccess.Free, ModeAvailability.GetAccess(ModeCode.M04, EntitlementSet.Empty, grandfathered, narrow));
+            Assert.Equal(ModeAccess.Grandfathered, ModeAvailability.GetAccess(ModeCode.M04, EntitlementSet.Empty, grandfathered, narrow));
+            Assert.Equal(ModeAccess.Free, ModeAvailability.GetAccess(ModeCode.M05, EntitlementSet.Empty, grandfathered, narrow));
+            Assert.Equal(ModeAccess.Locked, ModeAvailability.GetAccess(ModeCode.M03, EntitlementSet.Empty, grandfathered, narrow));
             Assert.Equal(ModeAccess.Locked, ModeAvailability.GetAccess(ModeCode.M07, EntitlementSet.Empty, grandfathered, narrow));
 
             // Using a mode under the narrow config never drops existing grandfathered entries.
             var after = ModeAvailability.RecordUse(grandfathered, ModeCode.M08, narrow);
             Assert.Equal(new[] { ModeCode.M04, ModeCode.M06 }, after.ToArray());
 
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05, ModeCode.M06 },
+            // M04 was free only through the wide payload: grandfathered too.
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M04, ModeCode.M05, ModeCode.M06 },
                 ModeAvailability.AvailableModes(EntitlementSet.Empty, grandfathered, narrow).ToArray());
         }
 
@@ -100,14 +106,13 @@ namespace Ballverse.Core.Tests.Monetization
             }
         }
 
-        /// <summary>Spec §5.1 "M01–M05 доступны всегда", §9.3 free_modes "только расширение".</summary>
+        /// <summary>Spec §5.1 "Бесплатные режимы доступны всегда", §9.3 free_modes "только расширение".</summary>
         [Fact]
         public void ConfigCanOnlyWidenTheFreeSet()
         {
-            var defaults = new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 };
-            Assert.Equal(defaults, new MonetizationConfig(None).FreeModes.ToArray());
-            Assert.Equal(defaults, new MonetizationConfig(new[] { ModeCode.M02, ModeCode.M01 }).FreeModes.ToArray());
-            Assert.Equal(defaults.Concat(new[] { ModeCode.M09 }).ToArray(),
+            Assert.Equal(DefaultFree, new MonetizationConfig(None).FreeModes.ToArray());
+            Assert.Equal(DefaultFree, new MonetizationConfig(new[] { ModeCode.M02, ModeCode.M01 }).FreeModes.ToArray());
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M05, ModeCode.M09 },
                 new MonetizationConfig(new[] { ModeCode.M09, ModeCode.M03, ModeCode.M09 }).FreeModes.ToArray());
         }
 
@@ -135,9 +140,11 @@ namespace Ballverse.Core.Tests.Monetization
         public void EmptyFreeSetPayloadStillLeavesFreeModesForNewUser()
         {
             var config = new MonetizationConfig(None);
-            Assert.Equal(5, ModeAvailability.AvailableModes(EntitlementSet.Empty, None, config).Count);
-            for (int m = 1; m <= 5; m++)
-                Assert.Equal(ModeAccess.Free, ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, None, config));
+            Assert.Equal(DefaultFree, ModeAvailability.AvailableModes(EntitlementSet.Empty, None, config).ToArray());
+            foreach (var m in DefaultFree)
+                Assert.Equal(ModeAccess.Free, ModeAvailability.GetAccess(m, EntitlementSet.Empty, None, config));
+            Assert.Equal(DefaultFree, ModeAvailability.AvailableModes(EntitlementSet.Empty, None,
+                MonetizationConfig.Release1.WithFreeModes(None)).ToArray());
         }
 
         [Fact]

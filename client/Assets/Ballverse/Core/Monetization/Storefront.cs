@@ -114,7 +114,7 @@ namespace Ballverse.Core.Monetization
                 var p = s_displayOrder[i];
                 bool allModes = p.Id == ProductIds.AllModes;
                 bool visible = reasons[i] == OfferHiddenReason.None;
-                bool lastStep = visible && i != ultimate && CompletesStartedSet(direct, p);
+                bool lastStep = visible && i != ultimate && CompletesStartedSet(direct, availableModes, p);
                 bool alreadyAvailable = p.Kind == ProductKind.SingleMode && p.Mode.HasValue
                     && !current.ContainsMode(p.Mode.Value) && IsModeAvailable(p.Mode.Value, availableModes);
                 offers[i] = new StorefrontOffer(p, reasons[i], alternatives[i], isOwned[i], gains[i],
@@ -130,7 +130,7 @@ namespace Ballverse.Core.Monetization
 
         /// <summary>
         /// Offers on the paid-mode sheet (spec §5.2 "Тап по платной карточке"): the single mode, then All Modes emphasized.
-        /// Empty when the mode has no product (M01–M05), is not released (<see cref="ModeAccess.NotReleased"/>, release 1:
+        /// Empty when the mode has no product (M01–M05), is not released or disabled (<see cref="ModeAccess.NotReleased"/>, release 1:
         /// M03, M04, M06–M15), is available without an entitlement (free by config or grandfathered: no paid card) or its
         /// entitlement is already owned. Only sellable products appear: a product outside
         /// <see cref="MonetizationConfig.SellableProductIds"/> is left out.
@@ -289,14 +289,17 @@ namespace Ballverse.Core.Monetization
         /// <summary>
         /// Whether buying <paramref name="p"/> completes a set the user has already started (spec §5.0.3, §5.2 "последний
         /// шаг"): both ad rights (e.g. Remove Interstitial after Remove Export, which removes the watermark, §5.0.2), or the
-        /// full Ultimate contents (e.g. No Ads after All Modes). A first purchase that completes a set on its own (No Ads
-        /// with nothing owned) is not a "last step".
+        /// full Ultimate contents (e.g. No Ads after All Modes). For the full contents the modes the user already plays
+        /// without an entitlement (<paramref name="availableModes"/>) count as had, before and after: with No Ads owned and
+        /// M06–M14 free or grandfathered, the M15 single is the §5.2 "последний шаг: все режимы". A first purchase that
+        /// completes a set on its own (No Ads with nothing owned) is not a "last step".
         /// </summary>
-        static bool CompletesStartedSet(EntitlementSet direct, ProductInfo p)
+        static bool CompletesStartedSet(EntitlementSet direct, EntitlementSet availableModes, ProductInfo p)
         {
             var after = direct.Union(p.Grants);
+            var had = direct.Union(availableModes);
             return CompletesStarted(direct, after, EntitlementSet.AdFree)
-                || CompletesStarted(direct, after, Entitlements.FullUltimateContents);
+                || CompletesStarted(had, after.Union(availableModes), Entitlements.FullUltimateContents);
         }
 
         static bool CompletesStarted(EntitlementSet before, EntitlementSet after, EntitlementSet set)

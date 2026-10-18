@@ -159,7 +159,8 @@ namespace Ballverse.Core.Tests.Monetization
                     Assert.Equal(expectFlag, o.AlreadyAvailable);
                     if (!o.Visible) continue;
                     Assert.False(o.Gain.Except(available).IsEmpty);
-                    if (o.AlreadyAvailable) Assert.True(o.IsLastStep);
+                    // Rule 4: a visible offer never re-sells only available modes, so an available single is never visible.
+                    Assert.False(o.AlreadyAvailable);
                 }
                 // Value-based equivalence: a hidden CheaperEquivalent offer points at a visible, not dearer product with the
                 // same value, and no visible offer has a strictly cheaper non-owned product with the same value.
