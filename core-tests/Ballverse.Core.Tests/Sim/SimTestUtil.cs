@@ -88,7 +88,7 @@ namespace Ballverse.Core.Tests.Sim
 
         public static Vec2 ToLocal(PhysicsWorld w, int body, Vec2 world)
         {
-            ref readonly BodyState b = ref w.GetBody(body);
+            ref readonly PhysicsBodyState b = ref w.GetBody(body);
             return Vec2.InvRotate(world - b.Position, MathF.Cos(b.Angle), MathF.Sin(b.Angle));
         }
 

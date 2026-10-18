@@ -33,9 +33,9 @@ namespace Ballverse.Core.Sim
         public float Impulse;
         /// <summary>Strongest approach speed along the normal, m/s.</summary>
         public float Speed;
-        /// <summary>Ring: body-local angle of the contact; SpinPlatform: azimuth in the platform frame (gaps convention). Otherwise 0.</summary>
+        /// <summary>Ring: body-local angle of the contact; SpinPlatform: the ball's azimuth in the platform frame (gaps convention). Otherwise 0.</summary>
         public float LocalAngle;
-        /// <summary>Polyline: segment index; Ring: solid arc index or −1 for a full ring. Otherwise 0.</summary>
+        /// <summary>Polyline: segment index; Ring: solid arc index or −1 for a full ring; SpinPlatform: 0 top face, 1 bottom face. Otherwise 0.</summary>
         public int Feature;
     }
 

@@ -139,7 +139,8 @@ namespace Ballverse.Core.Tests.Sim
         /// exactly 60, half of those aimed at a corner), walls up to 360°/s with surface speed up to 25 m/s, radial motion up
         /// to 5 m/s, ball radius ≥ 0.05 m, wall thickness ≥ 0.04 m, 4–8 substeps, closed polygons, stars, polygons of separate
         /// segments, gapless rings and ring pairs at the minimum spacing; one scene in four at the worst corner of the
-        /// envelope, one in four with gravity. No ball centre may ever cross a wall's centre line.
+        /// envelope, one in four with gravity, one in three with ball–ball contacts on. No ball centre may ever cross a wall's
+        /// centre line.
         /// </summary>
         [Fact]
         public void TenThousandRandomThrowsAcrossTheEnvelopeNeverTunnel()
@@ -165,6 +166,8 @@ namespace Ballverse.Core.Tests.Sim
             var arena = (Arena)(scene % 5);
             bool worst = scene % 4 == 0;
             bool gravity = scene % 4 == 1;
+            // One scene in three with ball–ball contacts on (pushes into corners and against walls before the wall pass).
+            bool ballBall = scene % 3 == 2;
             int[] substepChoices = { 4, 6, 8 };
             int substeps = worst ? 4 : substepChoices[rng.NextInt(0, substepChoices.Length)];
             float r = worst ? 0.05f : rng.NextFloat(0.05f, 0.2f);
@@ -218,8 +221,11 @@ namespace Ballverse.Core.Tests.Sim
                 float speed = i % 2 == 0 ? EnvelopeBallSpeed : rng.NextFloat(5f, EnvelopeBallSpeed);
                 Vec2 dir = verts != null && i % 4 == 0 ? AimedOrRandomDirection(rng, p, verts) : Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi));
                 var d = SimTestUtil.Ball(p, dir * speed, r, restitution, friction);
-                d.Category = 2u;
-                d.Mask = 1u;
+                if (!ballBall)
+                {
+                    d.Category = 2u;
+                    d.Mask = 1u;
+                }
                 w.AddBall(d);
             }
 
@@ -260,7 +266,7 @@ namespace Ballverse.Core.Tests.Sim
                     if (!ok)
                     {
                         Assert.Fail("scene " + scene + " (" + arena + ", substeps " + substeps + ", r " + r + ", t " + t + ", R " + radius + ", ω "
-                            + omega + ", radial " + radial + ", gravity " + gravity + "): ball " + i + " crossed the wall at tick " + tick
+                            + omega + ", radial " + radial + ", gravity " + gravity + ", ball-ball " + ballBall + "): ball " + i + " crossed the wall at tick " + tick
                             + ", position " + pos);
                     }
                 }

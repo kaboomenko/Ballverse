@@ -11,7 +11,8 @@ namespace Ballverse.Core.Sim
 
         /// <summary>
         /// XXH64 of the quantized world state (spec §7.4 HASH): tick, every ball (alive flag; position, velocity, angle, spin,
-        /// radius), every body (enabled; pose, velocities, scale, spin) and collider enabled bits, in id order. No allocations.
+        /// radius), every body (enabled; pose, velocities, scale, spin), collider enabled bits, in id order, and the spin-platform
+        /// transits (sorted pairs). No allocations.
         /// </summary>
         public ulong ComputeStateHash()
         {
@@ -42,7 +43,7 @@ namespace Ballverse.Core.Sim
             hash.AppendInt(_bodyCount);
             for (int i = 0; i < _bodyCount; i++)
             {
-                ref BodyState b = ref _bodies[i];
+                ref PhysicsBodyState b = ref _bodies[i];
                 hash.AppendInt(b.Enabled ? 1 : 0);
                 AppendQ(hash, b.Position.X);
                 AppendQ(hash, b.Position.Y);
@@ -64,6 +65,12 @@ namespace Ballverse.Core.Sim
                     hash.AppendInt(bits);
                     bits = 0;
                 }
+            }
+            hash.AppendInt(_transitCount);
+            for (int i = 0; i < _transitCount; i++)
+            {
+                hash.AppendInt(_transits[i].Ball);
+                hash.AppendInt(_transits[i].Collider);
             }
         }
 
@@ -110,7 +117,7 @@ namespace Ballverse.Core.Sim
             snapshot.BodyCount = _bodyCount;
             for (int i = 0; i < _bodyCount; i++)
             {
-                ref BodyState b = ref _bodies[i];
+                ref PhysicsBodyState b = ref _bodies[i];
                 snapshot.Bodies[i] = new BodyPose
                 {
                     Position = b.Position,
@@ -126,6 +133,9 @@ namespace Ballverse.Core.Sim
             {
                 snapshot.ColliderEnabled[i] = _colliders[i].Enabled && _bodies[_colliders[i].Body].Enabled;
             }
+            snapshot.EnsureTransitCapacity(_transits.Length);
+            snapshot.TransitCount = _transitCount;
+            Array.Copy(_transits, snapshot.Transits, _transitCount);
         }
     }
 }

@@ -22,8 +22,8 @@ namespace Ballverse.Core.Sim
         /// Advances the world by one tick (1/60 s) in <see cref="SimSettings.Substeps"/> substeps: kinematic bodies move,
         /// balls integrate gravity, ball–ball contacts are solved (uniform grid; bottom-up along gravity, otherwise ascending
         /// id), then every ball (ascending id) is swept against all colliders at once and resolved (time of impact order, then
-        /// overlaps by ascending collider id), so walls win over ball pushes. Afterwards <see cref="Events"/> holds this tick's
-        /// sorted events.
+        /// one joint projection out of every wall it still overlaps), so walls win over ball pushes; then spin-platform
+        /// transits are released. Afterwards <see cref="Events"/> holds this tick's sorted events.
         /// </summary>
         public void Step()
         {
@@ -48,7 +48,7 @@ namespace Ballverse.Core.Sim
             {
                 ref BodyFrame f = ref _frames[i];
                 if (!f.HasTarget) continue;
-                ref BodyState b = ref _bodies[i];
+                ref PhysicsBodyState b = ref _bodies[i];
                 b.LinearVelocity = (f.TargetPosition - b.Position) * SimConstants.TickRate;
                 b.AngularVelocity = SimMath.WrapPi(f.TargetAngle - b.Angle) * SimConstants.TickRate;
             }
@@ -61,7 +61,7 @@ namespace Ballverse.Core.Sim
 
             for (int i = 0; i < _bodyCount; i++)
             {
-                ref BodyState b = ref _bodies[i];
+                ref PhysicsBodyState b = ref _bodies[i];
                 ref BodyFrame f = ref _frames[i];
                 if (f.HasTarget)
                 {
@@ -89,7 +89,7 @@ namespace Ballverse.Core.Sim
         {
             for (int i = 0; i < _bodyCount; i++)
             {
-                ref BodyState b = ref _bodies[i];
+                ref PhysicsBodyState b = ref _bodies[i];
                 ref BodyFrame f = ref _frames[i];
                 f.PrevPosition = b.Position;
                 f.PrevCos = f.Cos;
@@ -138,6 +138,7 @@ namespace Ballverse.Core.Sim
                 if ((b.Flags & BallFlags.LockY) != 0) b.Position.Y = p0.Y;
             }
 
+            if (_transitCount > 0) ReleaseTransits();
             if (_sensorCount > 0) DetectSensorTouches();
         }
 
@@ -159,8 +160,10 @@ namespace Ballverse.Core.Sim
 
         /// <summary>
         /// max(MaxSpeed, v_wall,max + WallSpeedMargin): v_wall,max bounds the surface speed of every enabled kinematic collider
-        /// over its whole extent (linear + |ω|·reach + scale rate·reach + platform spin), a slight over-estimate of the
-        /// "reachable zone" of spec §6.5. Body velocities are constant within a tick, so this is evaluated once per tick.
+        /// over its whole extent (linear + |ω|·reach + scale rate·reach + platform spin), where reach is the farthest point of
+        /// the collider from the body's rotation centre (plus half the wall thickness) — the "reachable zone" of spec §6.5
+        /// (a regular polygon of circumradius R̂ at ω gives ω·R̂ + margin). Body velocities are constant within a tick, so this
+        /// is evaluated once per tick.
         /// </summary>
         float ComputeEffectiveMaxSpeed()
         {
@@ -172,9 +175,9 @@ namespace Ballverse.Core.Sim
             {
                 ref ColliderData cd = ref _colliders[c];
                 if (!cd.Enabled || cd.Material.IsSensor) continue;
-                ref BodyState b = ref _bodies[cd.Body];
+                ref PhysicsBodyState b = ref _bodies[cd.Body];
                 if (!b.Enabled || b.Motion != BodyMotion.Kinematic) continue;
-                float reach = (cd.BoundCentre.Length + cd.BoundRadius) * b.Scale + cd.HalfThickness;
+                float reach = cd.Reach * b.Scale + cd.HalfThickness;
                 float v = b.LinearVelocity.Length + MathF.Abs(b.AngularVelocity) * reach + MathF.Abs(b.ScaleVelocity) * reach / b.Scale;
                 if (cd.Kind == ColliderKind.SpinPlatform) v += MathF.Abs(b.SpinVelocity) * cd.Radius * b.Scale;
                 if (v > wall) wall = v;
@@ -203,7 +206,7 @@ namespace Ballverse.Core.Sim
             {
                 ref ColliderData cd = ref _colliders[c];
                 ref ColliderBounds cb = ref _colliderBounds[c];
-                ref BodyState b = ref _bodies[cd.Body];
+                ref PhysicsBodyState b = ref _bodies[cd.Body];
                 cb.Active = cd.Enabled && b.Enabled;
                 if (!cb.Active) continue;
                 ref BodyFrame f = ref _frames[cd.Body];

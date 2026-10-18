@@ -34,7 +34,12 @@ namespace Ballverse.Core.Sim
         /// so zero-gravity elastic scenes («Невесомость», «Медитация») keep their energy at any speed.
         /// </summary>
         public float RestitutionThreshold;
-        /// <summary>Hit/BallHit events whose strongest approach speed in the tick is below this are not reported (m/s).</summary>
+        /// <summary>
+        /// Hit/BallHit events whose strongest approach speed in the tick is below this are not reported (m/s). Default 0.1 m/s:
+        /// resting contacts under 1 g re-approach by a few substeps of free fall every tick (g·h ≈ 0.02 m/s per substep at 8
+        /// substeps; settled piles measured up to ~0.07 m/s), which is contact noise, not an impact; real impacts that slow are
+        /// far below any audible volume threshold (spec §2.7 i0).
+        /// </summary>
         public float HitEventMinSpeed;
         /// <summary>Global switch for ball–ball collisions (per-ball filtering uses category/mask).</summary>
         public bool BallCollisions;
@@ -55,7 +60,7 @@ namespace Ballverse.Core.Sim
             MaxSpeed = 30f,
             WallSpeedMargin = 5f,
             RestitutionThreshold = 0.25f,
-            HitEventMinSpeed = 0.05f,
+            HitEventMinSpeed = 0.1f,
             BallCollisions = true,
             BallIterations = 2,
             PositionSlop = 0.002f,

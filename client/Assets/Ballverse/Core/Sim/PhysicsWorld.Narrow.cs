@@ -2,7 +2,7 @@ using System;
 
 namespace Ballverse.Core.Sim
 {
-    // Ball vs walls: continuous sweep against ALL colliders at once (anti-tunnelling), then discrete overlap resolution.
+    // Ball vs walls: continuous sweep against ALL colliders at once (anti-tunnelling), then a joint overlap projection.
     //
     // All tests run in the collider body's rotated frame ("q space": world offsets rotated by −angle, in metres; body scale
     // applied to the geometry, never to thickness or ball radius). The ball's position at the start of the swept interval is
@@ -16,9 +16,11 @@ namespace Ballverse.Core.Sim
     // collider — including the ones already passed — so corners built from separate colliders and closely spaced rings stay
     // continuous. The number of resolved impacts per substep is bounded (MaxSweepPasses); the last allowed impact stops the
     // ball at the contact for the rest of the substep (conservative advancement) instead of letting it travel unswept. If
-    // the ball already overlaps a wall and its centre crosses the wall's centre line, it is put back on the side it came
-    // from ("corrected" hit). Finally every candidate collider (ascending id) and its primitives are checked for overlap in a
-    // fixed order (Gauss–Seidel), which handles resting contacts.
+    // the ball already overlaps a wall and its centre crosses the wall's centre line, it is put back just off the centre line
+    // on the side it came from ("corrected" hit). Invariant after the sweep: the ball centre has not crossed any solid centre
+    // line during the substep. The overlap pass (PhysicsWorld.Overlap.cs) keeps that invariant while pushing the ball out of
+    // every wall it still overlaps at once (acute corners), and spin platforms decide pass / bounce once per entry
+    // (PhysicsWorld.Platform.cs).
     public sealed partial class PhysicsWorld
     {
         const float NormalEpsilon = 1e-7f;
@@ -50,8 +52,34 @@ namespace Ballverse.Core.Sim
             public int Feature;
             /// <summary>Overlap correction (centre-line crossing) rather than a time of impact.</summary>
             public bool Corrected;
+            /// <summary>Spin platform entered with the ball's footprint inside a gap: a transit starts, no contact.</summary>
+            public bool Transit;
 
             public static SweepHit None => new SweepHit { T = 2f };
+        }
+
+        /// <summary>
+        /// Contact prepared for a response: world normal and contact point, wall surface velocity, event data and, for the
+        /// overlap pass, the linear constraint <c>N·p ≥ Target</c> on the world ball centre (and <c>N·p ≥ Hard</c>: centre
+        /// on the legal side of the wall's centre line).
+        /// </summary>
+        struct ContactFrame
+        {
+            public int Collider;
+            public int Body;
+            public int Feature;
+            public Vec2 N;
+            public Vec2 Cp;
+            public Vec2 WallVelocity;
+            public float LocalAngle;
+            public float Target;
+            public float Hard;
+        }
+
+        /// <summary>Distance from the centre line at which a corrected (centre-line crossing) hit leaves the ball.</summary>
+        static float CorrectedOffset(float rt)
+        {
+            return rt > 2f * ContactSlop ? ContactSlop : rt * 0.5f;
         }
 
         void EnsureColliderScratch()
@@ -88,9 +116,15 @@ namespace Ballverse.Core.Sim
                     int c = _wallCandidates[k];
                     if (_wallRejected[c] == _wallStamp) continue;
                     if (impacts > 0 && !MayTouch(ref _colliderBounds[c], wStart, ball.Position, ball.Radius)) continue;
-                    if (SweepWall(bi, c, tStart, wStart, ref best)) bestC = c;
+                    if (SweepWall(bi, c, tStart, wStart, h, ref best)) bestC = c;
                 }
                 if (bestC < 0) break;
+                if (best.Transit)
+                {
+                    // The path is unchanged; the platform no longer collides with this ball, so sweep the rest again.
+                    AddTransit(bi, bestC);
+                    continue;
+                }
                 if (best.Corrected)
                 {
                     if (!ResolveContact(bi, bestC, best.Pos, best.N, best.Feature, -1f, h, false))
@@ -117,14 +151,7 @@ namespace Ballverse.Core.Sim
                 n = GatherWallCandidates(bi, wStart, ball.Position, n);
             }
             if (!ball.Alive) return;
-
-            for (int k = 0; k < n; k++)
-            {
-                int c = _wallCandidates[k];
-                if (_wallRejected[c] == _wallStamp) continue;
-                DiscreteWall(bi, c, h);
-                if (!ball.Alive) return;
-            }
+            ResolveOverlaps(bi, n, h);
         }
 
         /// <summary>
@@ -162,7 +189,7 @@ namespace Ballverse.Core.Sim
         /// </summary>
         void PoseAt(int body, float t, out Vec2 position, out float cos, out float sin, out float scale)
         {
-            ref BodyState b = ref _bodies[body];
+            ref PhysicsBodyState b = ref _bodies[body];
             ref BodyFrame f = ref _frames[body];
             if (t <= 0f)
             {
@@ -191,202 +218,48 @@ namespace Ballverse.Core.Sim
             return q;
         }
 
-        /// <summary>Sweeps the ball's remaining path (from <paramref name="wStart"/> at <paramref name="tStart"/> to its current position) against one collider.</summary>
-        bool SweepWall(int bi, int ci, float tStart, Vec2 wStart, ref SweepHit best)
+        /// <summary>World point → q space of <paramref name="body"/> at its current pose.</summary>
+        Vec2 ToBodySpace(int body, Vec2 world)
         {
-            ref ColliderData c = ref _colliders[ci];
-            ref BodyState body = ref _bodies[c.Body];
-            ref BodyFrame f = ref _frames[c.Body];
-            ref BallState ball = ref _balls[bi];
-            Vec2 q1 = Vec2.InvRotate(ball.Position - body.Position, f.Cos, f.Sin);
-            Vec2 q0 = ToBodySpaceAt(c.Body, wStart, tStart);
-            float r = ball.Radius;
-            int pieceCount = c.Kind == ColliderKind.SpinPlatform ? BuildPlatformPieces(ref c, body.Spin) : 0;
-            return SweepCollider(ref c, q0, q1, body.Scale, r, r + c.HalfThickness, pieceCount, ref best);
+            ref BodyFrame f = ref _frames[body];
+            return Vec2.InvRotate(world - _bodies[body].Position, f.Cos, f.Sin);
         }
 
-        /// <summary>Discrete overlap resolution against every primitive of one collider (current pose).</summary>
-        void DiscreteWall(int bi, int ci, float h)
+        /// <summary>Sweeps the ball's remaining path (from <paramref name="wStart"/> at <paramref name="tStart"/> to its current position) against one collider.</summary>
+        bool SweepWall(int bi, int ci, float tStart, Vec2 wStart, float h, ref SweepHit best)
         {
             ref ColliderData c = ref _colliders[ci];
-            ref BodyState body = ref _bodies[c.Body];
-            ref BodyFrame f = ref _frames[c.Body];
+            ref PhysicsBodyState body = ref _bodies[c.Body];
             ref BallState ball = ref _balls[bi];
-            float s = body.Scale;
-            Vec2 q1 = Vec2.InvRotate(ball.Position - body.Position, f.Cos, f.Sin);
-            // Start-of-substep position: tells which side a ball exactly on a centre line came from.
-            Vec2 qStart = ToBodySpaceAt(c.Body, _ballPrev[bi], 0f);
+            Vec2 q1 = ToBodySpace(c.Body, ball.Position);
+            Vec2 q0 = ToBodySpaceAt(c.Body, wStart, tStart);
             float r = ball.Radius;
+            float s = body.Scale;
             float rt = r + c.HalfThickness;
             switch (c.Kind)
             {
                 case ColliderKind.Segment:
-                    DiscreteCapsule(bi, ci, ref q1, qStart, c.A * s, c.B * s, rt, 0, h);
-                    break;
+                    return SweepCapsule(q0, q1, c.A * s, c.B * s, rt, 0, ref best);
                 case ColliderKind.Polyline:
                 {
+                    bool found = false;
                     int edges = c.Closed ? c.VertexCount : c.VertexCount - 1;
                     for (int k = 0; k < edges; k++)
                     {
                         Vec2 a = _vertices[c.VertexStart + k] * s;
                         Vec2 b = _vertices[c.VertexStart + (k + 1 == c.VertexCount ? 0 : k + 1)] * s;
-                        if (!DiscreteCapsule(bi, ci, ref q1, qStart, a, b, rt, k, h)) return;
+                        if (SweepCapsule(q0, q1, a, b, rt, k, ref best)) found = true;
                     }
-                    break;
+                    return found;
                 }
                 case ColliderKind.Ring:
-                    DiscreteRing(bi, ci, ref c, ref q1, qStart, s, rt, h);
-                    break;
+                    return SweepRing(ref c, q0, q1, s, rt, ref best);
                 case ColliderKind.Circle:
-                {
-                    Vec2 o = c.A * s;
-                    float rc = r + c.Radius * s;
-                    Vec2 v = q1 - o;
-                    float d2 = v.LengthSquared;
-                    if (d2 < rc * rc)
-                    {
-                        float d = MathF.Sqrt(d2);
-                        Vec2 n = d > NormalEpsilon ? v / d : FallbackNormal(qStart - o);
-                        Vec2 pos = o + n * rc;
-                        if (ResolveContact(bi, ci, pos, n, 0, -1f, h, false)) q1 = pos;
-                    }
-                    break;
-                }
+                    return SweepCircle(q0, q1 - q0, c.A * s, r + c.Radius * s, 0, ref best);
                 case ColliderKind.SpinPlatform:
-                {
-                    int pieceCount = BuildPlatformPieces(ref c, body.Spin);
-                    for (int k = 0; k < pieceCount; k++)
-                    {
-                        PlatformPiece(ref c, s, k, out Vec2 a, out Vec2 b);
-                        if (!DiscreteCapsule(bi, ci, ref q1, qStart, a, b, rt, 0, h)) return;
-                    }
-                    break;
-                }
+                    return SweepPlatform(bi, ci, q0, q1, tStart, h, ref best);
             }
-        }
-
-        /// <summary>Earliest sweep hit of the chord q0→q1 against all primitives of the collider.</summary>
-        bool SweepCollider(ref ColliderData c, Vec2 q0, Vec2 q1, float s, float r, float rt, int pieceCount, ref SweepHit hit)
-        {
-            bool found = false;
-            switch (c.Kind)
-            {
-                case ColliderKind.Segment:
-                    found = SweepCapsule(q0, q1, c.A * s, c.B * s, rt, 0, ref hit);
-                    break;
-                case ColliderKind.Polyline:
-                {
-                    int edges = c.Closed ? c.VertexCount : c.VertexCount - 1;
-                    for (int k = 0; k < edges; k++)
-                    {
-                        Vec2 a = _vertices[c.VertexStart + k] * s;
-                        Vec2 b = _vertices[c.VertexStart + (k + 1 == c.VertexCount ? 0 : k + 1)] * s;
-                        if (SweepCapsule(q0, q1, a, b, rt, k, ref hit)) found = true;
-                    }
-                    break;
-                }
-                case ColliderKind.Ring:
-                    found = SweepRing(ref c, q0, q1, s, rt, ref hit);
-                    break;
-                case ColliderKind.Circle:
-                    found = SweepCircle(q0, q1 - q0, c.A * s, r + c.Radius * s, 0, ref hit);
-                    break;
-                case ColliderKind.SpinPlatform:
-                    for (int k = 0; k < pieceCount; k++)
-                    {
-                        PlatformPiece(ref c, s, k, out Vec2 a, out Vec2 b);
-                        if (SweepCapsule(q0, q1, a, b, rt, 0, ref hit)) found = true;
-                    }
-                    break;
-            }
-            return found;
-        }
-
-        /// <summary>Overlap test against one capsule; resolves and updates <paramref name="q"/>. False when the hook rejected the contact.</summary>
-        bool DiscreteCapsule(int bi, int ci, ref Vec2 q, Vec2 q0, Vec2 a, Vec2 b, float rt, int feature, float h)
-        {
-            Vec2 d = b - a;
-            float l2 = d.LengthSquared;
-            float u = 0f;
-            if (l2 > 1e-14f)
-            {
-                u = Vec2.Dot(q - a, d) / l2;
-                u = u < 0f ? 0f : (u > 1f ? 1f : u);
-            }
-            Vec2 cp = a + d * u;
-            Vec2 v = q - cp;
-            float dist2 = v.LengthSquared;
-            if (dist2 >= rt * rt) return true;
-            float dist = MathF.Sqrt(dist2);
-            Vec2 n;
-            if (dist > NormalEpsilon)
-            {
-                n = v / dist;
-            }
-            else if (l2 > 1e-14f)
-            {
-                // Centre exactly on the wall: go back to the side the ball came from.
-                Vec2 ln = d.Perp / MathF.Sqrt(l2);
-                n = Vec2.Dot(q0 - a, ln) >= 0f ? ln : -ln;
-            }
-            else
-            {
-                n = FallbackNormal(q0 - a);
-            }
-            Vec2 pos = cp + n * rt;
-            if (!ResolveContact(bi, ci, pos, n, feature, -1f, h, false)) return false;
-            q = pos;
-            return true;
-        }
-
-        void DiscreteRing(int bi, int ci, ref ColliderData c, ref Vec2 q, Vec2 q0, float s, float rt, float h)
-        {
-            Vec2 o = c.A * s;
-            float radius = c.Radius * s;
-            Vec2 v = q - o;
-            float d = v.Length;
-            float gap = d - radius;
-            if (gap >= rt || gap <= -rt) return;
-            float theta = SimMath.Atan2(v.Y, v.X);
-            int arc = SolidArcAt(ref c, theta);
-            if (arc != NoArc)
-            {
-                if (d <= NormalEpsilon) return;
-                float side;
-                if (gap > 0f) side = 1f;
-                else if (gap < 0f) side = -1f;
-                else side = (q0 - o).Length >= radius ? 1f : -1f;
-                Vec2 dir = v / d;
-                Vec2 pos = o + dir * (radius + side * rt);
-                if (ResolveContact(bi, ci, pos, dir * side, arc, -1f, h, false)) q = pos;
-                return;
-            }
-            // Inside a gap: only the round end caps of the neighbouring solid arcs can touch.
-            for (int k = 0; k < c.ArcCount; k++)
-            {
-                int ai = c.ArcStart + k;
-                if (!DiscreteCap(bi, ci, ref q, q0, o + _arcStartDir[ai] * radius, rt, k, h)) return;
-                if (!DiscreteCap(bi, ci, ref q, q0, o + _arcEndDir[ai] * radius, rt, k, h)) return;
-            }
-        }
-
-        bool DiscreteCap(int bi, int ci, ref Vec2 q, Vec2 q0, Vec2 centre, float rt, int feature, float h)
-        {
-            Vec2 v = q - centre;
-            float d2 = v.LengthSquared;
-            if (d2 >= rt * rt) return true;
-            float d = MathF.Sqrt(d2);
-            Vec2 n = d > NormalEpsilon ? v / d : FallbackNormal(q0 - centre);
-            Vec2 pos = centre + n * rt;
-            if (!ResolveContact(bi, ci, pos, n, feature, -1f, h, false)) return false;
-            q = pos;
-            return true;
-        }
-
-        static Vec2 FallbackNormal(Vec2 preferred)
-        {
-            float l = preferred.Length;
-            return l > NormalEpsilon ? preferred / l : new Vec2(0f, 1f);
+            return false;
         }
 
         const int NoArc = int.MinValue;
@@ -401,6 +274,12 @@ namespace Ballverse.Core.Sim
                 if (SimMath.AngleInArc(theta, _arcStart[ai], _arcSpan[ai])) return k;
             }
             return NoArc;
+        }
+
+        static Vec2 FallbackNormal(Vec2 preferred)
+        {
+            float l = preferred.Length;
+            return l > NormalEpsilon ? preferred / l : new Vec2(0f, 1f);
         }
 
         // ------------------------------------------------------------------ sweeps
@@ -444,7 +323,8 @@ namespace Ballverse.Core.Sim
                 }
                 else if (g1 < 0f)
                 {
-                    // Already overlapping and the centre crosses the centre line: back to the entry side.
+                    // Already overlapping and the centre crosses the centre line: back to the entry side, just off the centre
+                    // line (the overlap pass then pushes the ball out together with every other wall it touches).
                     float t = g0 / (g0 - g1);
                     if (t < best.T)
                     {
@@ -452,7 +332,7 @@ namespace Ballverse.Core.Sim
                         float u = Vec2.Dot(x - a, d) / l2;
                         if (u >= 0f && u <= 1f)
                         {
-                            best = new SweepHit { T = t, Pos = a + d * u + n * (side * rt), N = n * side, Feature = feature, Corrected = true };
+                            best = new SweepHit { T = t, Pos = a + d * u + n * (side * CorrectedOffset(rt)), N = n * side, Feature = feature, Corrected = true };
                             found = true;
                         }
                     }
@@ -527,7 +407,7 @@ namespace Ballverse.Core.Sim
                     if (arc != NoArc)
                     {
                         Vec2 dir = FallbackNormal(x);
-                        best = new SweepHit { T = t, Pos = o + dir * (radius + side * rt), N = dir * side, Feature = arc, Corrected = true };
+                        best = new SweepHit { T = t, Pos = o + dir * (radius + side * CorrectedOffset(rt)), N = dir * side, Feature = arc, Corrected = true };
                         found = true;
                     }
                 }
@@ -544,7 +424,7 @@ namespace Ballverse.Core.Sim
                     if (arc != NoArc)
                     {
                         Vec2 dir = FallbackNormal(x);
-                        best = new SweepHit { T = t, Pos = o + dir * (radius + side * rt), N = dir * side, Feature = arc, Corrected = true };
+                        best = new SweepHit { T = t, Pos = o + dir * (radius + side * CorrectedOffset(rt)), N = dir * side, Feature = arc, Corrected = true };
                         found = true;
                     }
                 }
@@ -572,69 +452,43 @@ namespace Ballverse.Core.Sim
             return entering ? (-bq - sq) / aq : (-bq + sq) / aq;
         }
 
-        // ------------------------------------------------------------------ spin platforms
-
-        /// <summary>
-        /// Visible solid pieces of a spin platform for the given spin, as pairs of sin(azimuth) in <see cref="_pieces"/>.
-        /// Only the front half (world azimuth −π/2…π/2, facing the camera) is collidable.
-        /// </summary>
-        int BuildPlatformPieces(ref ColliderData c, float spin)
-        {
-            if (c.Full)
-            {
-                _pieces[0] = -1f;
-                _pieces[1] = 1f;
-                return 1;
-            }
-            int n = 0;
-            for (int k = 0; k < c.ArcCount; k++)
-            {
-                int ai = c.ArcStart + k;
-                float lo = SimMath.WrapPi(_arcStart[ai] + spin);
-                float hi = lo + _arcSpan[ai];
-                n = AddPiece(lo, hi, n);
-                n = AddPiece(lo - SimMath.TwoPi, hi - SimMath.TwoPi, n);
-            }
-            return n;
-        }
-
-        int AddPiece(float lo, float hi, int n)
-        {
-            if (lo < -SimMath.HalfPi) lo = -SimMath.HalfPi;
-            if (hi > SimMath.HalfPi) hi = SimMath.HalfPi;
-            if (!(hi > lo)) return n;
-            _pieces[2 * n] = SimMath.Sin(lo);
-            _pieces[2 * n + 1] = SimMath.Sin(hi);
-            return n + 1;
-        }
-
-        void PlatformPiece(ref ColliderData c, float s, int k, out Vec2 a, out Vec2 b)
-        {
-            float w = c.Radius * s;
-            Vec2 o = c.A * s;
-            a = new Vec2(o.X + w * _pieces[2 * k], o.Y);
-            b = new Vec2(o.X + w * _pieces[2 * k + 1], o.Y);
-        }
-
         // ------------------------------------------------------------------ response
 
         /// <summary>
-        /// Applies one contact. <paramref name="qPos"/> / <paramref name="nLocal"/> are the ball centre and normal in q space.
+        /// Applies one swept contact. <paramref name="qPos"/> / <paramref name="nLocal"/> are the ball centre and normal in q space.
         /// <para>
         /// With <paramref name="sweepT"/> ≥ 0 (time of impact as a fraction of the substep) the contact is placed with the body's
         /// pose interpolated to that time; with <paramref name="advance"/> the ball then travels the rest of the substep with its
         /// new velocity — so a ball bouncing off a rotating wall is not carried along by the wall's rotation (which would bias
         /// energy) — otherwise it stays at the contact. With −1 the current pose is used and the ball stays at the resolved
-        /// position (overlap correction). <see cref="_contactPos"/> receives the world contact centre.
+        /// position (corrected hit). <see cref="_contactPos"/> receives the world contact centre.
         /// </para>
-        /// The impulse uses the wall's velocity at the contact point (linear + ω × r + scale rate + platform surface motion).
         /// Returns false if the ball is dead or the mode hook rejected the contact or killed the ball (nothing changed).
         /// </summary>
         bool ResolveContact(int bi, int ci, Vec2 qPos, Vec2 nLocal, int feature, float sweepT, float h, bool advance)
         {
-            ref ColliderData c = ref _colliders[ci];
-            ref BodyState body = ref _bodies[c.Body];
             ref BallState ball = ref _balls[bi];
+            if (!PrepareContact(bi, ci, qPos, nLocal, feature, sweepT, h, out ContactFrame cf, out Vec2 pos)) return false;
+            ApplyImpulse(bi, ref cf);
+            _contactPos = pos;
+            ball.Position = sweepT >= 0f && advance ? pos + ball.Velocity * ((1f - sweepT) * h) : pos;
+            return true;
+        }
+
+        /// <summary>
+        /// Maps a contact from q space to the world (pose at <paramref name="sweepT"/>, or the current pose for −1), computes the
+        /// wall's velocity at the contact point (linear + ω × r + scale rate + platform surface motion) and the event data, and
+        /// asks the mode hook. <paramref name="pos"/> is the world ball centre that resolves this contact alone;
+        /// <see cref="ContactFrame.Target"/> is set from it. False if the ball is dead, or the hook rejected the contact or
+        /// killed the ball.
+        /// </summary>
+        bool PrepareContact(int bi, int ci, Vec2 qPos, Vec2 nLocal, int feature, float sweepT, float h, out ContactFrame cf, out Vec2 pos)
+        {
+            ref ColliderData c = ref _colliders[ci];
+            ref PhysicsBodyState body = ref _bodies[c.Body];
+            ref BallState ball = ref _balls[bi];
+            cf = default;
+            pos = ball.Position;
             if (!ball.Alive) return false;
             float r = ball.Radius;
             float s = body.Scale;
@@ -655,7 +509,7 @@ namespace Ballverse.Core.Sim
             }
             Vec2 qWorldScale = scaleNow != s ? qPos * (scaleNow / s) : qPos;
             Vec2 n = Vec2.Rotate(nLocal, cos, sin);
-            Vec2 pos = bodyPos + Vec2.Rotate(qWorldScale, cos, sin);
+            pos = bodyPos + Vec2.Rotate(qWorldScale, cos, sin);
             Vec2 cp = pos - n * r;
             Vec2 cpLocal = qPos - nLocal * r;
 
@@ -669,9 +523,10 @@ namespace Ballverse.Core.Sim
             else if (c.Kind == ColliderKind.SpinPlatform)
             {
                 float w = c.Radius * s;
-                float sinA = SimMath.Clamp((cpLocal.X - c.A.X * s) / w, -1f, 1f);
+                float sinA = SimMath.Clamp((qPos.X - c.A.X * s) / w, -1f, 1f);
                 float alpha = SimMath.Asin(sinA);
-                localAngle = SimMath.Wrap2Pi(alpha - body.Spin);
+                float spin = sweepT >= 0f ? body.Spin - body.SpinVelocity * h * (1f - sweepT) : body.Spin;
+                localAngle = SimMath.Wrap2Pi(alpha - spin);
                 surfaceLocal = new Vec2(w * SimMath.Cos(alpha) * body.SpinVelocity, 0f);
             }
 
@@ -684,45 +539,67 @@ namespace Ballverse.Core.Sim
                 if (surfaceLocal.X != 0f) wallVelocity = wallVelocity + Vec2.Rotate(surfaceLocal, cos, sin);
             }
 
-            Vec2 t = n.Perp;
-            bool rotates = (ball.Flags & BallFlags.NoRotation) == 0;
-            // Velocity of the ball's surface at the contact point: v + ω × (−r·n) = v − ω·r·t.
-            Vec2 vb = rotates ? ball.Velocity - t * (ball.AngularVelocity * r) : ball.Velocity;
-            Vec2 vrel = vb - wallVelocity;
-            float vn = Vec2.Dot(vrel, n);
+            cf.Collider = ci;
+            cf.Body = c.Body;
+            cf.Feature = feature;
+            cf.N = n;
+            cf.Cp = cp;
+            cf.WallVelocity = wallVelocity;
+            cf.LocalAngle = localAngle;
+            cf.Target = Vec2.Dot(n, pos);
+            cf.Hard = float.NegativeInfinity;
 
             ISimContactHook hook = ContactHook;
             if (hook != null)
             {
+                float vn = Vec2.Dot(BallSurfaceVelocity(ref ball, n) - wallVelocity, n);
                 var info = new ContactPoint { Point = cp, Normal = n, ApproachSpeed = -vn, LocalAngle = localAngle, Feature = feature };
                 if (!hook.PreSolveHit(this, bi, ci, in info)) return false;
                 // A hook that kills the ball (deadly sector) ends its contacts at once: no response, no Hit event.
                 if (!ball.Alive) return false;
             }
-
-            if (vn < 0f)
-            {
-                float e = ball.Restitution > c.Material.Restitution ? ball.Restitution : c.Material.Restitution;
-                if (-vn < RestingThreshold(ball.GravityScale)) e = 0f;
-                float jn = -(1f + e) * vn * ball.Mass;
-                float jt = 0f;
-                float mu = MathF.Sqrt(ball.Friction * c.Material.Friction);
-                if (mu > 0f)
-                {
-                    float vt = Vec2.Dot(vrel, t);
-                    float kt = rotates ? ball.InvMass + r * r * ball.InvInertia : ball.InvMass;
-                    jt = -vt / kt;
-                    float maxJt = mu * jn;
-                    if (jt > maxJt) jt = maxJt;
-                    else if (jt < -maxJt) jt = -maxJt;
-                }
-                ball.Velocity = ball.Velocity + (n * jn + t * jt) * ball.InvMass;
-                if (rotates) ball.AngularVelocity = ball.AngularVelocity - r * jt * ball.InvInertia;
-                RecordContact(SimEventKind.Hit, bi, ci, c.Body, cp, n, jn, -vn, localAngle, feature);
-            }
-            _contactPos = pos;
-            ball.Position = sweepT >= 0f && advance ? pos + ball.Velocity * ((1f - sweepT) * h) : pos;
             return true;
+        }
+
+        /// <summary>Velocity of the ball's surface at the contact with normal <paramref name="n"/>: v + ω × (−r·n) = v − ω·r·t.</summary>
+        static Vec2 BallSurfaceVelocity(ref BallState ball, Vec2 n)
+        {
+            if ((ball.Flags & BallFlags.NoRotation) != 0) return ball.Velocity;
+            return ball.Velocity - n.Perp * (ball.AngularVelocity * ball.Radius);
+        }
+
+        /// <summary>
+        /// Normal impulse with restitution (max of ball and wall, 0 below the resting threshold) and Coulomb friction against the
+        /// wall's surface velocity, from the ball's current velocity; records the Hit event when the ball approaches.
+        /// </summary>
+        void ApplyImpulse(int bi, ref ContactFrame cf)
+        {
+            ref BallState ball = ref _balls[bi];
+            ref ColliderData c = ref _colliders[cf.Collider];
+            Vec2 n = cf.N;
+            Vec2 t = n.Perp;
+            float r = ball.Radius;
+            bool rotates = (ball.Flags & BallFlags.NoRotation) == 0;
+            Vec2 vrel = BallSurfaceVelocity(ref ball, n) - cf.WallVelocity;
+            float vn = Vec2.Dot(vrel, n);
+            if (vn >= 0f) return;
+            float e = ball.Restitution > c.Material.Restitution ? ball.Restitution : c.Material.Restitution;
+            if (-vn < RestingThreshold(ball.GravityScale)) e = 0f;
+            float jn = -(1f + e) * vn * ball.Mass;
+            float jt = 0f;
+            float mu = MathF.Sqrt(ball.Friction * c.Material.Friction);
+            if (mu > 0f)
+            {
+                float vt = Vec2.Dot(vrel, t);
+                float kt = rotates ? ball.InvMass + r * r * ball.InvInertia : ball.InvMass;
+                jt = -vt / kt;
+                float maxJt = mu * jn;
+                if (jt > maxJt) jt = maxJt;
+                else if (jt < -maxJt) jt = -maxJt;
+            }
+            ball.Velocity = ball.Velocity + (n * jn + t * jt) * ball.InvMass;
+            if (rotates) ball.AngularVelocity = ball.AngularVelocity - r * jt * ball.InvInertia;
+            RecordContact(SimEventKind.Hit, bi, cf.Collider, cf.Body, cf.Cp, n, jn, -vn, cf.LocalAngle, cf.Feature);
         }
     }
 }

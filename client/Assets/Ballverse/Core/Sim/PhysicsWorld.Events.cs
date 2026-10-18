@@ -172,7 +172,7 @@ namespace Ballverse.Core.Sim
         bool SensorTouches(int bi, int ci, bool sweep)
         {
             ref ColliderData c = ref _colliders[ci];
-            ref BodyState body = ref _bodies[c.Body];
+            ref PhysicsBodyState body = ref _bodies[c.Body];
             ref BodyFrame f = ref _frames[c.Body];
             ref BallState ball = ref _balls[bi];
             float s = body.Scale;
@@ -223,16 +223,7 @@ namespace Ballverse.Core.Sim
                     return sweep && SweepCircle(q0, q1 - q0, c.A * s, rc, 0, ref hit);
                 }
                 case ColliderKind.SpinPlatform:
-                {
-                    int pieces = BuildPlatformPieces(ref c, body.Spin);
-                    for (int k = 0; k < pieces; k++)
-                    {
-                        PlatformPiece(ref c, s, k, out Vec2 a, out Vec2 b);
-                        if (CapsuleOverlap(q1, a, b, rt)) return true;
-                        if (sweep && SweepCapsule(q0, q1, a, b, rt, 0, ref hit)) return true;
-                    }
-                    return false;
-                }
+                    return PlatformSensorTouch(ref c, ref body, q0, q1, r, sweep);
             }
             return false;
         }

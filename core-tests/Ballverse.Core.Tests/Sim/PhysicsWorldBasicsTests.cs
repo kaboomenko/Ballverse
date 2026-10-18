@@ -132,6 +132,39 @@ namespace Ballverse.Core.Tests.Sim
             Assert.Equal(5f, w.EffectiveMaxSpeed);
         }
 
+        /// <summary>
+        /// The reach that bounds the wall speed is measured from the rotation centre, not from the centre of the vertex bounding
+        /// box: odd polygons and stars are off-centre in their box (triangle R 4.2: box centre (1.05, 0)). Spec M02: the action
+        /// clamp is |ω|·R̂ + 5 m/s ≤ 30 m/s at ω = 25 m/s ÷ R̂ (QA: the triangle gave 39.7, the pentagon 34.3).
+        /// </summary>
+        [Theory]
+        [InlineData(3, 0f)]
+        [InlineData(4, 0f)]
+        [InlineData(5, 0f)]
+        [InlineData(6, 0f)]
+        [InlineData(5, 0.5f)]
+        public void EffectiveMaxSpeedOfRotatingPolygonUsesDistanceFromRotationCentre(int points, float starInner)
+        {
+            const float radius = 4.2f, wall = 0.12f;
+            var w = new PhysicsWorld(SimSettings.Default);
+            float omega = 25f / radius;
+            int body = w.AddBody(BodyDef.Kinematic(Vec2.Zero, 0f, omega));
+            Vec2[] verts = starInner > 0f ? ShapeBuilder.Star(points, radius, radius * starInner) : ShapeBuilder.RegularPolygon(points, radius);
+            w.AddPolyline(body, verts, true, wall, SimTestUtil.Wall());
+            // ω·(R̂ + half thickness) + 5.
+            Assert.Equal(omega * (radius + wall * 0.5f) + 5f, w.EffectiveMaxSpeed, 3);
+            Assert.InRange(w.EffectiveMaxSpeed, 30f, 30.4f);
+            // Separate segments, rings and discs off the rotation centre use the same rule.
+            var w2 = new PhysicsWorld(SimTestUtil.NoGravity(maxSpeed: 5f));
+            int b2 = w2.AddBody(BodyDef.Kinematic(Vec2.Zero, 0f, 2f));
+            w2.AddSegment(b2, new Vec2(1f, 1f), new Vec2(3f, 0f), 0f, SimTestUtil.Wall());
+            Assert.Equal(2f * 3f + 5f, w2.EffectiveMaxSpeed, 3);
+            w2.AddRing(b2, new Vec2(0f, 2f), 1.5f, 0.2f, ReadOnlySpan<AngularGap>.Empty, SimTestUtil.Wall());
+            Assert.Equal(2f * (3.5f + 0.1f) + 5f, w2.EffectiveMaxSpeed, 3);
+            w2.AddCircle(b2, new Vec2(-4f, 0f), 0.5f, SimTestUtil.Wall());
+            Assert.Equal(2f * 4.5f + 5f, w2.EffectiveMaxSpeed, 3);
+        }
+
         [Fact]
         public void StrictClampKeepsBallAtMaxSpeedEvenAgainstFastWall()
         {
@@ -222,7 +255,7 @@ namespace Ballverse.Core.Tests.Sim
             w.AddSegment(body, new Vec2(-1f, 0f), new Vec2(1f, 0f), 0.1f, SimTestUtil.Wall());
             w.MoveBodyTo(body, new Vec2(0.5f, 0.25f), 0.3f);
             w.Step();
-            ref readonly BodyState s = ref w.GetBody(body);
+            ref readonly PhysicsBodyState s = ref w.GetBody(body);
             Assert.Equal(new Vec2(0.5f, 0.25f), s.Position);
             Assert.Equal(0.3f, s.Angle);
             Assert.Equal(Vec2.Zero, s.LinearVelocity);

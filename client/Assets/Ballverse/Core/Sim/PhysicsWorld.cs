@@ -36,7 +36,7 @@ namespace Ballverse.Core.Sim
         int _aliveBalls;
 
         // Bodies.
-        BodyState[] _bodies = new BodyState[4];
+        PhysicsBodyState[] _bodies = new PhysicsBodyState[4];
         BodyFrame[] _frames = new BodyFrame[4];
         int _bodyCount;
 
@@ -55,7 +55,6 @@ namespace Ballverse.Core.Sim
         float[] _gapStart = new float[8];
         float[] _gapSpan = new float[8];
         int _gapPoolCount;
-        float[] _pieces = new float[8];
 
         int _tick;
 
@@ -230,6 +229,7 @@ namespace Ballverse.Core.Sim
             _balls[id].Alive = false;
             _aliveBalls--;
             _radiusVersion++;
+            if (_transitCount > 0) RemoveTransitsOfBall(id);
         }
 
         // ------------------------------------------------------------------ bodies
@@ -250,7 +250,7 @@ namespace Ballverse.Core.Sim
             }
             int id = _bodyCount++;
             bool kinematic = def.Motion == BodyMotion.Kinematic;
-            _bodies[id] = new BodyState
+            _bodies[id] = new PhysicsBodyState
             {
                 Motion = def.Motion,
                 Position = def.Position,
@@ -269,7 +269,7 @@ namespace Ballverse.Core.Sim
             return id;
         }
 
-        public ref readonly BodyState GetBody(int id)
+        public ref readonly PhysicsBodyState GetBody(int id)
         {
             CheckBody(id);
             return ref _bodies[id];
@@ -280,7 +280,7 @@ namespace Ballverse.Core.Sim
         {
             CheckBody(id);
             if (!SimMath.IsFinite(linear) || !SimMath.IsFinite(angular)) throw new ArgumentException("Velocities must be finite");
-            ref BodyState b = ref _bodies[id];
+            ref PhysicsBodyState b = ref _bodies[id];
             if (b.Motion != BodyMotion.Kinematic) return;
             b.LinearVelocity = linear;
             b.AngularVelocity = angular;
@@ -376,7 +376,7 @@ namespace Ballverse.Core.Sim
             c.A = a;
             c.B = b;
             Vec2 mid = (a + b) * 0.5f;
-            return Register(ref c, mid, (b - a).Length * 0.5f);
+            return Register(ref c, mid, (b - a).Length * 0.5f, MathF.Max(a.Length, b.Length));
         }
 
         /// <summary>
@@ -405,13 +405,15 @@ namespace Ballverse.Core.Sim
             if (_vertexCount + points.Length > _vertices.Length) Array.Resize(ref _vertices, Math.Max(_vertices.Length * 2, _vertexCount + points.Length));
             for (int i = 0; i < points.Length; i++) _vertices[_vertexCount++] = points[i];
             Vec2 centre = new Vec2((minX + maxX) * 0.5f, (minY + maxY) * 0.5f);
-            float r = 0f;
+            float r = 0f, reach = 0f;
             for (int i = 0; i < points.Length; i++)
             {
                 float d = (points[i] - centre).Length;
                 if (d > r) r = d;
+                float o = points[i].Length;
+                if (o > reach) reach = o;
             }
-            return Register(ref c, centre, r);
+            return Register(ref c, centre, r, reach);
         }
 
         /// <summary>
@@ -428,7 +430,7 @@ namespace Ballverse.Core.Sim
             c.A = centre;
             c.Radius = radius;
             BuildArcs(ref c, gaps);
-            return Register(ref c, centre, radius);
+            return Register(ref c, centre, radius, centre.Length + radius);
         }
 
         /// <summary>Solid disc (body-local centre).</summary>
@@ -440,12 +442,15 @@ namespace Ballverse.Core.Sim
             var c = NewCollider(ColliderKind.Circle, body, 0f, material);
             c.A = centre;
             c.Radius = radius;
-            return Register(ref c, centre, radius);
+            return Register(ref c, centre, radius, centre.Length + radius);
         }
 
         /// <summary>
-        /// Helix Drop platform seen edge-on (see <see cref="ColliderKind.SpinPlatform"/>): centred at <paramref name="centre"/>,
-        /// spanning ±<paramref name="halfWidth"/> along body-local X, gaps in platform azimuth (0 = facing the camera when Spin = 0).
+        /// Helix Drop platform seen edge-on (see <see cref="ColliderKind.SpinPlatform"/>): a slab centred at <paramref name="centre"/>
+        /// (top at centre.Y + thickness / 2: for spec §2.9 M05 platform k pass (0, y_k − T / 2)), spanning ±<paramref name="halfWidth"/>
+        /// (= R_path) along body-local X, gaps in platform azimuth (0 = facing the camera when Spin = 0). Pass / bounce is
+        /// decided once per arrival from the ball's footprint; a passing ball is in transit (no contacts) until it leaves the
+        /// slab's height band.
         /// </summary>
         public int AddSpinPlatform(int body, Vec2 centre, float halfWidth, float thickness, ReadOnlySpan<AngularGap> gaps, in ColliderMaterial material)
         {
@@ -457,7 +462,7 @@ namespace Ballverse.Core.Sim
             c.A = centre;
             c.Radius = halfWidth;
             BuildArcs(ref c, gaps);
-            return Register(ref c, centre, halfWidth);
+            return Register(ref c, centre, halfWidth, centre.Length + halfWidth);
         }
 
         public void SetColliderEnabled(int id, bool enabled)
@@ -549,6 +554,8 @@ namespace Ballverse.Core.Sim
             /// <summary>Body-local bounding circle of the centre-line geometry (scaled with the body; thickness added separately).</summary>
             public Vec2 BoundCentre;
             public float BoundRadius;
+            /// <summary>Farthest point of the centre-line geometry from the body origin (body-local, unscaled): bounds the wall speed under rotation.</summary>
+            public float Reach;
         }
 
         /// <summary>Per-substep world-space bounds used for the cheap ball reject.</summary>
@@ -569,10 +576,11 @@ namespace Ballverse.Core.Sim
             return new ColliderData { Kind = kind, Body = body, Enabled = true, Material = m, HalfThickness = thickness * 0.5f };
         }
 
-        int Register(ref ColliderData c, Vec2 boundCentre, float boundRadius)
+        int Register(ref ColliderData c, Vec2 boundCentre, float boundRadius, float reach)
         {
             c.BoundCentre = boundCentre;
             c.BoundRadius = boundRadius;
+            c.Reach = reach;
             if (_colliderCount == _colliders.Length)
             {
                 Array.Resize(ref _colliders, _colliders.Length * 2);
@@ -581,8 +589,6 @@ namespace Ballverse.Core.Sim
             int id = _colliderCount++;
             _colliders[id] = c;
             if (c.Material.IsSensor) _sensorCount++;
-            int pieces = (c.ArcCount + 1) * 4;
-            if (_pieces.Length < pieces) _pieces = new float[pieces];
             return id;
         }
 
@@ -704,7 +710,7 @@ namespace Ballverse.Core.Sim
 
         void RefreshFrame(int id)
         {
-            ref BodyState b = ref _bodies[id];
+            ref PhysicsBodyState b = ref _bodies[id];
             ref BodyFrame f = ref _frames[id];
             SimMath.SinCos(b.Angle, out f.Sin, out f.Cos);
             f.PrevCos = f.Cos;

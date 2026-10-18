@@ -40,6 +40,17 @@ namespace Ballverse.Core.Sim
         public int ColliderCount;
         /// <summary>Collider and its body enabled (destroyed rings disappear).</summary>
         public bool[] ColliderEnabled = new bool[0];
+        public int TransitCount;
+        /// <summary>
+        /// Balls passing through a spin platform's thickness (sorted by ball, then collider): draw the ball in front of that
+        /// platform while the pair is listed (spec §2.9 M05).
+        /// </summary>
+        public SpinTransit[] Transits = new SpinTransit[0];
+
+        internal void EnsureTransitCapacity(int transits)
+        {
+            if (Transits.Length < transits) Transits = new SpinTransit[Math.Max(transits, Transits.Length * 2)];
+        }
 
         internal void EnsureCapacity(int balls, int bodies, int colliders)
         {

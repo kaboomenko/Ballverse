@@ -43,8 +43,12 @@ namespace Ballverse.Core.Sim
         }
     }
 
-    /// <summary>Pose and velocities of one body. Read through <see cref="PhysicsWorld.GetBody"/>.</summary>
-    public struct BodyState
+    /// <summary>
+    /// Pose and velocities of one body. Read through <see cref="PhysicsWorld.GetBody"/>. Named PhysicsBodyState (not
+    /// BodyState) so it never clashes with <c>Ballverse.Core.RenderStream.BodyState</c> in mode code that drives the world and
+    /// writes the render stream.
+    /// </summary>
+    public struct PhysicsBodyState
     {
         public BodyMotion Motion;
         public Vec2 Position;

@@ -16,10 +16,14 @@ namespace Ballverse.Core.Sim
         /// <summary>Solid disc (pegs, hubs). For sensors the whole disc area counts as inside.</summary>
         Circle = 3,
         /// <summary>
-        /// Helix Drop platform: a horizontal disc of the tower seen edge-on from the front (spec §2.9 M05 side view). It lies along
-        /// body-local X from −HalfWidth to +HalfWidth with a thickness; the body's <see cref="BodyState.Spin"/> rotates it about
-        /// the vertical axis. A point at local x belongs to azimuth asin(x / HalfWidth) − Spin; it is solid unless that azimuth
-        /// is in a gap. Hit events report the azimuth in <see cref="SimEvent.LocalAngle"/> so rules can test deadly sectors.
+        /// Helix Drop platform: a horizontal disc of the tower seen edge-on from the front (spec §2.9 M05 side view), a flat slab
+        /// along body-local X from −HalfWidth to +HalfWidth (HalfWidth = R_path) with the given thickness centred on the
+        /// centre's Y (top = Y + T/2); the body's <see cref="PhysicsBodyState.Spin"/> rotates it about the vertical axis. A ball
+        /// at local x sits at azimuth a = asin(x / HalfWidth) − Spin and covers [a − δ, a + δ], δ = asin(r / HalfWidth). When the
+        /// ball reaches the top (or the bottom) the solver decides once: footprint strictly inside a gap — the ball passes and
+        /// the pair is in transit (<see cref="PhysicsWorld.IsInTransit"/>, no contacts) until the ball leaves the slab's height
+        /// band; otherwise a hit on the flat face. Hit events report a in <see cref="SimEvent.LocalAngle"/> (so rules can test
+        /// deadly sectors against [a − δ, a + δ]) and the face in <see cref="SimEvent.Feature"/> (0 top, 1 bottom).
         /// </summary>
         SpinPlatform = 4,
     }
