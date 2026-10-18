@@ -136,7 +136,7 @@ namespace Ballverse.Core.Tests.Timeline
         {
             // 2 s clip, last 1 s at 0.5x → 3 s per pass.
             var t = Manual(new ClipTiming(0, 120, 120, 100, 60, 50, SimAfterEnd.Loop), 60, 7000000);
-            Assert.Equal(180, t.ClipFrameCount);
+            Assert.Equal(180, t.ClipEndFrame);
             Assert.Equal(SimSample.Playing(0, 1), t.SampleSim(180));
             Assert.Equal(SimSample.Playing(59, 1), t.SampleSim(239));
             Assert.Equal(SimSample.Playing(60, 1), t.SampleSim(240));
@@ -175,11 +175,38 @@ namespace Ballverse.Core.Tests.Timeline
         {
             var fast = Manual(new ClipTiming(0, 600, 600, 200, 60, 25, SimAfterEnd.SlowMoReplay), 30, 20000000);
             // Clip: 540 ticks at 2x (270 output ticks) + 60 ticks at 0.5x (120 output ticks) = 6.5 s = 195 frames at 30 fps.
-            Assert.Equal(195, fast.ClipFrameCount);
+            Assert.Equal(195, fast.ClipEndFrame);
             Assert.Equal(SimSample.Playing(480, 1), fast.SampleSim(195));
             Assert.Equal(SimSample.Playing(481, 1), fast.SampleSim(196));
             Assert.Equal(SimSample.Playing(599, 1), fast.SampleSim(195 + 119));
             Assert.Equal(SimSample.Playing(480, 2), fast.SampleSim(195 + 120));
+        }
+
+        [Fact]
+        public void SlowMoReplay_NeverFasterThanTheFinaleSlowMo()
+        {
+            // 0.5x clip with 0.25x finale slow-mo: the finale plays at 0.125x, so the replay does too (not at 0.5x).
+            var t = Manual(new ClipTiming(0, 600, 600, 50, 120, 25, SimAfterEnd.SlowMoReplay), 60, 60000000);
+            // 480 ticks at 0.5x = 960 frames, 120 ticks at 0.125x = 960 frames.
+            Assert.Equal(1920, t.ClipEndFrame);
+            Assert.Equal(SimSample.Playing(480, 0), t.SampleSim(960));
+            Assert.Equal(SimSample.Playing(480, 0), t.SampleSim(967));
+            Assert.Equal(SimSample.Playing(481, 0), t.SampleSim(968));
+            Assert.Equal(SimSample.Playing(480, 1), t.SampleSim(1920));
+            Assert.Equal(SimSample.Playing(480, 1), t.SampleSim(1927));
+            Assert.Equal(SimSample.Playing(481, 1), t.SampleSim(1928));
+            Assert.Equal(SimSample.Playing(599, 1), t.SampleSim(1920 + 959));
+            Assert.Equal(SimSample.Playing(480, 2), t.SampleSim(1920 + 960));
+        }
+
+        [Fact]
+        public void SlowMoReplay_HalfSpeedClipWithoutSlowMo_ReplaysAtClipSpeed()
+        {
+            var t = Manual(new ClipTiming(0, 600, 600, 50, afterEnd: SimAfterEnd.SlowMoReplay), 60, 30000000);
+            Assert.Equal(1200, t.ClipEndFrame);
+            Assert.Equal(SimSample.Playing(480, 1), t.SampleSim(1200));
+            Assert.Equal(SimSample.Playing(481, 1), t.SampleSim(1202));
+            Assert.Equal(SimSample.Playing(480, 2), t.SampleSim(1440));
         }
 
         [Fact]
@@ -207,7 +234,7 @@ namespace Ballverse.Core.Tests.Timeline
         public void ContinueSim_ResumesBaseSpeedAfterSlowMo()
         {
             var t = Manual(new ClipTiming(0, 600, 900, 100, 60, 50, SimAfterEnd.ContinueSim), 60, 20000000);
-            Assert.Equal(660, t.ClipFrameCount);
+            Assert.Equal(660, t.ClipEndFrame);
             Assert.Equal(SimSample.Playing(599), t.SampleSim(659));
             Assert.Equal(SimSample.Playing(600), t.SampleSim(660));
             Assert.Equal(SimSample.Playing(601), t.SampleSim(661));

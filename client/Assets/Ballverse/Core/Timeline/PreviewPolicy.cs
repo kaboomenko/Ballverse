@@ -20,14 +20,17 @@ namespace Ballverse.Core.Timeline
 
         /// <summary>
         /// True when the device is expected not to sustain the preview at full internal resolution, so the renderer
-        /// starts at a reduced internal resolution (spec §3.7: tier C at 60 fps; §8.2 P5). The output file is unaffected.
-        /// The amount of reduction is a renderer decision.
+        /// starts at a reduced internal resolution (spec §3.7: "тир C, 1080p60"; §8.2 P5): tier C exporting 1080p at
+        /// 60 fps. The output file is unaffected and the amount of reduction is a renderer decision. This is only the
+        /// initial hint: the renderer must also lower the internal resolution (never the fps) at runtime whenever preview
+        /// frames are missed, on any tier.
         /// </summary>
-        public static bool ShouldReduceInternalResolution(DeviceTier tier, int fps)
+        public static bool ShouldReduceInternalResolution(DeviceTier tier, ExportResolution resolution, int fps)
         {
             OutputFps.Validate(fps, nameof(fps));
             if (!Enum.IsDefined(typeof(DeviceTier), tier)) throw new ArgumentOutOfRangeException(nameof(tier));
-            return tier == DeviceTier.C && fps == OutputFps.Fps60;
+            if (!Enum.IsDefined(typeof(ExportResolution), resolution)) throw new ArgumentOutOfRangeException(nameof(resolution));
+            return tier == DeviceTier.C && resolution == ExportResolution.P1080 && fps == OutputFps.Fps60;
         }
 
         /// <summary>Allowed preview audio/video drift: one frame, µs rounded up (spec §3.7: 16–33 ms). Export allows 0.</summary>

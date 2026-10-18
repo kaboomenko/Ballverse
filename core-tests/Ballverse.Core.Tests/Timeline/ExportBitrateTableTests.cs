@@ -111,6 +111,16 @@ namespace Ballverse.Core.Tests.Timeline
         [InlineData("[1,2]")]
         [InlineData("{\"audioBps\":\"loud\"}")]
         [InlineData("{\"audioBps\":1e40}")]
+        [InlineData("   ")]
+        [InlineData("null")]
+        [InlineData("{\"audioBps\":\"\"}")]
+        [InlineData("{\"audioBps\":\"160000\"}")]
+        [InlineData("{\"audioBps\":160000.7}")]
+        [InlineData("{\"audioBps\":160000.0}")]
+        [InlineData("{\"audioBps\":true}")]
+        [InlineData("{\"audioBps\":{}}")]
+        [InlineData("{\"audioBps\":99999999999999999999}")]
+        [InlineData("5")]
         public void TryFromRemoteConfig_MalformedFallsBackToDefault(string json)
         {
             Assert.False(ExportBitrateTable.TryFromRemoteConfig(json, out var t));
@@ -123,6 +133,8 @@ namespace Ballverse.Core.Tests.Timeline
             Assert.True(ExportBitrateTable.TryFromRemoteConfig("{}", out var t));
             Assert.Equal(16000000L, t.Video1080p60Bps);
             Assert.True(ExportBitrateTable.TryFromRemoteConfig("{\"unknownKey\":5}", out t));
+            Assert.Equal(192000L, t.AudioBps);
+            Assert.True(ExportBitrateTable.TryFromRemoteConfig("{\"audioBps\":null}", out t));
             Assert.Equal(192000L, t.AudioBps);
         }
     }

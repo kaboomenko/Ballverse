@@ -60,11 +60,24 @@ namespace Ballverse.Core.Tests.Timeline
         [InlineData(0, 10, 10, 201, 0, 50)]           // speed > 2x
         [InlineData(0, 10, 10, 100, -1, 50)]          // negative slow-mo
         [InlineData(0, 10, 10, 100, 181, 50)]         // slow-mo > 3 s
+        [InlineData(0, 10, 10, 100, 1, 50)]           // slow-mo < 1 s
+        [InlineData(0, 10, 10, 100, 30, 50)]
+        [InlineData(0, 10, 10, 100, 59, 50)]
         [InlineData(0, 10, 10, 100, 60, 24)]          // factor < 0.25
         [InlineData(0, 10, 10, 100, 60, 51)]          // factor > 0.5
         public void ClipTiming_RejectsInvalidValues(int trimIn, int trimOut, int available, int speed, int slowMo, int factor)
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => new ClipTiming(trimIn, trimOut, available, speed, slowMo, factor));
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(60)]
+        [InlineData(120)]
+        [InlineData(180)]
+        public void ClipTiming_SlowMoIsOffOrOneToThreeSeconds(int slowMo)
+        {
+            Assert.Equal(slowMo, new ClipTiming(0, 600, 600, 100, slowMo, 50).SlowMoTicks);
         }
 
         [Fact]
@@ -110,7 +123,6 @@ namespace Ballverse.Core.Tests.Timeline
         {
             var v = new UserVideoTiming(1000000, 3000000, -500000, VideoAfterEnd.Black);
             Assert.Equal(2000000, v.LengthUs);
-            Assert.Equal(1500000, v.EndOnOutputUs);
             Assert.Equal(2999999, v.LastPtsUs);
             Assert.Equal(VideoAfterEnd.Black, v.AfterEnd);
             Assert.Equal(-500000, v.OffsetUs);
@@ -120,12 +132,69 @@ namespace Ballverse.Core.Tests.Timeline
         [InlineData(-1L, 100L, 0L)]
         [InlineData(100L, 100L, 0L)]
         [InlineData(200L, 100L, 0L)]
-        [InlineData(0L, 3600000001L, 0L)]
-        [InlineData(0L, 100L, 3600000001L)]
-        [InlineData(0L, 100L, -3600000001L)]
+        [InlineData(0L, 600000001L, 0L)]
+        [InlineData(0L, 100L, 600000001L)]
+        [InlineData(0L, 100L, -600000001L)]
         public void UserVideoTiming_RejectsInvalidValues(long trimIn, long trimOut, long offset)
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => new UserVideoTiming(trimIn, trimOut, offset));
+        }
+
+        [Fact]
+        public void UserVideoTiming_LimitsFollowSpec()
+        {
+            Assert.Equal(600000000L, UserVideoTiming.MaxSourceDurationUs);
+            Assert.Equal(600000000L, new UserVideoTiming(0, UserVideoTiming.MaxSourceDurationUs).TrimOutUs);
+            // A trimmed length above 180 s is accepted; the output clamp keeps the file at ≤ 180 s.
+            var t = new StudioTimeline(new ClipTiming(0, 60, 60), new UserVideoTiming(0, 181000000), DurationMode.MatchVideo, 30);
+            Assert.Equal(5400, t.FrameCount);
+            Assert.Equal(-UserVideoTiming.MaxAbsOffsetUs, new UserVideoTiming(0, 10, -UserVideoTiming.MaxAbsOffsetUs).OffsetUs);
+        }
+
+        [Fact]
+        public void TimelineSpec_RejectsManualDurationAboveLimit()
+        {
+            var clip = new ClipTiming(0, 60, 60);
+            Assert.Throws<ArgumentOutOfRangeException>(() => new TimelineSpec(clip, null, DurationMode.Manual, 60, TimelineSpec.MaxManualDurationUs + 1));
+            Assert.Equal(TimelineSpec.MaxManualDurationUs, new TimelineSpec(clip, null, DurationMode.Manual, 60, TimelineSpec.MaxManualDurationUs).ManualDurationUs);
+        }
+
+        [Theory]
+        [InlineData(0L, 1, 60, 16667L)]
+        [InlineData(0L, 2, 60, 33333L)]
+        [InlineData(0L, 60, 60, 1000000L)]
+        [InlineData(0L, -60, 60, -1000000L)]
+        [InlineData(0L, -1, 60, -16667L)]
+        [InlineData(0L, 1, 30, 33333L)]
+        [InlineData(10000L, 1, 60, 33333L)]       // snaps to the grid first (10 ms → frame 1)
+        [InlineData(-10000L, -1, 60, -33333L)]
+        [InlineData(1000000L, 0, 60, 1000000L)]
+        [InlineData(599999000L, 60, 60, 600000000L)] // clamped
+        [InlineData(-599999000L, -60, 60, -600000000L)]
+        public void NudgeOffset_SnapsToTheFrameGrid(long offset, int frames, int fps, long expected)
+        {
+            Assert.Equal(expected, UserVideoTiming.NudgeOffsetUs(offset, frames, fps));
+        }
+
+        [Theory]
+        [InlineData(60, 1)]
+        [InlineData(60, -1)]
+        [InlineData(30, 1)]
+        [InlineData(30, -1)]
+        public void NudgeOffset_RepeatedNudgesDoNotDrift(int fps, int direction)
+        {
+            long offset = 0;
+            for (int i = 0; i < fps; i++) offset = UserVideoTiming.NudgeOffsetUs(offset, direction, fps);
+            Assert.Equal(direction * 1000000L, offset);
+            for (int i = 0; i < 7 * fps; i++) offset = UserVideoTiming.NudgeOffsetUs(offset, direction, fps);
+            Assert.Equal(direction * 8000000L, offset);
+        }
+
+        [Fact]
+        public void NudgeOffset_InvalidArgumentsThrow()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => UserVideoTiming.NudgeOffsetUs(0, 1, 25));
+            Assert.Throws<ArgumentOutOfRangeException>(() => UserVideoTiming.NudgeOffsetUs(UserVideoTiming.MaxAbsOffsetUs + 1, 1, 60));
         }
 
         [Fact]

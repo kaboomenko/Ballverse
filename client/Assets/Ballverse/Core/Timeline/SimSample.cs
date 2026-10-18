@@ -1,3 +1,5 @@
+using System;
+
 namespace Ballverse.Core.Timeline
 {
     /// <summary>What the simulation slot shows on one output frame (spec §3.4, §7.5 step a).</summary>
@@ -8,14 +10,14 @@ namespace Ballverse.Core.Timeline
         /// <summary>Draw <see cref="SimSample.Tick"/> as a still frame.</summary>
         Frozen = 1,
         /// <summary>
-        /// Nothing to draw. Reserved: with the §3.4 rules the output timeline starts at the clip start and every
-        /// <see cref="SimAfterEnd"/> shows a frame, so <see cref="StudioTimeline"/> never returns it today.
+        /// Nothing to draw. Reserved: <see cref="StudioTimeline"/> never returns it today. Every <see cref="SimAfterEnd"/>
+        /// shows a frame, and before the clip starts (video offset &lt; 0) the clip's first tick is shown frozen.
         /// </summary>
         Hidden = 2,
     }
 
     /// <summary>Result of <see cref="StudioTimeline.SampleSim"/>.</summary>
-    public readonly struct SimSample
+    public readonly struct SimSample : IEquatable<SimSample>
     {
         public SimSampleKind Kind { get; }
         /// <summary>Render-stream tick to draw (undefined for <see cref="SimSampleKind.Hidden"/>).</summary>
@@ -42,6 +44,34 @@ namespace Ballverse.Core.Timeline
         public static SimSample Frozen(int tick)
         {
             return new SimSample(SimSampleKind.Frozen, tick, 0);
+        }
+
+        public bool Equals(SimSample other)
+        {
+            return Kind == other.Kind && Tick == other.Tick && Iteration == other.Iteration;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is SimSample other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return ((int)Kind * 397 ^ Tick) * 397 ^ Iteration;
+            }
+        }
+
+        public static bool operator ==(SimSample a, SimSample b)
+        {
+            return a.Equals(b);
+        }
+
+        public static bool operator !=(SimSample a, SimSample b)
+        {
+            return !a.Equals(b);
         }
 
         public override string ToString()

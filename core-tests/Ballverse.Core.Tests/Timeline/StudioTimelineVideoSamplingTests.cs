@@ -45,20 +45,53 @@ namespace Ballverse.Core.Tests.Timeline
         }
 
         [Fact]
-        public void NegativeOffset_SkipsTheVideoHead()
+        public void NegativeOffset_OutputStartsWithTheVideoAndKeepsItsHead()
         {
-            var t = WithVideo(new UserVideoTiming(1000000, 3000000, -1500000, VideoAfterEnd.Black), 30, 2000000);
-            Assert.Equal(VideoSample.Frame(2500000), t.SampleVideo(0));
-            Assert.Equal(VideoSample.Frame(2966667), t.SampleVideo(14));
-            Assert.Equal(VideoSample.Black, t.SampleVideo(15));
-            Assert.Equal(VideoSample.Black, t.SampleVideo(59));
+            var t = WithVideo(new UserVideoTiming(1000000, 3000000, -1500000, VideoAfterEnd.Black), 30, 4000000);
+            Assert.Equal(0, t.VideoStartUs);
+            Assert.Equal(1500000, t.ClipStartUs);
+            Assert.Equal(VideoSample.Frame(1000000), t.SampleVideo(0));
+            Assert.Equal(VideoSample.Frame(1466667), t.SampleVideo(14));
+            Assert.Equal(VideoSample.Frame(2966667), t.SampleVideo(59));
+            Assert.Equal(VideoSample.Black, t.SampleVideo(60));
+            Assert.Equal(VideoSample.Black, t.SampleVideo(119));
         }
 
         [Fact]
-        public void NegativeOffset_VideoEntirelyBeforeClipFollowsAfterEnd()
+        public void NegativeOffset_VideoEntirelyBeforeClipPlaysThenFollowsAfterEnd()
         {
-            var t = WithVideo(new UserVideoTiming(0, 1000000, -2000000, VideoAfterEnd.Freeze), 60, 1000000);
-            for (int i = 0; i < t.FrameCount; i++) Assert.Equal(VideoSample.Frozen(999999), t.SampleVideo(i));
+            var t = WithVideo(new UserVideoTiming(0, 1000000, -2000000, VideoAfterEnd.Freeze), 60, 3000000);
+            for (int i = 0; i < 60; i++) Assert.Equal(VideoSample.Frame(t.FrameTimeUs(i)), t.SampleVideo(i));
+            for (int i = 60; i < t.FrameCount; i++) Assert.Equal(VideoSample.Frozen(999999), t.SampleVideo(i));
+        }
+
+        [Fact]
+        public void Loop_NegativeOffset_StartsAtTheFirstIteration()
+        {
+            var t = WithVideo(new UserVideoTiming(0, 2000000, -2500000, VideoAfterEnd.Loop), 60, 5000000);
+            Assert.Equal(VideoSample.Frame(0, 0), t.SampleVideo(0));
+            Assert.Equal(VideoSample.Frame(1983334, 0), t.SampleVideo(119));
+            Assert.Equal(VideoSample.Frame(0, 1), t.SampleVideo(120));
+            Assert.Equal(VideoSample.Frame(500000, 1), t.SampleVideo(150));
+            Assert.Equal(VideoSample.Frame(0, 2), t.SampleVideo(240));
+        }
+
+        [Theory]
+        [InlineData(1L, -600000000L)]
+        [InlineData(1L, 600000000L)]
+        [InlineData(2L, -220000000L)]
+        [InlineData(1L, 0L)]
+        public void Loop_ExtremeOffsetsAndTinyLengths_IterationNeverOverflows(long length, long offset)
+        {
+            var t = WithVideo(new UserVideoTiming(0, length, offset, VideoAfterEnd.Loop), 60, 180000000);
+            for (int i = 0; i < t.FrameCount; i += 7)
+            {
+                var v = t.SampleVideo(i);
+                Assert.True(v.Iteration >= 0, v.ToString());
+                Assert.InRange(v.SourcePtsUs, 0, length - 1);
+            }
+            var last = t.SampleVideo(t.FrameCount - 1);
+            if (offset <= 0) Assert.Equal((int)(t.FrameTimeUs(t.FrameCount - 1) / length), last.Iteration);
         }
 
         [Fact]

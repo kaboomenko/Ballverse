@@ -71,15 +71,19 @@ namespace Ballverse.Core.Timeline
 
         /// <summary>
         /// Applies a Remote Config JSON payload (<see cref="ExportBitrateOverrides"/>) onto <see cref="Default"/>.
-        /// Malformed JSON or out-of-range values return false and the default table, so bad remote data never blocks export.
+        /// Blank text, a <c>null</c> root, malformed JSON, non-integer values (strings, fractions) and out-of-range values
+        /// return false and the default table, so bad remote data never blocks export and can be reported. An empty object
+        /// is valid (no overrides).
         /// </summary>
         public static bool TryFromRemoteConfig(string json, out ExportBitrateTable table)
         {
             table = Default;
-            if (string.IsNullOrEmpty(json)) return false;
+            if (string.IsNullOrWhiteSpace(json)) return false;
             try
             {
-                table = Default.WithOverrides(ExportBitrateOverrides.FromJson(json));
+                var overrides = ExportBitrateOverrides.FromJson(json);
+                if (overrides == null) return false;
+                table = Default.WithOverrides(overrides);
                 return true;
             }
             catch (JsonException)

@@ -25,7 +25,7 @@ namespace Ballverse.Core.Tests.Timeline
         {
             var t = Auto(new ClipTiming(0, lengthTicks, SimConstants.MaxDurationTicks), fps);
             Assert.Equal(expectedFrames, t.FrameCount);
-            Assert.Equal(expectedFrames, t.ClipFrameCount);
+            Assert.Equal(expectedFrames, t.ClipEndFrame);
         }
 
         [Fact]
@@ -49,7 +49,7 @@ namespace Ballverse.Core.Tests.Timeline
         {
             var t = Auto(new ClipTiming(0, lengthTicks, 100), fps);
             Assert.Equal(expectedFrames, t.FrameCount);
-            Assert.True(t.ClipFrameCount < expectedFrames || lengthTicks >= 60);
+            Assert.True(t.ClipEndFrame < expectedFrames || lengthTicks >= 60);
         }
 
         [Theory]
@@ -67,7 +67,7 @@ namespace Ballverse.Core.Tests.Timeline
         public void ClampedLongClip_LastFrameShowsTheRightTick()
         {
             var t = Auto(new ClipTiming(0, 10800, 10800, 50), 60);
-            Assert.Equal(21600, t.ClipFrameCount);
+            Assert.Equal(21600, t.ClipEndFrame);
             Assert.Equal(SimSample.Playing(5399), t.SampleSim(10799));
         }
 
@@ -130,7 +130,7 @@ namespace Ballverse.Core.Tests.Timeline
             var t = Auto(new ClipTiming(0, 600, 600, 130, 180, 37), 60);
             double expectedSeconds = 420.0 / (60 * 1.3) + 180.0 / (60 * 1.3 * 0.37);
             Assert.InRange(t.ClipOutputDurationUs - expectedSeconds * 1e6, 0.0, 1.0);
-            Assert.Equal((int)Math.Ceiling(expectedSeconds * 60), t.ClipFrameCount);
+            Assert.Equal((int)Math.Ceiling(expectedSeconds * 60), t.ClipEndFrame);
         }
 
         [Theory]
@@ -138,13 +138,14 @@ namespace Ballverse.Core.Tests.Timeline
         [InlineData(0L, 2000000L, 500000L, 60, 150)]
         [InlineData(0L, 2500001L, 0L, 30, 76)]            // partial frame kept
         [InlineData(1000000L, 6000000L, 0L, 60, 300)]     // trimmed length 5 s
-        [InlineData(0L, 2000000L, -1500000L, 60, 60)]     // ends at 0.5 s → 1 s
-        [InlineData(0L, 2000000L, -5000000L, 60, 60)]     // entirely before the clip → 1 s
+        [InlineData(0L, 2000000L, -1500000L, 60, 120)]    // video starts first: output = video length
+        [InlineData(0L, 2000000L, -5000000L, 60, 120)]    // video ends before the clip starts: still the video length
+        [InlineData(0L, 500000L, -5000000L, 30, 30)]      // 0.5 s video → 1 s minimum
         [InlineData(0L, 200000000L, 0L, 60, 10800)]       // 200 s → 180 s
         [InlineData(0L, 180000000L, 0L, 30, 5400)]        // exactly 180 s
         [InlineData(0L, 179000000L, 1000000L, 30, 5400)]  // ends exactly at 180 s
         [InlineData(0L, 1000000L, 0L, 30, 30)]            // exactly 1 s
-        public void MatchVideo_EndsWhereTheVideoEndsOnTheOutputTimeline(long trimIn, long trimOut, long offset, int fps, int expectedFrames)
+        public void MatchVideo_EndsWhereTheVideoEnds(long trimIn, long trimOut, long offset, int fps, int expectedFrames)
         {
             var t = new StudioTimeline(new ClipTiming(0, 600, 600), new UserVideoTiming(trimIn, trimOut, offset), DurationMode.MatchVideo, fps);
             Assert.Equal(expectedFrames, t.FrameCount);
@@ -166,7 +167,7 @@ namespace Ballverse.Core.Tests.Timeline
         [InlineData(10000000L, 30, 300)]
         [InlineData(180000000L, 60, 10800)]
         [InlineData(180000001L, 60, 10800)]
-        [InlineData(3600000000L, 30, 5400)]
+        [InlineData(600000000L, 30, 5400)]
         public void Manual_IsClampedAndRoundedUp(long manualUs, int fps, int expectedFrames)
         {
             var t = new StudioTimeline(new ClipTiming(0, 600, 600), null, DurationMode.Manual, fps, manualUs);
@@ -223,7 +224,7 @@ namespace Ballverse.Core.Tests.Timeline
         public void IsClipPlaying_MarksFirstPass()
         {
             var t = new StudioTimeline(new ClipTiming(0, 61, 100), null, DurationMode.Manual, 30, 3000000);
-            Assert.Equal(31, t.ClipFrameCount);
+            Assert.Equal(31, t.ClipEndFrame);
             Assert.True(t.IsClipPlaying(30));
             Assert.False(t.IsClipPlaying(31));
         }

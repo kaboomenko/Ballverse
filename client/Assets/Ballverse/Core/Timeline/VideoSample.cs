@@ -1,3 +1,5 @@
+using System;
+
 namespace Ballverse.Core.Timeline
 {
     /// <summary>What the video slot shows on one output frame (spec §3.4, §7.5 step b).</summary>
@@ -16,7 +18,7 @@ namespace Ballverse.Core.Timeline
     }
 
     /// <summary>Result of <see cref="StudioTimeline.SampleVideo"/>.</summary>
-    public readonly struct VideoSample
+    public readonly struct VideoSample : IEquatable<VideoSample>
     {
         public VideoSampleKind Kind { get; }
         /// <summary>Source presentation time, µs (meaningful for <see cref="VideoSampleKind.Frame"/> and <see cref="VideoSampleKind.Frozen"/>, else 0).</summary>
@@ -44,6 +46,34 @@ namespace Ballverse.Core.Timeline
         public static readonly VideoSample Black = new VideoSample(VideoSampleKind.Black, 0, 0);
         public static readonly VideoSample ExpandSim = new VideoSample(VideoSampleKind.ExpandSim, 0, 0);
         public static readonly VideoSample NoVideo = new VideoSample(VideoSampleKind.NoVideo, 0, 0);
+
+        public bool Equals(VideoSample other)
+        {
+            return Kind == other.Kind && SourcePtsUs == other.SourcePtsUs && Iteration == other.Iteration;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is VideoSample other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return ((int)Kind * 397 ^ SourcePtsUs.GetHashCode()) * 397 ^ Iteration;
+            }
+        }
+
+        public static bool operator ==(VideoSample a, VideoSample b)
+        {
+            return a.Equals(b);
+        }
+
+        public static bool operator !=(VideoSample a, VideoSample b)
+        {
+            return !a.Equals(b);
+        }
 
         public override string ToString()
         {

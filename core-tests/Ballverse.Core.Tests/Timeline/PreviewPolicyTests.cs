@@ -16,14 +16,16 @@ namespace Ballverse.Core.Tests.Timeline
         }
 
         [Theory]
-        [InlineData(DeviceTier.A, 60, false)]
-        [InlineData(DeviceTier.B, 60, false)]
-        [InlineData(DeviceTier.C, 60, true)]
-        [InlineData(DeviceTier.A, 30, false)]
-        [InlineData(DeviceTier.C, 30, false)]
-        public void ReducedInternalResolutionOnlyForTierCAt60(DeviceTier tier, int fps, bool expected)
+        [InlineData(DeviceTier.A, ExportResolution.P1080, 60, false)]
+        [InlineData(DeviceTier.B, ExportResolution.P1080, 60, false)]
+        [InlineData(DeviceTier.C, ExportResolution.P1080, 60, true)]
+        [InlineData(DeviceTier.C, ExportResolution.P720, 60, false)]
+        [InlineData(DeviceTier.A, ExportResolution.P1080, 30, false)]
+        [InlineData(DeviceTier.C, ExportResolution.P1080, 30, false)]
+        [InlineData(DeviceTier.C, ExportResolution.P720, 30, false)]
+        public void ReducedInternalResolutionOnlyForTierCAt1080p60(DeviceTier tier, ExportResolution resolution, int fps, bool expected)
         {
-            Assert.Equal(expected, PreviewPolicy.ShouldReduceInternalResolution(tier, fps));
+            Assert.Equal(expected, PreviewPolicy.ShouldReduceInternalResolution(tier, resolution, fps));
         }
 
         [Fact]
@@ -38,8 +40,9 @@ namespace Ballverse.Core.Tests.Timeline
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => PreviewPolicy.TargetFps(24));
             Assert.Throws<ArgumentOutOfRangeException>(() => PreviewPolicy.MaxAvDriftUs(0));
-            Assert.Throws<ArgumentOutOfRangeException>(() => PreviewPolicy.ShouldReduceInternalResolution(DeviceTier.A, 50));
-            Assert.Throws<ArgumentOutOfRangeException>(() => PreviewPolicy.ShouldReduceInternalResolution((DeviceTier)8, 60));
+            Assert.Throws<ArgumentOutOfRangeException>(() => PreviewPolicy.ShouldReduceInternalResolution(DeviceTier.A, ExportResolution.P1080, 50));
+            Assert.Throws<ArgumentOutOfRangeException>(() => PreviewPolicy.ShouldReduceInternalResolution((DeviceTier)8, ExportResolution.P1080, 60));
+            Assert.Throws<ArgumentOutOfRangeException>(() => PreviewPolicy.ShouldReduceInternalResolution(DeviceTier.C, (ExportResolution)480, 60));
         }
 
         [Fact]
@@ -49,14 +52,29 @@ namespace Ballverse.Core.Tests.Timeline
                 new ClipTiming(0, 600, 600, 125, 90, 40, SimAfterEnd.Loop),
                 new UserVideoTiming(250000, 4250000, -1000000, VideoAfterEnd.Loop),
                 DurationMode.Manual, 60, 15000000);
+            // At every frame time, scrubbing returns exactly what export renders for that frame.
+            for (int i = 0; i < t.FrameCount; i++)
+            {
+                long us = t.FrameTimeUs(i);
+                Assert.Equal(i, t.FrameAtTimeUs(us));
+                Assert.Equal(t.SampleSim(i), t.SampleSimAtTimeUs(us));
+                Assert.Equal(t.SampleVideo(i), t.SampleVideoAtTimeUs(us));
+            }
+            // Between frame times the sample stays between the frame's sample and the next frame's sample.
             for (long us = 0; us < t.DurationUs; us += 7919)
             {
                 int frame = t.FrameAtTimeUs(us);
-                Assert.True(t.FrameTimeUs(frame) <= us + 1);
-                // The sample at a scrub time equals the sample of the frame shown at that time or is between it and the next one.
+                Assert.True(t.FrameTimeUs(frame) <= us);
                 var atFrame = t.SampleSim(frame);
                 var atTime = t.SampleSimAtTimeUs(us);
+                Assert.True(atTime.Iteration >= atFrame.Iteration);
                 if (atFrame.Iteration == atTime.Iteration) Assert.True(atTime.Tick >= atFrame.Tick);
+                if (frame + 1 < t.FrameCount)
+                {
+                    var next = t.SampleSim(frame + 1);
+                    Assert.True(atTime.Iteration <= next.Iteration);
+                    if (next.Iteration == atTime.Iteration) Assert.True(atTime.Tick <= next.Tick);
+                }
             }
         }
     }
