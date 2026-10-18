@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using Ballverse.Core.Replay;
 using Xunit;
@@ -64,6 +66,48 @@ namespace Ballverse.Core.Tests.Replay
         }
 
         [Fact]
+        public void FinishRetryAfterDurationPatchFailure_Seekable()
+        {
+            var output = new FaultyStream(true);
+            var w = new ReplayWriter(output, ReplayTestUtil.Header(), 3);
+            Fill(w);
+            // Finish writes the trailer (1st Write), then patches durationTicks (2nd Write): fail exactly the patch.
+            output.WriteSkips = 1;
+            output.WriteFailures = 1;
+            Assert.Throws<IOException>(() => w.Finish(800));
+            Assert.Equal(0, output.WriteFailures);
+            Assert.False(w.IsFinished);
+            w.Finish(800);
+            Assert.Equal(Clean(3), output.Inner.ToArray());
+            Assert.Equal(800u, ReplayReader.Read(output.Inner.ToArray()).Header.DurationTicks);
+        }
+
+        [Fact]
+        public void FinishRetryAfterSetLengthIOException_Truncates()
+        {
+            var output = new FaultyStream(true);
+            ReplayWriter.Write(output, ReplayTestUtil.Sample(), 2);
+            output.Position = 0;
+            var w = new ReplayWriter(output, ReplayTestUtil.Header());
+            w.AddHash(0, 2222);
+            output.SetLengthFailures = 1;
+            Assert.Throws<IOException>(() => w.Finish(10));
+            Assert.Equal(0, output.SetLengthFailures);
+            Assert.False(w.IsFinished);
+            w.Finish(10);
+
+            var clean = new MemoryStream();
+            var cw = new ReplayWriter(clean, ReplayTestUtil.Header());
+            cw.AddHash(0, 2222);
+            cw.Finish(10);
+            Assert.Equal(clean.ToArray(), output.Inner.ToArray());
+            var read = ReplayReader.Read(output.Inner.ToArray());
+            Assert.Single(read.Hashes);
+            Assert.Empty(read.Events);
+            Assert.Null(read.Result);
+        }
+
+        [Fact]
         public void CopyFailureOnNonSeekableOutputFaultsTheWriter()
         {
             var output = new FaultyStream(false);
@@ -119,6 +163,56 @@ namespace Ballverse.Core.Tests.Replay
         }
 
         [Fact]
+        public void AddInput_ThrowingValues_LeavesStreamUnchanged()
+        {
+            var ms = new MemoryStream();
+            var w = new ReplayWriter(ms, ReplayTestUtil.Header(), 2);
+            w.AddInput(0, 1, new[] { 5 });
+            Assert.Throws<InvalidOperationException>(() => w.AddInput(1, 2, new ThrowingList(3, 1)));
+            Assert.Throws<InvalidOperationException>(() => w.AddInput(9, 2, new ThrowingList(2, 0)));
+            w.AddInput(2, 3, new[] { 100, 200 });
+            w.AddInput(3, 4, new[] { 300 });
+            w.Finish(10);
+
+            var expected = new ReplayInput[]
+            {
+                new ReplayInput(0, 1, new[] { 5 }),
+                new ReplayInput(2, 3, new[] { 100, 200 }),
+                new ReplayInput(3, 4, new[] { 300 }),
+            };
+            Assert.Equal(expected, ReplayReader.Read(ms.ToArray()).Inputs);
+
+            var clean = new MemoryStream();
+            var cw = new ReplayWriter(clean, ReplayTestUtil.Header(), 2);
+            foreach (var x in expected) cw.AddInput(x);
+            cw.Finish(10);
+            Assert.Equal(clean.ToArray(), ms.ToArray());
+        }
+
+        /// <summary>A list whose indexer throws from <c>failAt</c> on, like a lazy or concurrently shrunk source.</summary>
+        sealed class ThrowingList : IReadOnlyList<int>
+        {
+            readonly int _count;
+            readonly int _failAt;
+
+            internal ThrowingList(int count, int failAt)
+            {
+                _count = count;
+                _failAt = failAt;
+            }
+
+            public int this[int index] => index < _failAt ? 7 : throw new InvalidOperationException("source changed");
+            public int Count => _count;
+
+            public IEnumerator<int> GetEnumerator()
+            {
+                for (int i = 0; i < _count; i++) yield return this[i];
+            }
+
+            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+
+        [Fact]
         public void AddInputDoesNotAllocatePerCall()
         {
             // Pre-sized output so only the writer's own allocations are measured, not the destination growing.
@@ -149,6 +243,12 @@ namespace Ballverse.Core.Tests.Replay
 
         /// <summary>Number of upcoming Write calls that throw.</summary>
         internal int WriteFailures;
+
+        /// <summary>Number of upcoming Write calls that succeed before <see cref="WriteFailures"/> starts to apply.</summary>
+        internal int WriteSkips;
+
+        /// <summary>Number of upcoming SetLength calls that throw <see cref="IOException"/>.</summary>
+        internal int SetLengthFailures;
 
         /// <summary>Bytes a failing Write still passes through before throwing.</summary>
         internal int PartialWriteBytes;
@@ -193,11 +293,22 @@ namespace Ballverse.Core.Tests.Replay
         public override void SetLength(long value)
         {
             if (!_seekable || !SetLengthSupported) throw new NotSupportedException();
+            if (SetLengthFailures > 0)
+            {
+                SetLengthFailures--;
+                throw new IOException("Disk error (truncate)");
+            }
             Inner.SetLength(value);
         }
 
         public override void Write(byte[] buffer, int offset, int count)
         {
+            if (WriteSkips > 0)
+            {
+                WriteSkips--;
+                Inner.Write(buffer, offset, count);
+                return;
+            }
             if (WriteFailures > 0)
             {
                 WriteFailures--;

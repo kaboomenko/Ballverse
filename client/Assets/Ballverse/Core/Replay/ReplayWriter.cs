@@ -42,6 +42,7 @@ namespace Ballverse.Core.Replay
         readonly RecordStream _params;
         readonly RecordStream _hashes;
         readonly RecordStream _events;
+        readonly int[] _inputScratch = new int[BvrFormat.MaxInputValues];
         ReplayResult _result;
         ReplayHeader _finishedHeader;
         bool _faulted;
@@ -94,9 +95,9 @@ namespace Ballverse.Core.Replay
         }
 
         /// <summary>
-        /// Appends an input event (INPT, spec §2.6) without allocating: the values are encoded straight into the stream buffer,
-        /// so a caller may reuse one array per tick (e.g. M10 gravity, spec §2.6). At most <see cref="BvrFormat.MaxInputValues"/>
-        /// values; null means empty.
+        /// Appends an input event (INPT, spec §2.6) without allocating, so a caller may reuse one array per tick (e.g. M10 gravity,
+        /// spec §2.6). At most <see cref="BvrFormat.MaxInputValues"/> values; null means empty. The values are read into a reusable
+        /// scratch array before anything is written, so an exception from <paramref name="values"/> leaves the stream unchanged.
         /// </summary>
         public void AddInput(uint tick, byte type, IReadOnlyList<int> values)
         {
@@ -105,10 +106,12 @@ namespace Ballverse.Core.Replay
             if (n > BvrFormat.MaxInputValues)
                 throw new ArgumentException("Input payload has " + n + " values, limit is " + BvrFormat.MaxInputValues, nameof(values));
             _inputs.CheckTick(tick);
+            int[] scratch = _inputScratch;
+            for (int i = 0; i < n; i++) scratch[i] = values[i];
             var s = _inputs.BeginRecord(tick);
             s.WriteByte(type);
             VarInt.WriteULong(s, (ulong)n);
-            for (int i = 0; i < n; i++) VarInt.WriteLong(s, values[i]);
+            for (int i = 0; i < n; i++) VarInt.WriteLong(s, scratch[i]);
             EndRecord(_inputs);
         }
 

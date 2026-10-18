@@ -114,6 +114,21 @@ namespace Ballverse.Core.Tests.Replay
         }
 
         [Fact]
+        public void HeaderAcceptsEveryModeCatalogId()
+        {
+            // The modeId grammar must admit every catalog id, both in the header constructor and in the reader.
+            Assert.NotEmpty(ModeCatalog.All);
+            foreach (var mode in ModeCatalog.All)
+            {
+                var header = new ReplayHeader(mode.Id, 1, "1.0.0", PhysicsBackend.Box2DV3, 7, "{}");
+                Assert.Equal(mode.Id, header.ModeId);
+                var ms = new MemoryStream();
+                new ReplayWriter(ms, header).Finish(0);
+                Assert.Equal(mode.Id, ReplayReader.Read(ms.ToArray()).Header.ModeId);
+            }
+        }
+
+        [Fact]
         public void UnknownPhysicsBackendIsPreserved()
         {
             Assert.Equal((PhysicsBackend)200, ReplayReader.Read(RawHeader(backend: 200)).Header.PhysicsBackend);
