@@ -122,14 +122,34 @@ namespace Ballverse.Media.Internal
             return accepted;
         }
 
-        /// <summary>Called by the bridge's FinalizeAsync. Always releases the native writer afterwards.</summary>
-        internal async Task<WriterFinish> FinishAsync(CancellationToken ct)
+        /// <summary>
+        /// FinalizeAsync precondition that must not touch the output: throws when the writer already finished, was
+        /// disposed, or a FinalizeAsync is running (the output then belongs to that call or is a finished export).
+        /// </summary>
+        internal void ThrowIfFinishedOrFinalizing()
         {
             MainThread.Assert("FinalizeAsync");
-            if (Volatile.Read(ref _released) != 0) throw new ObjectDisposedException(nameof(IVideoWriter));
             if (_finalizing) throw new InvalidOperationException("FinalizeAsync was already called");
-            if (_error != null) throw _error;
-            if (_appended == 0) throw new InvalidOperationException("no frames were appended");
+            if (Volatile.Read(ref _released) != 0) throw new ObjectDisposedException(nameof(IVideoWriter));
+        }
+
+        /// <summary>Why an open writer can never finish (sticky encoder error, no frames), or null.</summary>
+        internal Exception UnfinishableReason()
+        {
+            if (_error != null) return _error;
+            if (_appended == 0) return new InvalidOperationException("no frames were appended");
+            return null;
+        }
+
+        /// <summary>
+        /// Called by the bridge's FinalizeAsync after <see cref="ThrowIfFinishedOrFinalizing"/> and
+        /// <see cref="UnfinishableReason"/> passed. Always releases the native writer afterwards.
+        /// </summary>
+        internal async Task<WriterFinish> FinishAsync(CancellationToken ct)
+        {
+            ThrowIfFinishedOrFinalizing();
+            Exception unfinishable = UnfinishableReason();
+            if (unfinishable != null) throw new InvalidOperationException("writer cannot finish: " + unfinishable.Message, unfinishable);
             _finalizing = true;
             try
             {

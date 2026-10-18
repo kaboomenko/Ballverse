@@ -72,9 +72,16 @@ namespace Ballverse.Media
         IVideoWriter OpenWriter(string outputPath, VideoWriterOptions options);
 
         /// <summary>
-        /// Flushes the encoders, writes the remaining audio, closes the MP4 (index <c>moov</c> at the front) and disposes
-        /// the writer. On failure or cancellation the partial file is deleted.
+        /// Flushes the encoders, writes the remaining audio, closes the MP4 (index <c>moov</c> at the front unless
+        /// <see cref="VideoWriterOptions.FastStart"/> is false) and disposes the writer. On failure or cancellation the
+        /// partial file is deleted and the writer is disposed.
         /// </summary>
+        /// <exception cref="InvalidOperationException">FinalizeAsync was already called for this writer (finished or still
+        /// running); the output of that call is not touched.</exception>
+        /// <exception cref="ObjectDisposedException">The writer was disposed (its partial file was deleted then).</exception>
+        /// <exception cref="MediaException">The encoder failed earlier (sticky error) or fails while finishing: the writer
+        /// is disposed (the hardware encoder is free for a retry) and the partial file deleted. A writer without frames
+        /// is disposed the same way and fails with <see cref="InvalidOperationException"/>.</exception>
         Task<VideoWriterResult> FinalizeAsync(IVideoWriter writer, CancellationToken ct);
 
         /// <summary>

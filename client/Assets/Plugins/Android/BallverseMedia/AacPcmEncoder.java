@@ -87,16 +87,25 @@ final class AacPcmEncoder {
         return frames * 1000000L / SAMPLE_RATE;
     }
 
+    /** PCM frames covering [0, untilUs): untilUs in samples, rounded up to a whole frame. */
+    static long framesUntil(long untilUs) {
+        return untilUs <= 0 ? 0 : (untilUs * SAMPLE_RATE + 999999) / 1000000L;
+    }
+
     /**
-     * Queues PCM up to untilUs. Not finishing: returns as soon as the codec has no free input buffer (call again later).
-     * Finishing: queues everything up to untilUs (rounded up to whole frames; trims longer PCM), then end-of-stream.
+     * Queues PCM up to untilUs and never past it (chunks are cut at framesUntil(untilUs)): samples once queued cannot
+     * be withdrawn and MediaMuxer writes no edit list, so callers pass a time KNOWN to lie inside the video (the end of
+     * the frame just encoded), never a look-ahead; finish(endUs) then queues the rest up to the video end.
+     * Not finishing: returns as soon as untilUs is reached or the codec has no free input buffer (call again later).
+     * Finishing: queues everything up to untilUs (longer PCM is trimmed there), then end-of-stream.
+     * PCM shorter than untilUs: end-of-stream as soon as it is exhausted.
      */
     void pump(long untilUs, boolean finishing) throws MediaError, IOException {
-        long limitFrames = finishing ? (untilUs * SAMPLE_RATE + 999999) / 1000000L : Long.MAX_VALUE;
+        long limitFrames = framesUntil(untilUs);
         long stallStart = System.nanoTime();
         while (!mInputDone) {
             if (mSink.cancelled()) throw new MediaError(MediaError.ENCODER_FAILED, "cancelled");
-            if (!finishing && ptsUs(mFramesQueued) >= untilUs) return;
+            if (!finishing && mFramesQueued >= limitFrames && mFramesQueued < mPcmFrames) return;
             int in = mCodec.dequeueInputBuffer(finishing ? DRAIN_TIMEOUT_US : 0);
             if (in < 0) {
                 drain(false);

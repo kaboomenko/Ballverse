@@ -42,9 +42,11 @@ import java.util.concurrent.TimeUnit;
  * case encoder timestamps are replaced by the submitted ones in output order (B-frames are disabled for that reason).
  * A slot is free again as soon as its pixels are uploaded, so at most 3 frames are in flight.
  *
- * Audio ({@link AacPcmEncoder}) is encoded on the same thread, kept ~0.5 s ahead of the video so MediaMuxer can
- * interleave; it is trimmed to the video end (last pts + 1 / fps). A segment of the segmented export has no audio
- * (empty audioPcmPath); {@link SegmentConcat} encodes the mix once when joining the segments.
+ * Audio ({@link AacPcmEncoder}) is encoded on the same thread and queued only up to the end of the frame just encoded
+ * (a time known to lie inside the video: queued samples cannot be withdrawn and MediaMuxer writes no edit list), so
+ * longer PCM is trimmed to the video end (last pts + 1 / fps) on every device; MediaMuxer interleaves the tracks.
+ * A segment of the segmented export has no audio (empty audioPcmPath); {@link SegmentConcat} encodes the mix once when
+ * joining the segments.
  *
  * Threading: the public methods are called from the Unity main thread; everything else runs on the writer thread.
  */
@@ -52,7 +54,6 @@ public final class VideoWriter {
     private static final String TAG = MediaBridge.TAG;
     private static final String MIME_AVC = MediaFormat.MIMETYPE_VIDEO_AVC;
     private static final int SLOT_COUNT = 3;
-    private static final long AUDIO_LEAD_US = 500000;
     private static final long DRAIN_TIMEOUT_US = 10000;
     private static final long STALL_LIMIT_NS = 10000000000L;
     private static final int EGL_RECORDABLE_ANDROID = 0x3142;
@@ -133,6 +134,11 @@ public final class VideoWriter {
         mKeyframeSeconds = keyframeSeconds;
         mAudioPath = audioPcmPath == null || audioPcmPath.length() == 0 ? null : audioPcmPath;
         mAudioBitrate = audioBitrate;
+    }
+
+    /** Frame duration in µs, rounded up (same rule as C# VideoWriterOptions.FrameDurationUs). */
+    static long frameDurationUs(int fps) {
+        return (1000000L + fps - 1) / fps;
     }
 
     // ================================================================== public API (Unity main thread)
@@ -334,14 +340,15 @@ public final class VideoWriter {
         mLastPts = ptsUs;
         mFramesSubmitted++;
         drainVideo(false);
-        if (mAudio != null) mAudio.pump(ptsUs + AUDIO_LEAD_US, false);
+        // Never ahead of the video: this frame ends at ptsUs + 1 / fps and the file at least there (pts increase).
+        if (mAudio != null) mAudio.pump(ptsUs + frameDurationUs(mFps), false);
     }
 
     private String finish() throws MediaError, IOException {
         if (mFramesSubmitted == 0) throw new MediaError(MediaError.INVALID_STATE, "no frames");
         mVideo.signalEndOfInputStream();
         drainVideo(true);
-        long endUs = mLastPts + (1000000L + mFps - 1) / mFps;
+        long endUs = mLastPts + frameDurationUs(mFps);
         if (mAudio != null) mAudio.finish(endUs);
         if (!mMuxerStarted) throw new MediaError(MediaError.MUXER_FAILED, "muxer never started (no encoder output)");
         mMuxer.stop();

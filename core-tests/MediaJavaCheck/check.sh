@@ -7,6 +7,9 @@
 #     'options' (--release 8 is reported as obsolete by newer JDKs).
 #  2. run YuvConverterCheck (plain JVM): the YUV→RGBA converter against an independent reference
 #     (layouts × padding × crops × rotations).
+#  3. run AacPcmEncoderCheck (plain JVM): the real AacPcmEncoder against a fake codec — audio is never queued past
+#     the video end (VideoWriter / SegmentConcat driving patterns, PCM longer/equal/shorter than the video), plus a
+#     static guard that no audio look-ahead constant came back into the callers.
 # Usage: core-tests/MediaJavaCheck/check.sh /path/to/android-all.jar
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -20,3 +23,17 @@ javac --release 8 -Xlint:all -Xlint:-classfile -Xlint:-options -Werror -encoding
   "$repo"/client/Assets/Plugins/Android/BallverseMedia/*.java
 echo "MediaJavaCheck: compile OK ($(ls "$repo"/client/Assets/Plugins/Android/BallverseMedia/*.java | wc -l) sources)"
 java -cp "$out" com.ballverse.media.YuvConverterCheck
+# 3. AacPcmEncoderCheck (plain JVM): the REAL AacPcmEncoder against a fake android.media codec (fakes/, compiled
+#    first so they shadow the framework classes); org.json for MediaError still comes from android-all.jar.
+aac="$out/aac"
+mkdir -p "$aac"
+javac --release 8 -Xlint:all -Xlint:-classfile -Xlint:-options -Werror -encoding UTF-8 -d "$aac" -cp "$jar" \
+  "$here"/fakes/android/media/*.java \
+  "$here"/AacPcmEncoderCheck.java \
+  "$repo"/client/Assets/Plugins/Android/BallverseMedia/AacPcmEncoder.java \
+  "$repo"/client/Assets/Plugins/Android/BallverseMedia/MediaError.java
+java -cp "$aac:$jar" com.ballverse.media.AacPcmEncoderCheck
+if grep -n 'AUDIO_LEAD' "$repo"/client/Assets/Plugins/Android/BallverseMedia/*.java; then
+  echo "MediaJavaCheck: audio must not be queued ahead of the video (AUDIO_LEAD found)" >&2
+  exit 1
+fi

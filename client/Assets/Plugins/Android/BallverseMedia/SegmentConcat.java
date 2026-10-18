@@ -27,7 +27,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class SegmentConcat {
     private static final String TAG = MediaBridge.TAG;
-    private static final long AUDIO_LEAD_US = 500000;
     private static final int MIN_SAMPLE_BUFFER = 1 << 20;
 
     private final String[] mSegments;
@@ -138,7 +137,9 @@ final class SegmentConcat {
                         first = t;
                     }
                     long outPts = t - first + base;
-                    if (mAudio != null) mAudio.pump(outPts + AUDIO_LEAD_US, false);
+                    // Audio never runs ahead of the video (queued samples cannot be withdrawn): up to this sample's
+                    // start, which lies inside the output; finish(endUs) queues the rest and trims longer PCM there.
+                    if (mAudio != null) mAudio.pump(outPts, false);
                     info.set(0, size, outPts, sync ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
                     write(mVideoTrack, buffer, info);
                     count++;

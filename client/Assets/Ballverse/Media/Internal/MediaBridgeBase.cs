@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -169,19 +170,31 @@ namespace Ballverse.Media.Internal
             Enter(nameof(FinalizeAsync));
             if (writer == null) throw new ArgumentNullException(nameof(writer));
             if (!(writer is VideoWriterBase w)) throw new ArgumentException("writer was not created by this bridge", nameof(writer));
+            // Preconditions are checked BEFORE the delete-on-failure region below:
+            // - already finished, disposed or finalizing: the output belongs to the earlier call (a finished export, or
+            //   one still being written) — throw without touching it;
+            w.ThrowIfFinishedOrFinalizing();
+            // - pre-cancelled token: never start the native finish; abort the writer (deletes the partial file natively);
+            // - sticky encoder error or no frames: the writer can never finish — release it now (frees the hardware
+            //   encoder for the §3.8 segment retry; the native abort deletes the partial file) and report why.
             if (ct.IsCancellationRequested)
             {
-                // Never start the native finish for a token that is already cancelled: abort the writer (deletes the
-                // partial file natively) and report the cancellation.
                 w.Dispose();
                 ct.ThrowIfCancellationRequested();
             }
+            Exception unfinishable = w.UnfinishableReason();
+            if (unfinishable != null)
+            {
+                w.Dispose();
+                ExceptionDispatchInfo.Capture(unfinishable).Throw();
+            }
+            // From here on this call owns the output: any failure or cancellation deletes it.
             string path = ResultPathOf(w);
             try
             {
                 WriterFinish finish = await w.FinishAsync(ct);
                 Mp4Metadata metadata = w.Options.Metadata;
-                bool fastStart = await Task.Run(() => FinishFile(path, metadata, ct), ct);
+                bool fastStart = w.Options.FastStart && await Task.Run(() => FinishFile(path, metadata, ct), ct);
                 return new VideoWriterResult(path, finish.Frames, finish.DurationUs, fastStart, Backend == MediaBackend.Fake);
             }
             catch
@@ -220,6 +233,11 @@ namespace Ballverse.Media.Internal
             try
             {
                 WriterFinish finish = await ConcatNativeAsync(list, pcm, outFile, options, ct);
+                if (options.DeleteSegmentsBeforeFastStart)
+                {
+                    // Opt-in: free ≈ 1× the export size before the rewrite's temp copy (peak ≈ 2E instead of 3E).
+                    foreach (string segment in list) DeleteOutput(segment);
+                }
                 Mp4Metadata metadata = options.Metadata;
                 bool fastStart = await Task.Run(() => FinishFile(path, metadata, ct), ct);
                 return new VideoWriterResult(path, finish.Frames, finish.DurationUs, fastStart, Backend == MediaBackend.Fake);

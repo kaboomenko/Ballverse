@@ -16,12 +16,18 @@ keep rules for `com.ballverse.media.**` (reached only by name from C#) to unityL
 
 ## Segmented export (spec §3.8, §7.5)
 
-1. Per 2-second segment (`ExportPlan.GetSegments()`): `OpenWriter(segmentPath, VideoWriterOptions.FromExportSettings(settings, null))`
-   (video only), append its frames with pts = `FramePtsUs(i) − FramePtsUs(segment.StartFrame)`, `FinalizeAsync`, then
+1. Per 2-second segment (`ExportPlan.GetSegments()`): `OpenWriter(segmentPath, VideoWriterOptions.ForSegment(settings))`
+   (video only, no fast-start rewrite of the intermediate file), append its frames with pts = `FramePtsUs(i) − FramePtsUs(segment.StartFrame)`, `FinalizeAsync`, then
    persist the export state (Core). A segment interrupted by backgrounding is discarded (dispose the writer) and redone.
 2. `ConcatSegmentsAsync(segmentResultPaths, pcmMixPath, outFile, SegmentConcatOptions.FromExportSettings(settings, metadata), ct)`:
-   remux without re-encoding, the PCM mix becomes one AAC track, moov at the front, title/date written. The result's
-   `FrameCount` must equal `ExportPlan.FrameCount`.
+   remux without re-encoding, the PCM mix becomes one AAC track (trimmed to the video end on both platforms), moov at
+   the front, title/date written. The result's `FrameCount` must equal `ExportPlan.FrameCount`.
+
+**Disk space.** With E = the estimated export size, the join holds the segments (≈ E) + the remuxed output (≈ E) and,
+on Android (MediaMuxer writes moov at the end), the fast-start temp copy (≈ E): peak ≈ **3E**, above the §3.8 pre-check
+`ExportSettings.RequiredFreeSpaceBytes` = 2E + 200 MB. Pass `deleteSegmentsBeforeFastStart: true` to
+`SegmentConcatOptions.FromExportSettings` to delete the segments right after the remux (peak ≈ 2E; if the rewrite then
+fails the export restarts from the first segment), or check 3E + 200 MB before the join. iOS peaks at ≈ 2E.
 
 ## Data formats
 

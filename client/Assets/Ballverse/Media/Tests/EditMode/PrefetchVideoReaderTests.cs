@@ -151,8 +151,9 @@ namespace Ballverse.Media.Tests
             for (int i = 1; i < held.Count; i++) held[i].Dispose();
         }
 
-        // Random mixed operations while holding up to MaxFramesInFlight − 1 frames (the documented contract): every
-        // read must complete with the right frame. The QA stress run hung at operation 102 with 2 frames held.
+        // Random mixed operations while holding up to MaxFramesInFlight − 1 = 2 frames during each read (the documented
+        // contract): every read must complete with the right frame. The QA stress run hung at operation 102 with 2
+        // frames held; QA round 2: the earlier loop only ever read with ≤ 1 frame held and passed on the buggy reader.
         [Test]
         public void RandomOperations_HoldingUpToTwoFrames_NeverStall()
         {
@@ -168,17 +169,18 @@ namespace Ballverse.Media.Tests
             int ops = 1500;
             for (int i = 0; i < ops; i++)
             {
-                int jump = next(100);
-                if (jump < 5) t = next((int)(maxT / 1000)) * 1000L;                 // random seek (often backward)
-                else t = Math.Min(maxT, t + 1 + next(70000));                     // forward by up to ~2 frames
-                if (next(4) == 0) _reader.Prefetch(Math.Min(maxT, t + 1 + next(3 * (int)Second)));
-
-                while (held.Count >= PrefetchVideoReader.FramesInFlight - 1 || (held.Count > 0 && next(3) == 0))
+                // Keep at most MaxFramesInFlight − 1 = 2 frames before each read (often exactly 2: the contract's edge).
+                while (held.Count > PrefetchVideoReader.FramesInFlight - 1 || (held.Count > 0 && next(4) == 0))
                 {
                     int k = next(held.Count);
                     held[k].Dispose();
                     held.RemoveAt(k);
                 }
+
+                int jump = next(100);
+                if (jump < 5) t = next((int)(maxT / 1000)) * 1000L;                 // random seek (often backward)
+                else t = Math.Min(maxT, t + 1 + next(70000));                     // forward by up to ~2 frames
+                if (next(4) == 0) _reader.Prefetch(Math.Min(maxT, t + 1 + next(3 * (int)Second)));
 
                 VideoFrame f;
                 switch (next(3))

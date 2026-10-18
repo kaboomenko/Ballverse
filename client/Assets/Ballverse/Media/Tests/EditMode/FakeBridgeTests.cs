@@ -137,6 +137,130 @@ namespace Ballverse.Media.Tests
             Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(new byte[16 * 16 * 4], 100000));
         }
 
+        // QA round 2: a second FinalizeAsync on a finished writer deleted the finished output.
+        [Test]
+        public void FinalizeAsync_Twice_KeepsFinishedOutput()
+        {
+            string output = WriteSegment("twice.mp4", 3);
+            Assert.IsTrue(Directory.Exists(output));
+            IVideoWriter w = _bridge.OpenWriter(_dir.File("twice2.mp4"), SegmentOptions());
+            w.AppendVideoFrame(new byte[16 * 16 * 4], 0);
+            VideoWriterResult r = _pump.Wait(_bridge.FinalizeAsync(w, CancellationToken.None));
+            Task<VideoWriterResult> again = _bridge.FinalizeAsync(w, CancellationToken.None);
+            _pump.RunUntil(() => again.IsCompleted);
+            Assert.IsTrue(again.IsFaulted);
+            Assert.IsInstanceOf<InvalidOperationException>(again.Exception.InnerException);
+            _pump.Drain(100);
+            Assert.IsTrue(Directory.Exists(r.Path), "the finished output must survive a second FinalizeAsync");
+            Assert.IsTrue(File.Exists(Path.Combine(r.Path, "manifest.json")));
+        }
+
+        // QA round 2: a concurrent second call deleted the file while the first finish was still writing it.
+        [Test]
+        public void FinalizeAsync_Concurrent_SecondCallFailsWithoutTouchingOutput()
+        {
+            IVideoWriter w = _bridge.OpenWriter(_dir.File("conc.mp4"), SegmentOptions());
+            for (int i = 0; i < 5; i++) w.AppendVideoFrame(new byte[16 * 16 * 4], SegmentConcatOptions.StartUs(i, Fps));
+            Task<VideoWriterResult> first = _bridge.FinalizeAsync(w, CancellationToken.None);
+            Task<VideoWriterResult> second = _bridge.FinalizeAsync(w, CancellationToken.None);
+            Assert.IsTrue(second.IsFaulted);
+            Assert.IsInstanceOf<InvalidOperationException>(second.Exception.InnerException);
+            VideoWriterResult r = _pump.Wait(first);
+            Assert.AreEqual(5, r.FrameCount);
+            Assert.IsTrue(File.Exists(Path.Combine(r.Path, "manifest.json")));
+        }
+
+        // QA round 2: after an encoder failure FinalizeAsync deleted the file but did not release the writer.
+        [Test]
+        public void FinalizeAsync_AfterEncoderFailure_ReleasesWriter()
+        {
+            IVideoWriter w = _bridge.OpenWriter(_dir.File("sticky.mp4"), SegmentOptions());
+            var frame = new byte[16 * 16 * 4];
+            w.AppendVideoFrame(frame, 0);
+            string frames = _dir.File("sticky.mp4") + ".frames";
+            _pump.RunUntil(() => File.Exists(Path.Combine(frames, "frame_000000.png")));
+            Directory.Delete(frames, true); // the next PNG write fails → sticky encoder error
+            w.AppendVideoFrame(frame, 33334);
+            MediaException sticky = null;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            long pts = 66667;
+            while (sticky == null)
+            {
+                Assert.Less(DateTime.UtcNow, deadline, "the fake encoder never failed");
+                try
+                {
+                    w.AppendVideoFrame(frame, pts);
+                    pts += 33334;
+                    _pump.Drain(10);
+                }
+                catch (MediaException e)
+                {
+                    sticky = e;
+                }
+            }
+            Task<VideoWriterResult> task = _bridge.FinalizeAsync(w, CancellationToken.None);
+            _pump.RunUntil(() => task.IsCompleted);
+            Assert.IsTrue(task.IsFaulted);
+            Assert.AreSame(sticky, task.Exception.InnerException);
+            Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(frame, pts + 100000), "writer must be released");
+            _pump.RunUntil(() => !Directory.Exists(frames), 5000);
+        }
+
+        // QA round 2: FinalizeAsync without frames deleted the output under a still-open writer.
+        [Test]
+        public void FinalizeAsync_NoFrames_DisposesWriter()
+        {
+            IVideoWriter w = _bridge.OpenWriter(_dir.File("empty.mp4"), SegmentOptions());
+            string frames = _dir.File("empty.mp4") + ".frames";
+            Task<VideoWriterResult> task = _bridge.FinalizeAsync(w, CancellationToken.None);
+            Assert.IsTrue(task.IsFaulted);
+            Assert.IsInstanceOf<InvalidOperationException>(task.Exception.InnerException);
+            Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(new byte[16 * 16 * 4], 0));
+            _pump.RunUntil(() => !Directory.Exists(frames), 5000);
+        }
+
+        [Test]
+        public void FinalizeAsync_DisposedWriter_ThrowsObjectDisposed()
+        {
+            IVideoWriter w = _bridge.OpenWriter(_dir.File("disposed.mp4"), SegmentOptions());
+            w.AppendVideoFrame(new byte[16 * 16 * 4], 0);
+            w.Dispose();
+            Task<VideoWriterResult> task = _bridge.FinalizeAsync(w, CancellationToken.None);
+            Assert.IsTrue(task.IsFaulted);
+            Assert.IsInstanceOf<ObjectDisposedException>(task.Exception.InnerException);
+        }
+
+        [Test]
+        public void ForSegment_VideoOnly_NoMetadata_NoFastStart()
+        {
+            var settings = new Ballverse.Core.Timeline.ExportSettings(Ballverse.Core.ExportResolution.P1080, 60);
+            VideoWriterOptions o = VideoWriterOptions.ForSegment(settings);
+            Assert.AreEqual(1080, o.Width);
+            Assert.AreEqual(1920, o.Height);
+            Assert.AreEqual(60, o.Fps);
+            Assert.IsNull(o.AudioPcmPath);
+            Assert.IsNull(o.Metadata);
+            Assert.IsFalse(o.FastStart);
+            Assert.IsTrue(VideoWriterOptions.FromExportSettings(settings, null).FastStart);
+            var metadata = new Mp4Metadata("x", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            Assert.Throws<ArgumentException>(() => new VideoWriterOptions(16, 16, Fps, 1000000, metadata: metadata, fastStart: false));
+        }
+
+        [Test]
+        public void ConcatSegments_DeleteSegmentsBeforeFastStart_RemovesSegmentsOnSuccess()
+        {
+            var segments = new List<string> { WriteSegment("d0.mp4", 30), WriteSegment("d1.mp4", 30) };
+            VideoWriterResult r = _pump.Wait(_bridge.ConcatSegmentsAsync(segments, null, _dir.File("joined.mp4"),
+                new SegmentConcatOptions(Fps, deleteSegmentsBeforeFastStart: true), CancellationToken.None));
+            Assert.AreEqual(60, r.FrameCount);
+            Assert.IsTrue(Directory.Exists(r.Path));
+            foreach (string s in segments) Assert.IsFalse(Directory.Exists(s), "segment not deleted: " + s);
+
+            var kept = new List<string> { WriteSegment("k0.mp4", 30) };
+            _pump.Wait(_bridge.ConcatSegmentsAsync(kept, null, _dir.File("joined2.mp4"), new SegmentConcatOptions(Fps), CancellationToken.None));
+            Assert.IsTrue(Directory.Exists(kept[0]), "segments are kept by default");
+        }
+
         [Test]
         public void SegmentStartUs_MatchesExportPlanFrameTimes()
         {
