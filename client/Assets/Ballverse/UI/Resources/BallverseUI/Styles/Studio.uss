@@ -1,0 +1,325 @@
+/* Studio: 9:16 preview, transport, timeline (S / V / text / music), glass tool tabs, fullscreen preview. */
+
+.bv-studio__preview-area {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-height: 200px;
+    align-items: center;
+    justify-content: center;
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+}
+
+.bv-studio__preview {
+    border-radius: var(--radius-m);
+    overflow: hidden;
+    -unity-background-scale-mode: scale-to-fit;
+    background-color: #000000;
+    align-items: stretch;
+    justify-content: flex-end;
+}
+
+.bv-studio__add-video {
+    height: 46%;
+    margin: var(--space-3);
+    border-width: 2px;
+    border-color: rgba(255, 255, 255, 0.55);
+    border-radius: var(--radius-m);
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.35);
+}
+
+.bv-studio__add-video-icon {
+    width: 32px;
+    height: 32px;
+    color: #FFFFFF;
+}
+
+.bv-studio__add-video-label {
+    font-size: var(--font-s);
+    color: #FFFFFF;
+    margin-top: var(--space-1);
+    -unity-text-align: middle-center;
+}
+
+.bv-studio__transport {
+    flex-direction: row;
+    align-items: center;
+    height: 52px;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+}
+
+.bv-studio__time {
+    font-size: var(--font-s);
+    color: var(--color-text-2);
+    margin-left: var(--space-1);
+}
+
+.bv-studio__no-video {
+    margin-right: var(--space-1);
+}
+
+.bv-studio__timeline-host {
+    height: 176px;
+    flex-shrink: 0;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+}
+
+.bv-studio__tools {
+    flex-direction: row;
+    height: var(--bar-height);
+    margin-left: var(--space-3);
+    margin-right: var(--space-3);
+    margin-top: var(--space-2);
+    margin-bottom: var(--space-2);
+    border-radius: 32px;
+    padding-left: var(--space-1);
+    padding-right: var(--space-1);
+}
+
+.bv-tool-tab {
+    flex-grow: 1;
+    flex-basis: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 28px;
+    margin-top: var(--space-1);
+    margin-bottom: var(--space-1);
+}
+
+.bv-tool-tab__icon {
+    color: var(--color-text-2);
+}
+
+.bv-tool-tab__label {
+    font-size: var(--font-xs);
+    color: var(--color-text-2);
+    margin-top: 2px;
+    white-space: nowrap;
+}
+
+.bv-tool-tab--selected {
+    background-color: var(--color-control);
+}
+
+.bv-tool-tab--selected .bv-tool-tab__icon,
+.bv-tool-tab--selected .bv-tool-tab__label {
+    color: var(--color-accent);
+}
+
+/* Fullscreen preview. */
+.bv-studio__fullscreen {
+    background-color: #000000;
+    display: none;
+}
+
+.bv-studio__fullscreen-preview {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    -unity-background-scale-mode: scale-to-fit;
+}
+
+.bv-studio__fullscreen-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+}
+
+.bv-studio__fullscreen-bar .bv-btn,
+.bv-studio__fullscreen-bar .bv-icon-btn,
+.bv-studio__fullscreen-bar .bv-chip {
+    margin-left: var(--space-2);
+}
+
+/* ---------- Timeline ---------- */
+
+.bv-timeline {
+    flex-grow: 1;
+}
+
+.bv-timeline__ruler {
+    height: 28px;
+}
+
+.bv-timeline__tick {
+    position: absolute;
+    top: 4px;
+    width: 1px;
+    height: 20px;
+    background-color: var(--color-separator);
+}
+
+.bv-timeline__tick-label {
+    position: absolute;
+    left: 3px;
+    top: 0;
+    font-size: 10px;
+    color: var(--color-text-3);
+}
+
+.bv-timeline__area {
+    flex-grow: 1;
+}
+
+.bv-timeline__row {
+    flex-direction: row;
+    height: 34px;
+    margin-bottom: var(--space-1);
+    align-items: stretch;
+}
+
+.bv-timeline__badge {
+    width: 24px;
+    align-items: center;
+    justify-content: center;
+}
+
+.bv-timeline__badge-label {
+    font-size: var(--font-xs);
+    -unity-font-style: bold;
+    color: var(--color-text-3);
+}
+
+.bv-timeline__badge-icon {
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-3);
+}
+
+.bv-timeline__track {
+    flex-grow: 1;
+    border-radius: 8px;
+    background-color: var(--color-surface);
+    overflow: hidden;
+}
+
+.bv-timeline__segment {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: 8px;
+    border-width: 2px;
+    overflow: hidden;
+}
+
+.bv-timeline__segment--sim {
+    border-color: var(--color-accent);
+    background-color: rgba(108, 92, 255, 0.35);
+}
+
+.bv-timeline__segment--video {
+    border-color: var(--color-accent-2);
+    background-color: rgba(61, 139, 255, 0.35);
+}
+
+.bv-timeline__segment--dragging {
+    opacity: 0.8;
+}
+
+.bv-timeline__thumbs {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    flex-direction: row;
+}
+
+.bv-timeline__thumb {
+    flex-grow: 1;
+    -unity-background-scale-mode: scale-and-crop;
+    opacity: 0.75;
+}
+
+.bv-timeline__handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 18px;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--color-accent);
+}
+
+.bv-timeline__segment--video .bv-timeline__handle {
+    background-color: var(--color-accent-2);
+}
+
+.bv-timeline__handle--left {
+    left: 0;
+}
+
+.bv-timeline__handle--right {
+    right: 0;
+}
+
+.bv-timeline__handle--active {
+    background-color: var(--color-text);
+}
+
+.bv-timeline__grip {
+    width: 3px;
+    height: 14px;
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.85);
+}
+
+.bv-timeline__add {
+    flex-grow: 1;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    border-width: 1px;
+    border-color: var(--color-text-3);
+    border-radius: 8px;
+}
+
+.bv-timeline__add-icon {
+    width: 16px;
+    height: 16px;
+    margin-right: var(--space-1);
+}
+
+.bv-timeline__add-label {
+    font-size: var(--font-xs);
+}
+
+.bv-timeline__text,
+.bv-timeline__music {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    border-radius: 6px;
+    padding-left: var(--space-1);
+    padding-right: var(--space-1);
+    justify-content: center;
+    background-color: var(--color-surface-3);
+    overflow: hidden;
+}
+
+.bv-timeline__music {
+    background-color: rgba(47, 210, 122, 0.3);
+}
+
+.bv-timeline__text-label {
+    font-size: var(--font-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bv-timeline__playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background-color: var(--color-text);
+}

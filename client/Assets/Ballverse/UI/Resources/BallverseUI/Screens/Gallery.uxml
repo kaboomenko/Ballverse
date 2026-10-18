@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="gallery" class="bv-page bv-fill">
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-header">
+            <ui:Label text="#gallery.title" class="bv-header__title" />
+            <ui:VisualElement name="settings" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--gear" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:ScrollView name="scroll" class="bv-page__scroll">
+            <ui:Label text="#gallery.subtitle" class="bv-page__subtitle" />
+            <ui:VisualElement name="cards" class="bv-mode-list" />
+            <ui:Label text="#gallery.more_soon" class="bv-note bv-note--center" />
+            <ui:VisualElement class="bv-tabbar-spacer" />
+        </ui:ScrollView>
+    </ui:VisualElement>
+</ui:UXML>

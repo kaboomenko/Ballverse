@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="export-done" class="bv-page bv-fill">
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-header bv-header--compact">
+            <ui:VisualElement name="close" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--close" />
+            </ui:VisualElement>
+            <ui:Label text="#export.done.title" class="bv-header__title bv-header__title--small" />
+            <ui:VisualElement class="bv-header__spacer" />
+        </ui:VisualElement>
+        <ui:ScrollView name="scroll" class="bv-page__scroll">
+            <ui:VisualElement class="bv-export-done__preview-wrap">
+                <ui:VisualElement name="preview" class="bv-export-done__preview" />
+            </ui:VisualElement>
+            <ui:VisualElement name="saved" class="bv-export-done__saved">
+                <ui:VisualElement class="bv-icon icon--check bv-export-done__saved-icon" />
+                <ui:Label text="#export.done.saved" class="bv-export-done__saved-label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="save" class="bv-btn bv-btn--secondary bv-btn--block">
+                <ui:VisualElement class="bv-icon icon--download bv-btn__icon" />
+                <ui:Label text="#export.done.save" class="bv-btn__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement name="share" class="bv-btn bv-btn--primary bv-btn--block">
+                <ui:VisualElement class="bv-icon icon--share bv-btn__icon" />
+                <ui:Label text="#export.done.share" class="bv-btn__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-export-done__platforms">
+                <ui:VisualElement name="share-tiktok" class="bv-chip bv-chip--large">
+                    <ui:Label text="#export.done.tiktok" class="bv-chip__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+                <ui:VisualElement name="share-instagram" class="bv-chip bv-chip--large">
+                    <ui:Label text="#export.done.instagram" class="bv-chip__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+                <ui:VisualElement name="share-youtube" class="bv-chip bv-chip--large">
+                    <ui:Label text="#export.done.youtube" class="bv-chip__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement name="upsell" class="bv-export-done__upsell">
+                <ui:VisualElement class="bv-icon icon--sparkle bv-icon--small" />
+                <ui:Label text="#export.done.upsell" class="bv-export-done__upsell-label" />
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-export-done__more">
+                <ui:VisualElement name="new-video" class="bv-btn bv-btn--plain bv-btn--grow">
+                    <ui:VisualElement class="bv-icon icon--plus bv-btn__icon" />
+                    <ui:Label text="#export.done.new_video" class="bv-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+                <ui:VisualElement name="to-projects" class="bv-btn bv-btn--plain bv-btn--grow">
+                    <ui:VisualElement class="bv-icon icon--projects bv-btn__icon" />
+                    <ui:Label text="#export.done.to_projects" class="bv-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-safe-bottom" />
+        </ui:ScrollView>
+    </ui:VisualElement>
+</ui:UXML>

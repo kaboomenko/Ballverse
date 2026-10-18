@@ -1,0 +1,83 @@
+/* Base element styles; overrides the default runtime theme where needed. */
+
+.bv-panel-root {
+    flex-grow: 1;
+}
+
+.bv-app {
+    flex-grow: 1;
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-size: var(--font-m);
+    overflow: hidden;
+}
+
+.bv-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+}
+
+.bv-layer {
+    overflow: hidden;
+}
+
+.bv-app Label {
+    margin: 0;
+    padding: 0;
+    color: var(--color-text);
+    white-space: normal;
+}
+
+.bv-screen {
+    background-color: var(--color-bg);
+}
+
+.bv-tappable {
+    transition-property: scale, opacity;
+    transition-duration: 0.12s;
+    transition-timing-function: ease-out;
+}
+
+.bv-tappable:active,
+.bv-tappable.bv-pressed {
+    scale: 0.96 0.96;
+}
+
+.bv-reduce-motion .bv-tappable {
+    transition-duration: 0s;
+}
+
+.bv-btn:disabled,
+.bv-icon-btn:disabled,
+.bv-chip:disabled,
+.bv-dialog__button:disabled,
+.bv-row:disabled,
+.bv-slider:disabled,
+.bv-switch:disabled,
+.bv-segmented:disabled,
+.bv-dice-btn:disabled {
+    opacity: 0.4;
+}
+
+.bv-icon {
+    width: var(--icon);
+    height: var(--icon);
+    flex-shrink: 0;
+    color: var(--color-text);
+}
+
+.bv-icon--small {
+    width: var(--icon-s);
+    height: var(--icon-s);
+}
+
+.bv-slot--empty {
+    background-color: var(--color-surface-2);
+}
+
+.bv-app .unity-scroll-view__content-container {
+    flex-direction: column;
+}

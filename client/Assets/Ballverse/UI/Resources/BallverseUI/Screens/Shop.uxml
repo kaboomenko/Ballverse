@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="shop" class="bv-page bv-fill">
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-header">
+            <ui:Label text="#shop.title" class="bv-header__title" />
+            <ui:VisualElement name="settings" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--gear" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:ScrollView name="scroll" class="bv-page__scroll">
+            <ui:Label text="#shop.subtitle" class="bv-page__subtitle" />
+            <ui:VisualElement name="unavailable" class="bv-banner bv-banner--warning">
+                <ui:VisualElement class="bv-icon icon--info bv-banner__icon" />
+                <ui:Label text="#shop.unavailable" class="bv-banner__label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="all-purchased" class="bv-banner bv-banner--success">
+                <ui:VisualElement class="bv-icon icon--check bv-banner__icon" />
+                <ui:Label text="#shop.all_purchased" class="bv-banner__label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="products" class="bv-shop__products" />
+            <ui:VisualElement name="restore" class="bv-btn bv-btn--plain bv-btn--block">
+                <ui:VisualElement name="restore-icon" class="bv-icon icon--restore bv-btn__icon" />
+                <ui:Label text="#shop.restore" class="bv-btn__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-shop__legal">
+                <ui:Label name="terms" text="#shop.terms" class="bv-link" />
+                <ui:Label name="privacy" text="#shop.privacy" class="bv-link" />
+            </ui:VisualElement>
+            <ui:Label text="#shop.prices_note" class="bv-note bv-note--center" />
+            <ui:VisualElement class="bv-tabbar-spacer" />
+        </ui:ScrollView>
+    </ui:VisualElement>
+</ui:UXML>
