@@ -291,15 +291,18 @@ namespace Ballverse.Core.Monetization
         /// шаг"): both ad rights (e.g. Remove Interstitial after Remove Export, which removes the watermark, §5.0.2), or the
         /// full Ultimate contents (e.g. No Ads after All Modes). For the full contents the modes the user already plays
         /// without an entitlement (<paramref name="availableModes"/>) count as had, before and after: with No Ads owned and
-        /// M06–M14 free or grandfathered, the M15 single is the §5.2 "последний шаг: все режимы". A first purchase that
-        /// completes a set on its own (No Ads with nothing owned) is not a "last step".
+        /// M06–M14 free or grandfathered, the M15 single is the §5.2 "последний шаг: все режимы". The set must have been
+        /// started by a purchase, though: available modes alone do not start it. A first purchase that completes a set on its
+        /// own is not a "last step": No Ads with nothing owned, also when every paid mode is free by config or grandfathered
+        /// (the same situation as release 1, where every mode is free and No Ads is shown first, spec §5.0.3).
         /// </summary>
         static bool CompletesStartedSet(EntitlementSet direct, EntitlementSet availableModes, ProductInfo p)
         {
             var after = direct.Union(p.Grants);
             var had = direct.Union(availableModes);
+            var full = Entitlements.FullUltimateContents;
             return CompletesStarted(direct, after, EntitlementSet.AdFree)
-                || CompletesStarted(had, after.Union(availableModes), Entitlements.FullUltimateContents);
+                || (CompletesStarted(had, after.Union(availableModes), full) && !direct.Intersect(full).IsEmpty);
         }
 
         static bool CompletesStarted(EntitlementSet before, EntitlementSet after, EntitlementSet set)

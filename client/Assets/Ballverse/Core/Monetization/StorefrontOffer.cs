@@ -59,7 +59,8 @@ namespace Ballverse.Core.Monetization
         /// Export: "без рекламы и без водяного знака"), or the full Ultimate contents (e.g. No Ads after All Modes: "реклама
         /// и водяной знак уйдут"; All Modes after No Ads: "все режимы", the watermark already gone). Decision: the label is
         /// the same flag for both; the UI picks the wording from <see cref="RemovesWatermark"/>. False on a first purchase
-        /// that completes a set on its own (No Ads with nothing owned).
+        /// that completes a set on its own (No Ads with nothing owned, also when every paid mode is free by config or
+        /// grandfathered: available modes alone do not start a set).
         /// </summary>
         public bool IsLastStep { get; }
         /// <summary>
