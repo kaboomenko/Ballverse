@@ -19,7 +19,7 @@ namespace Ballverse.Core.Tests.Audio
         /// <summary>A bank with a decaying sine for every sample id used by the built-in packs plus the test ids.</summary>
         public static InMemorySampleBank FullBank(int baseFrames = 2400)
         {
-            var bank = new InMemorySampleBank();
+            var bank = new InMemorySampleBank(1L << 30); // long test samples exceed the 24 MB product budget
             var ids = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var id in SoundPackCatalog.Ids)
             {
@@ -73,7 +73,7 @@ namespace Ballverse.Core.Tests.Audio
             {
                 t += rng.NextDouble() * 2.0 * maxTick / count;
                 int tick = Math.Min(maxTick, (int)t);
-                var type = (SoundEventType)rng.NextInt(0, 7);
+                var type = (SoundEventType)rng.NextInt(0, 8);
                 list.Add(new SoundEvent(tick, type, rng.NextInt(-1, bodies), rng.NextFloat(0f, 8f), rng.NextFloat(0.05f, 1.6f), rng.NextFloat(-1.2f, 1.2f)));
             }
             return list;

@@ -39,14 +39,24 @@ namespace Ballverse.Core.Audio.Mastering
         internal const int TapsAfter = 6;
         internal const int TapCount = 12;
 
-        /// <summary>Largest absolute value of the 4× oversampled signal over all channels (linear).</summary>
+        /// <summary>Largest absolute value of the 4× oversampled signal over all channels (linear). Allocation-free.</summary>
         public static double Measure(ReadOnlySpan<float> interleaved, int channels)
         {
             int frames = CheckFrames(interleaved, channels);
-            var peaks = new double[frames];
-            FramePeaks(interleaved, channels, peaks);
             double max = 0;
-            for (int i = 0; i < peaks.Length; i++) if (peaks[i] > max) max = peaks[i];
+            for (int c = 0; c < channels; c++)
+            {
+                for (int n = -1; n < frames; n++)
+                {
+                    double seg = Segment(interleaved, channels, frames, c, n);
+                    if (seg > max) max = seg;
+                    if (n >= 0)
+                    {
+                        double p = Math.Abs(Clean(interleaved[n * channels + c]));
+                        if (p > max) max = p;
+                    }
+                }
+            }
             return max;
         }
 
@@ -57,56 +67,25 @@ namespace Ballverse.Core.Audio.Mastering
         }
 
         /// <summary>
-        /// Per-frame true peak: peaks[n] = max over channels of |x[n]| and the interpolated values in (n−1, n) and (n, n+1).
-        /// The first and last interval also cover the ringing just outside the buffer.
+        /// Max |interpolated| at phases 1…3 in the interval (n, n+1) of channel <paramref name="c"/>; taps x[n−5 … n+6],
+        /// zero outside the buffer (so n = −1 and n = frames−1 also cover the ringing just outside it).
         /// </summary>
-        internal static void FramePeaks(ReadOnlySpan<float> x, int channels, double[] peaks)
+        static double Segment(ReadOnlySpan<float> x, int channels, int frames, int c, int n)
         {
-            int frames = peaks.Length;
-            Array.Clear(peaks, 0, frames);
             double[] h1 = Coefficients[1];
             double[] h2 = Coefficients[2];
             double[] h3 = Coefficients[3];
-            for (int c = 0; c < channels; c++)
+            double v1 = 0, v2 = 0, v3 = 0;
+            for (int k = 0; k < TapCount; k++)
             {
-                double prevSeg = 0;
-                for (int n = -1; n < frames; n++)
-                {
-                    double v1 = 0, v2 = 0, v3 = 0;
-                    if (n >= TapsBefore && n + TapsAfter < frames)
-                    {
-                        int baseIdx = (n - TapsBefore) * channels + c;
-                        for (int k = 0; k < TapCount; k++)
-                        {
-                            double s = Clean(x[baseIdx + k * channels]);
-                            v1 += h1[k] * s;
-                            v2 += h2[k] * s;
-                            v3 += h3[k] * s;
-                        }
-                    }
-                    else
-                    {
-                        for (int k = 0; k < TapCount; k++)
-                        {
-                            int idx = n - TapsBefore + k;
-                            if (idx < 0 || idx >= frames) continue;
-                            double s = Clean(x[idx * channels + c]);
-                            v1 += h1[k] * s;
-                            v2 += h2[k] * s;
-                            v3 += h3[k] * s;
-                        }
-                    }
-                    double seg = Math.Max(Math.Abs(v1), Math.Max(Math.Abs(v2), Math.Abs(v3)));
-                    if (n >= 0)
-                    {
-                        double p = Math.Abs(Clean(x[n * channels + c]));
-                        if (prevSeg > p) p = prevSeg;
-                        if (seg > p) p = seg;
-                        if (p > peaks[n]) peaks[n] = p;
-                    }
-                    prevSeg = seg;
-                }
+                int idx = n - TapsBefore + k;
+                if (idx < 0 || idx >= frames) continue;
+                double s = Clean(x[idx * channels + c]);
+                v1 += h1[k] * s;
+                v2 += h2[k] * s;
+                v3 += h3[k] * s;
             }
+            return Math.Max(Math.Abs(v1), Math.Max(Math.Abs(v2), Math.Abs(v3)));
         }
 
         /// <summary>NaN and ±∞ become 0 (x − x is 0 only for finite x).</summary>

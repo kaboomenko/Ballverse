@@ -8,14 +8,25 @@ namespace Ballverse.Core.Audio
     /// PCM at 48 kHz. The SAME code runs realtime (<see cref="Render"/> with arbitrary chunk sizes, events through
     /// <see cref="Queue"/>) and offline (<see cref="RenderOffline(IReadOnlyList{SoundEvent}, Span{float})"/>), and the output
     /// is bit-identical for any chunking and between the two paths as long as every realtime event is queued before the
-    /// render position passes its frame (a late event starts at the current position instead).
+    /// render position passes its frame (a late event starts at the current position instead). Events must be queued in
+    /// non-decreasing output-frame order.
     /// <list type="bullet">
-    /// <item>Event at tick t starts exactly at output frame (t − OriginTick) × 800.</item>
+    /// <item>Placement: an event at tick t starts exactly at output frame (t − OriginTick) × 800; a
+    /// <see cref="ScheduledSoundEvent"/> (or a queue entry with an output frame) starts at its frame instead, for playback
+    /// speeds other than 1× (spec §2.2 timeScale, §3.4 studio speed and slow-mo; see <see cref="PlaybackTimeMap"/>).
+    /// Rate limits use the output frame; sample variants use the simulation tick, so they match on every timeline.</item>
+    /// <item>A sound whose start frame is before output frame 0 (e.g. triggered just before the trim point
+    /// <see cref="EventMixerOptions.OriginTick"/>) starts at frame 0 part-way through its sample, exactly as it sounds at
+    /// that moment in an untrimmed render; sounds already finished by frame 0 only update the limits and the melody.</item>
     /// <item>Decisions (pack rules, rate limits, melody) come from <see cref="SoundEventProcessor"/>.</item>
     /// <item>At most 32 voices. When full, the quietest voice by envelope-aware level gain × remaining/length is stolen;
     /// ties go to the earliest start frame, then the lowest slot. If the new sound is quieter than every playing voice it is
-    /// the one dropped. A stolen voice fades out linearly over <see cref="StealFadeFrames"/> frames in a separate release
-    /// slot (declick); release slots do not count toward the 32.</item>
+    /// the one dropped — except a melody note, which always steals: the melody already advanced, so dropping it would skip
+    /// a note of the tune (spec §2.7 «каждая нота значима»).</item>
+    /// <item>Declick: a stolen voice leaves the 32-voice pool at once and its remaining sound fades out linearly over
+    /// <see cref="StealFadeFrames"/> frames (2.7 ms) in one of <see cref="ReleaseSlots"/> release slots. These fading tails
+    /// are not voices (they cannot be stolen or restarted), but for up to 2.7 ms after a steal up to 40 sources are summed;
+    /// a hard cut would click. Accepted reading of spec §2.7 "max 32 voices".</item>
     /// <item>Pitch: whole-semitone ratio as 32.32 fixed-point step, linear interpolation between source frames.</item>
     /// <item>Pan: constant power (<see cref="AudioMath.ConstantPowerPan"/>), applied to mono and to both channels of stereo samples.</item>
     /// </list>
@@ -52,17 +63,20 @@ namespace Ballverse.Core.Audio
 
         interface IEventFeed
         {
-            bool TryPeek(out SoundEvent e);
+            bool TryPeek(out SoundEvent e, out long frame);
             void Pop();
         }
 
         struct QueueFeed : IEventFeed
         {
             public SoundEventQueue Queue;
+            public int OriginTick;
 
-            public bool TryPeek(out SoundEvent e)
+            public bool TryPeek(out SoundEvent e, out long frame)
             {
-                return Queue.TryPeek(out e);
+                if (!Queue.TryPeek(out e, out frame)) return false;
+                if (frame == SoundEventQueue.AtTick) frame = AudioConstants.TickToFrame((long)e.Tick - OriginTick);
+                return true;
             }
 
             public void Pop()
@@ -74,16 +88,19 @@ namespace Ballverse.Core.Audio
         struct ArrayFeed : IEventFeed
         {
             public SoundEvent[] Events;
+            public long[] Frames;
             public int Index;
 
-            public bool TryPeek(out SoundEvent e)
+            public bool TryPeek(out SoundEvent e, out long frame)
             {
                 if (Index < Events.Length)
                 {
                     e = Events[Index];
+                    frame = Frames[Index];
                     return true;
                 }
                 e = default;
+                frame = 0;
                 return false;
             }
 
@@ -121,7 +138,11 @@ namespace Ballverse.Core.Audio
             _originTick = options.OriginTick;
         }
 
-        /// <summary>Realtime event input (producer: simulation thread). Events should be queued in non-decreasing tick order.</summary>
+        /// <summary>
+        /// Realtime event input (producer: simulation thread). <c>TryEnqueue(e)</c> places the event at its tick (1× playback);
+        /// <c>TryEnqueue(e, frame)</c> at an output frame, e.g. from a <see cref="PlaybackTimeMap"/> under timeScale ≠ 1.
+        /// Entries must be queued in non-decreasing frame order.
+        /// </summary>
         public SoundEventQueue Queue => _queue;
 
         public SoundEventProcessor Processor => _processor;
@@ -181,7 +202,7 @@ namespace Ballverse.Core.Audio
         /// </summary>
         public void Render(Span<float> interleaved)
         {
-            var feed = new QueueFeed { Queue = _queue };
+            var feed = new QueueFeed { Queue = _queue, OriginTick = _originTick };
             RenderCore(interleaved, ref feed);
         }
 
@@ -192,8 +213,38 @@ namespace Ballverse.Core.Audio
         public void RenderOffline(IReadOnlyList<SoundEvent> events, Span<float> output)
         {
             if (events == null) throw new ArgumentNullException(nameof(events));
+            int n = events.Count;
+            var frames = new long[n];
+            for (int i = 0; i < n; i++) frames[i] = FrameOfTick(events[i].Tick);
+            var copy = new SoundEvent[n];
+            for (int i = 0; i < n; i++) copy[i] = events[i];
+            RenderSorted(copy, frames, output);
+        }
+
+        /// <summary>
+        /// Offline render of events with explicit output frames (studio speed S and finale slow-mo, spec §3.4): resets the
+        /// mixer, stably sorts by frame and renders into <paramref name="output"/> from frame 0. Bit-identical to realtime
+        /// rendering of the same entries queued with the same frames.
+        /// </summary>
+        public void RenderOffline(IReadOnlyList<ScheduledSoundEvent> events, Span<float> output)
+        {
+            if (events == null) throw new ArgumentNullException(nameof(events));
+            int n = events.Count;
+            var frames = new long[n];
+            var copy = new SoundEvent[n];
+            for (int i = 0; i < n; i++)
+            {
+                copy[i] = events[i].Event;
+                frames[i] = events[i].Frame;
+            }
+            RenderSorted(copy, frames, output);
+        }
+
+        void RenderSorted(SoundEvent[] events, long[] frames, Span<float> output)
+        {
             Reset();
-            var feed = new ArrayFeed { Events = SortStable(events), Index = 0 };
+            SortStable(events, frames);
+            var feed = new ArrayFeed { Events = events, Frames = frames, Index = 0 };
             RenderCore(output, ref feed);
         }
 
@@ -231,9 +282,8 @@ namespace Ballverse.Core.Audio
             long chunkEnd = chunkStart + frames;
             int cursor = 0;
 
-            while (feed.TryPeek(out SoundEvent e))
+            while (feed.TryPeek(out SoundEvent e, out long eventFrame))
             {
-                long eventFrame = FrameOfTick(e.Tick);
                 if (eventFrame >= chunkEnd) break;
                 feed.Pop();
                 long at = eventFrame > chunkStart + cursor ? eventFrame : chunkStart + cursor;
@@ -252,11 +302,20 @@ namespace Ballverse.Core.Audio
         void Trigger(in SoundEvent e, long eventFrame, long at)
         {
             if (_processor.Process(in e, eventFrame, out VoiceRequest req) != SoundDecision.Played) return;
-            if (eventFrame < 0) return; // before the origin: state only
             if (!_bank.TryGetSample(req.SampleId, out AudioSample sample) || sample == null || sample.FrameCount == 0)
             {
                 _missing++;
                 return;
+            }
+
+            long step = (long)Math.Round(AudioMath.SemitoneRatio(req.Semitones) * FixedOne);
+            long pos = 0;
+            if (eventFrame < 0)
+            {
+                // Started before output frame 0: join part-way, at the source position an untrimmed render has here.
+                long skip = -eventFrame;
+                if ((double)skip * step >= (double)sample.FrameCount * FixedOne) return; // already finished
+                pos = skip * step;
             }
 
             int slot = -1;
@@ -271,7 +330,8 @@ namespace Ballverse.Core.Audio
             if (slot < 0)
             {
                 slot = QuietestSlot();
-                if (req.Gain < CurrentLevel(ref _voices[slot]))
+                double newLevel = (double)req.Gain * (sample.FrameCount - (pos >> 32)) / sample.FrameCount;
+                if (req.MelodyIndex < 0 && newLevel < CurrentLevel(ref _voices[slot]))
                 {
                     _droppedQuiet++;
                     return;
@@ -289,8 +349,8 @@ namespace Ballverse.Core.Audio
                 Data = sample.RawData,
                 Channels = sample.Channels,
                 Frames = sample.FrameCount,
-                Pos = 0,
-                Step = (long)Math.Round(AudioMath.SemitoneRatio(req.Semitones) * FixedOne),
+                Pos = pos,
+                Step = step,
                 GainL = g * panL,
                 GainR = g * panR,
                 Gain = req.Gain,
@@ -424,20 +484,30 @@ namespace Ballverse.Core.Audio
             if ((pos >> 32) >= frames) v.Active = false;
         }
 
-        static SoundEvent[] SortStable(IReadOnlyList<SoundEvent> events)
+        /// <summary>Sorts both arrays by frame; equal frames keep their input order.</summary>
+        static void SortStable(SoundEvent[] events, long[] frames)
         {
-            int n = events.Count;
-            var keys = new long[n];
+            int n = events.Length;
+            bool sorted = true;
+            for (int i = 1; i < n && sorted; i++) sorted = frames[i - 1] <= frames[i];
+            if (sorted) return;
+            var keys = (long[])frames.Clone();
             var order = new int[n];
+            for (int i = 0; i < n; i++) order[i] = i;
+            Array.Sort(keys, order);
+            for (int start = 0; start < n;)
+            {
+                int end = start + 1;
+                while (end < n && keys[end] == keys[start]) end++;
+                if (end - start > 1) Array.Sort(order, start, end - start);
+                start = end;
+            }
+            var copy = (SoundEvent[])events.Clone();
             for (int i = 0; i < n; i++)
             {
-                keys[i] = ((long)events[i].Tick << 32) | (uint)i;
-                order[i] = i;
+                events[i] = copy[order[i]];
+                frames[i] = keys[i];
             }
-            Array.Sort(keys, order);
-            var sorted = new SoundEvent[n];
-            for (int i = 0; i < n; i++) sorted[i] = events[order[i]];
-            return sorted;
         }
     }
 }

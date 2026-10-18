@@ -23,10 +23,15 @@ namespace Ballverse.Core.Audio
             _i1 = i1;
         }
 
-        /// <summary>Uses the pack's impulse thresholds.</summary>
+        /// <summary>Uses the pack's impulse thresholds; throws <see cref="ArgumentNullException"/> for a null pack.</summary>
         public HapticsLimiter(SoundPack pack)
-            : this(pack?.I0 ?? 0f, pack?.I1 ?? 1f)
+            : this(NotNull(pack).I0, pack.I1)
         {
+        }
+
+        static SoundPack NotNull(SoundPack pack)
+        {
+            return pack ?? throw new ArgumentNullException(nameof(pack));
         }
 
         public bool Enabled { get; set; } = true;

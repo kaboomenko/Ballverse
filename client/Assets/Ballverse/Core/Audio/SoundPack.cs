@@ -62,7 +62,7 @@ namespace Ballverse.Core.Audio
                 return errors;
             }
 
-            var seen = new bool[7];
+            var seen = new bool[(int)SoundEventType.Custom + 1];
             for (int i = 0; i < Rules.Count; i++)
             {
                 string p = "rules[" + i.ToString(CultureInfo.InvariantCulture) + "].";

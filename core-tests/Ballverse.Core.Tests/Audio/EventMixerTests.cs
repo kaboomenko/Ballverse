@@ -296,7 +296,7 @@ namespace Ballverse.Core.Tests.Audio
                 int n = rng.NextInt(0, 4);
                 for (int k = 0; k < n; k++)
                 {
-                    var type = (SoundEventType)rng.NextInt(0, 7);
+                    var type = (SoundEventType)rng.NextInt(0, 8);
                     mixer.Queue.TryEnqueue(new SoundEvent(tick, type, rng.NextInt(-1, 80), rng.NextFloat(0f, 8f), rng.NextFloat(0.1f, 1.5f), 0f));
                 }
                 if ((i & 1) == 0) tick++;
@@ -315,7 +315,8 @@ namespace Ballverse.Core.Tests.Audio
             Assert.Throws<ArgumentNullException>(() => new EventMixer(null, bank));
             var mixer = new EventMixer(SoundPackCatalog.Get(SoundPackId.Notes), bank);
             Assert.Throws<ArgumentException>(() => mixer.Render(new float[3]));
-            Assert.Throws<ArgumentNullException>(() => mixer.RenderOffline(null, new float[2]));
+            Assert.Throws<ArgumentNullException>(() => mixer.RenderOffline((IReadOnlyList<SoundEvent>)null, new float[2]));
+            Assert.Throws<ArgumentNullException>(() => mixer.RenderOffline((IReadOnlyList<ScheduledSoundEvent>)null, new float[2]));
             Assert.Throws<ArgumentOutOfRangeException>(() => EventMixer.RenderOffline(SoundPackCatalog.Get(SoundPackId.Notes), bank, null, new List<SoundEvent>(), -1));
             Assert.Throws<ArgumentException>(() => new AudioSample(new float[3], 2));
             Assert.Throws<ArgumentOutOfRangeException>(() => new AudioSample(new float[3], 3));

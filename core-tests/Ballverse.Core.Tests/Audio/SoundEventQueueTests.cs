@@ -48,5 +48,52 @@ namespace Ballverse.Core.Tests.Audio
             Assert.Throws<ArgumentOutOfRangeException>(() => new SoundEventQueue(0));
             Assert.Equal(2, new SoundEventQueue(1).Capacity);
         }
+
+        [Fact]
+        public void OutputFramesTravelWithTheirEvents()
+        {
+            var q = new SoundEventQueue(8);
+            Assert.True(q.TryEnqueue(SoundEvent.Hit(1, 0, 1f)));
+            Assert.True(q.TryEnqueue(SoundEvent.Hit(2, 0, 1f), 12345L));
+            Assert.True(q.TryPeek(out SoundEvent e, out long f));
+            Assert.Equal(1, e.Tick);
+            Assert.Equal(SoundEventQueue.AtTick, f);
+            Assert.True(q.TryDequeue(out _));
+            Assert.True(q.TryPeek(out e, out f));
+            Assert.Equal(2, e.Tick);
+            Assert.Equal(12345L, f);
+        }
+
+        [Fact]
+        public void SpscQueueConcurrentProducerConsumerKeepsFifo()
+        {
+            const int count = 60000;
+            var q = new SoundEventQueue(256);
+            int errors = 0;
+            var producer = new System.Threading.Thread(() =>
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    var e = SoundEvent.Hit(i, i & 1023, 1f);
+                    while (!q.TryEnqueue(e, (long)i * 3)) System.Threading.Thread.Yield();
+                }
+            });
+            producer.Start();
+            int next = 0;
+            while (next < count)
+            {
+                if (q.TryPeek(out SoundEvent e, out long frame))
+                {
+                    if (e.Tick != next || frame != (long)next * 3 || e.BodyId != (next & 1023)) errors++;
+                    q.TryDequeue(out _);
+                    next++;
+                }
+                else System.Threading.Thread.Yield();
+            }
+            producer.Join();
+            Assert.Equal(0, errors);
+            Assert.Equal(0, q.Count);
+            Assert.True(q.Dropped > 0); // the producer did hit a full queue and retried
+        }
     }
 }

@@ -12,6 +12,9 @@ namespace Ballverse.Core.Audio.Mastering
     /// 300 ms hold afterwards; the duck gain moves toward the depth (−10 dB) with a 50 ms time constant and back to 1 with
     /// 500 ms. Simulation sounds are never ducked (spec §3.6).</para>
     /// Deterministic; sums in double, output rounded to float once. No clipping here — <see cref="MixAndMaster"/> limits.
+    /// <para>Memory (spec §7.11, 180 s ≈ 66 MB per stereo float track): <c>output</c> may be the same memory as <c>sim</c>
+    /// or <c>user</c> (same start; each frame is read before it is written), so the export path needs one buffer fewer;
+    /// it must not overlap <c>music</c>, which is read at a different offset. Mastering scratch does not grow with length.</para>
     /// </summary>
     public static class TrackMixer
     {
@@ -105,15 +108,22 @@ namespace Ballverse.Core.Audio.Mastering
 
         /// <summary>
         /// Full export audio path: <see cref="Mix"/>, then (if <see cref="TrackMixSettings.Normalize"/>) −14 LUFS
-        /// normalization with the −1 dBTP limiter. Without normalization the report only carries the measurement.
+        /// normalization with the −1 dBTP limiter (<see cref="LoudnessNormalizer"/>). Without normalization the −1 dBTP
+        /// limiter still runs (no loudness gain), because tracks at up to 200 % can exceed full scale and the encoder would
+        /// hard-clip them (spec §3.6). <paramref name="output"/> may alias <paramref name="sim"/> or <paramref name="user"/>.
         /// </summary>
         public static NormalizationReport MixAndMaster(ReadOnlySpan<float> sim, ReadOnlySpan<float> user, ReadOnlySpan<float> music,
             Span<float> output, TrackMixSettings settings, NormalizationSettings normalization = null)
         {
             Mix(sim, user, music, output, settings);
             if (settings.Normalize) return LoudnessNormalizer.Process(output, normalization);
-            var m = LoudnessMeter.Measure(output);
-            return new NormalizationReport { Input = m, Output = m };
+            normalization = normalization ?? new NormalizationSettings();
+            var limiter = new PeakLimiter(normalization.CeilingDbtp, normalization.LookAheadMs, normalization.ReleaseMs);
+            var report = new NormalizationReport { Input = LoudnessMeter.Measure(output) };
+            var meter = new LoudnessMeter();
+            report.LimiterReductionDb = limiter.CreatePipeline(AudioConstants.Channels).Run(output, 1.0, output, meter);
+            report.Output = meter.GetResult();
+            return report;
         }
 
         static double OnePole(double ms)

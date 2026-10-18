@@ -61,7 +61,7 @@ namespace Ballverse.Core.Tests.Audio
                 Assert.True(reduction <= 0);
                 foreach (float s in x) Assert.True(Math.Abs(s) <= Ceiling, "sample peak " + s);
                 double tp = TruePeak.Measure(x, 2);
-                Assert.True(20 * Math.Log10(Math.Max(tp, 1e-12)) <= -1.0 + 0.05, "trial " + trial + " true peak " + 20 * Math.Log10(tp));
+                Assert.True(tp <= limiter.Ceiling, "trial " + trial + " true peak " + 20 * Math.Log10(tp));
             }
         }
 

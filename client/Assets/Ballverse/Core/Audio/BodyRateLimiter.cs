@@ -5,8 +5,8 @@ namespace Ballverse.Core.Audio
     /// <summary>
     /// "At most one sound per body per 50 ms" (spec §2.7). A sound at time t is refused when the same body had an accepted
     /// sound at t' with t − t' &lt; 2400 frames; exactly 50 ms later is allowed. Negative body ids are exempt.
-    /// Keeps only the last <c>capacity</c> accepted sounds: because accepted sounds are themselves limited (40/s overall +
-    /// 20 melody notes/s), 60 entries always cover the last 50 ms, so no per-body dictionary is needed and nothing
+    /// Keeps only the last <c>capacity</c> accepted sounds: because accepted sounds are themselves limited (40/s overall,
+    /// melody notes included), 40 entries always cover the last 50 ms, so no per-body dictionary is needed and nothing
     /// allocates on the audio thread.
     /// </summary>
     public sealed class BodyRateLimiter
@@ -17,7 +17,7 @@ namespace Ballverse.Core.Audio
         int _next;
         int _count;
 
-        public BodyRateLimiter(int capacity = AudioConstants.MaxSoundsPerWindow + AudioConstants.MaxMelodyNotesPerWindow,
+        public BodyRateLimiter(int capacity = AudioConstants.MaxSoundsPerWindow,
             long minIntervalFrames = AudioConstants.PerBodyMinIntervalFrames)
         {
             if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));

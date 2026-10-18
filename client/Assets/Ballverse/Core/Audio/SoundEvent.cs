@@ -3,7 +3,17 @@ namespace Ballverse.Core.Audio
     /// <summary>
     /// One sound-producing simulation event (spec §2.7, §7.8). The same events drive realtime playback and the offline
     /// export render, so changing the sound pack never requires re-simulation (spec §3.6, §7.8).
-    /// This is the audio module's own model; the replay module's event records are mapped onto it by an adapter.
+    /// This is the audio module's own model; the replay module's event records are mapped onto it by an adapter:
+    /// <list type="bullet">
+    /// <item><see cref="Type"/> converts by value (the codes equal the replay EVNT type codes).</item>
+    /// <item><see cref="Tick"/> is always the simulation tick (sample-variant hashing uses it); where the sound plays on the
+    /// output timeline is a separate frame (see <see cref="EventMixer"/>, <see cref="PlaybackTimeMap"/>).</item>
+    /// <item>A replay event without a body (the mode's convention, replay body ids are non-negative) maps to
+    /// <see cref="BodyId"/> −1.</item>
+    /// <item><see cref="BodySize"/> and <see cref="Pan"/> are not in the EVNT record: realtime and export must take them from
+    /// the same quantized source (render stream radius and x position, spec §7.4), otherwise size-dependent pitch can
+    /// round differently and the export would not sound like the app (spec §7.8).</item>
+    /// </list>
     /// </summary>
     public struct SoundEvent
     {

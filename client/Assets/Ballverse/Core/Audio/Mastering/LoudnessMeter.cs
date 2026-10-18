@@ -29,6 +29,7 @@ namespace Ballverse.Core.Audio.Mastering
         const double LoudnessOffset = -0.691;
 
         readonly int _channels;
+        readonly bool _truePeakOn;
         readonly Biquad[] _shelf;
         readonly Biquad[] _highPass;
         readonly double[][] _history; // per channel, doubled ring of 12 for the true-peak interpolator
@@ -43,9 +44,19 @@ namespace Ballverse.Core.Audio.Mastering
 
         /// <param name="channels">1 (mono) or 2 (stereo L, R; interleaved input).</param>
         public LoudnessMeter(int channels = 2)
+            : this(channels, true)
+        {
+        }
+
+        /// <summary>
+        /// <paramref name="truePeak"/> false skips the true-peak interpolator (then <see cref="LoudnessResult.TruePeak"/> is the
+        /// sample peak); used by the normalizer's gain search, which needs loudness only.
+        /// </summary>
+        internal LoudnessMeter(int channels, bool truePeak)
         {
             if (channels != 1 && channels != 2) throw new ArgumentOutOfRangeException(nameof(channels), "channels must be 1 or 2");
             _channels = channels;
+            _truePeakOn = truePeak;
             _shelf = new Biquad[channels];
             _highPass = new Biquad[channels];
             _history = new double[channels][];
@@ -78,7 +89,7 @@ namespace Ballverse.Core.Audio.Mastering
                     double x = TruePeak.Clean(interleaved[i++]);
                     double ax = Math.Abs(x);
                     if (ax > _samplePeak) _samplePeak = ax;
-                    PushTruePeak(c, x, _frames + f);
+                    if (_truePeakOn) PushTruePeak(c, x, _frames + f);
                     double y = _highPass[c].Process(_shelf[c].Process(x));
                     sum += y * y;
                 }
@@ -98,7 +109,7 @@ namespace Ballverse.Core.Audio.Mastering
         public LoudnessResult GetResult()
         {
             var r = new LoudnessResult { Frames = _frames, SamplePeak = _samplePeak };
-            double tp = Math.Max(_truePeak, FlushTruePeak());
+            double tp = _truePeakOn ? Math.Max(_truePeak, FlushTruePeak()) : 0;
             if (_samplePeak > tp) tp = _samplePeak;
             r.TruePeak = tp;
             r.TruePeakDbtp = AudioMath.GainToDb(tp, LoudnessResult.SilenceFloor);
@@ -172,7 +183,7 @@ namespace Ballverse.Core.Audio.Mastering
         }
 
         // History holds x[n-11..n] (zeros before the start). After pushing x[n] the interpolator evaluates the interval
-        // (m, m+1) with m = n - 6: value(m + p/4) uses taps x[m-5..m+6] = x[n-11..n]. Like TruePeak.FramePeaks, only the
+        // (m, m+1) with m = n - 6: value(m + p/4) uses taps x[m-5..m+6] = x[n-11..n]. Like TruePeak.Measure, only the
         // intervals m = -1 … frames-1 are evaluated, so streaming and batch results are identical.
         void PushTruePeak(int c, double x, long n)
         {

@@ -7,10 +7,15 @@ namespace Ballverse.Core.Audio
     /// The decision half of the mixer (spec §2.7): maps an event through the sound pack, impulse volume curve, rate limits
     /// and melody cursor to a <see cref="VoiceRequest"/>. Pure event logic: the result depends only on the pack, the melody
     /// and the sequence of events with their frames — never on audio buffer sizes or the sample bank.
-    /// <para>Order of checks: pack rule → impulse threshold (silent hits consume nothing) → per-body 50 ms →
-    /// melody 20/s (melody notes) or overall 40/s (everything else). Melody notes are limited only by the 20/s melody
-    /// window, not by the 40/s window ("except Melody", spec §2.7). Event times must not decrease; an earlier time is
-    /// treated as the latest time seen.</para>
+    /// <para>Order of checks: pack rule → impulse threshold (silent hits consume nothing) → per-body 50 ms → overall
+    /// 40/s → for melody notes also the 20 notes/s melody window. Reading of spec §2.7 «не более 40 звуков в секунду
+    /// суммарно (кроме пакета Melody… лимит 20 нот/с)»: the 40/s total holds for every pack, and in the Melody pack the
+    /// notes are additionally limited to 20/s; a note refused by either limit does not advance the melody.</para>
+    /// <para>Times are 48 kHz frames on the OUTPUT timeline (what the listener hears), so the limits hold at any playback
+    /// speed (spec §2.2 timeScale, §3.4 studio speed). Event times must not decrease; an earlier time is treated as the
+    /// latest time seen.</para>
+    /// <para>Pitch shifts beyond ±48 semitones (the resampler's range) are folded by whole octaves into range, so the pitch
+    /// class stays right; <see cref="MelodyNotesOutOfRange"/> reports melody notes affected.</para>
     /// Allocation-free per event after construction.
     /// </summary>
     public sealed class SoundEventProcessor
@@ -30,7 +35,7 @@ namespace Ballverse.Core.Audio
             public bool ImpulseVolume;
         }
 
-        readonly Rule[] _rules = new Rule[7];
+        readonly Rule[] _rules = new Rule[(int)SoundEventType.Custom + 1];
         readonly SoundPackId _packId;
         readonly float _i0;
         readonly float _i1;
@@ -40,6 +45,7 @@ namespace Ballverse.Core.Audio
         readonly MelodyCursor _melody;
         readonly SlidingRateWindow _global;
         readonly BodyRateLimiter _bodies;
+        readonly int _melodyOutOfRange;
         long _latest = long.MinValue;
 
         /// <summary>
@@ -76,7 +82,11 @@ namespace Ballverse.Core.Audio
                     ImpulseVolume = r.ImpulseVolume,
                 };
             }
-            if (melody != null) _melody = new MelodyCursor(melody);
+            if (melody != null)
+            {
+                _melody = new MelodyCursor(melody);
+                _melodyOutOfRange = CountOutOfRange(melody);
+            }
             _global = new SlidingRateWindow(AudioConstants.MaxSoundsPerWindow, AudioConstants.RateWindowFrames);
             _bodies = new BodyRateLimiter();
         }
@@ -87,6 +97,12 @@ namespace Ballverse.Core.Audio
 
         /// <summary>The melody cursor, or null without a melody.</summary>
         public MelodyCursor MelodyCursor => _melody;
+
+        /// <summary>
+        /// Melody notes whose shift from a melody rule's sample root exceeds ±48 semitones; they play octave-folded
+        /// (right pitch class, wrong octave). A content warning for the studio or the melody pipeline; 0 without a melody.
+        /// </summary>
+        public int MelodyNotesOutOfRange => _melodyOutOfRange;
 
         /// <summary>Processes an event at its nominal frame <c>tick × 800</c>.</summary>
         public SoundDecision Process(in SoundEvent e, out VoiceRequest request)
@@ -119,8 +135,10 @@ namespace Ballverse.Core.Audio
             bool melodyNote = rule.Pitch == PitchMode.Melody && _melody != null;
             if (melodyNote)
             {
+                if (!_global.CanAcquire(frame)) return SoundDecision.GlobalRateLimited;
                 int index = _melody.NextIndex;
                 if (!_melody.TryAdvance(frame, out MelodyNote note)) return SoundDecision.MelodyRateLimited;
+                _global.TryAcquire(frame);
                 request.MelodyIndex = index;
                 midi = note.Pitch;
                 volume *= note.Velocity;
@@ -132,9 +150,7 @@ namespace Ballverse.Core.Audio
             }
             _bodies.Record(e.BodyId, frame);
 
-            int semis = midi - rule.RootMidi + rule.Semitones;
-            if (semis > AudioMath.MaxSemitoneShift) semis = AudioMath.MaxSemitoneShift;
-            if (semis < -AudioMath.MaxSemitoneShift) semis = -AudioMath.MaxSemitoneShift;
+            int semis = FoldSemitones(midi - rule.RootMidi + rule.Semitones);
 
             float gain = _packGain * rule.Gain * volume;
             request.SampleId = rule.Samples[SoundPitch.SelectSample(rule.Selection, rule.Samples.Length, in e, _sizeMin, _sizeMax)];
@@ -166,6 +182,34 @@ namespace Ballverse.Core.Audio
                 default:
                     return rule.RootMidi;
             }
+        }
+
+        /// <summary>Folds a shift by whole octaves into ±<see cref="AudioMath.MaxSemitoneShift"/>.</summary>
+        public static int FoldSemitones(int semitones)
+        {
+            while (semitones > AudioMath.MaxSemitoneShift) semitones -= 12;
+            while (semitones < -AudioMath.MaxSemitoneShift) semitones += 12;
+            return semitones;
+        }
+
+        int CountOutOfRange(Melody melody)
+        {
+            int count = 0;
+            for (int i = 0; i < melody.Count; i++)
+            {
+                int pitch = melody[i].Pitch;
+                for (int t = 0; t < _rules.Length; t++)
+                {
+                    if (!_rules[t].Present || _rules[t].Pitch != PitchMode.Melody) continue;
+                    int semis = pitch - _rules[t].RootMidi + _rules[t].Semitones;
+                    if (semis > AudioMath.MaxSemitoneShift || semis < -AudioMath.MaxSemitoneShift)
+                    {
+                        count++;
+                        break;
+                    }
+                }
+            }
+            return count;
         }
 
         static float SanitizePan(float pan)

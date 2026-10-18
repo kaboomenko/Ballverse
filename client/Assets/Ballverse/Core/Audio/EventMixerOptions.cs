@@ -7,8 +7,9 @@ namespace Ballverse.Core.Audio
         public float MasterGain { get; set; } = 1f;
 
         /// <summary>
-        /// Tick rendered at output frame 0 (e.g. the clip's <c>trimInTick</c>, spec §7.4). Events before the origin update the
-        /// rate limits and the melody position exactly as in a full render but start no voice. Default 0.
+        /// Tick rendered at output frame 0 (e.g. the clip's <c>trimInTick</c>, spec §7.4) for tick-placed events. Events before
+        /// the origin update the rate limits and the melody position exactly as in a full render; one whose sound is still
+        /// playing at the origin is heard from there on, part-way through its sample. Default 0.
         /// </summary>
         public int OriginTick { get; set; }
 

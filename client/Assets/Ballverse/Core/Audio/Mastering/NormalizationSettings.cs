@@ -10,8 +10,9 @@ namespace Ballverse.Core.Audio.Mastering
         public double CeilingDbtp { get; set; } = -1.0;
 
         /// <summary>
-        /// Largest boost, dB (default +24). Keeps near-silent mixes (e.g. only a few soft clicks) from having their noise
-        /// raised by 40+ dB; such mixes end up quieter than the target. Attenuation is unlimited.
+        /// Largest boost before the limiter, dB (default +24). Keeps near-silent mixes (e.g. only a few soft clicks) from having
+        /// their noise raised by 40+ dB; such mixes, and extremely sparse percussive ones whose limited loudness would need
+        /// more boost, end up quieter than the target. Attenuation is unlimited.
         /// </summary>
         public double MaxGainDb { get; set; } = 24.0;
 

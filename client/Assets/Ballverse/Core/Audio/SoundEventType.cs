@@ -2,7 +2,8 @@ namespace Ballverse.Core.Audio
 {
     /// <summary>
     /// Kind of simulation event that may produce a sound (spec §2.7: "sounds are produced by events — collision, break,
-    /// elimination, finish"). Numeric values are stable and used to index sound pack rules.
+    /// elimination, finish"). Numeric values are stable, index sound pack rules and equal the replay EVNT type codes
+    /// (spec §7.4), so a replay event type converts by value. Built-in packs have no Despawn rule (silent).
     /// </summary>
     public enum SoundEventType
     {
@@ -16,9 +17,11 @@ namespace Ballverse.Core.Audio
         Finish = 3,
         /// <summary>A body appears (multiply gates, spawners).</summary>
         Spawn = 4,
+        /// <summary>A body is removed without being eliminated (replay parity; no built-in pack plays it).</summary>
+        Despawn = 5,
         /// <summary>Score / counter change.</summary>
-        Score = 5,
+        Score = 6,
         /// <summary>Mode-specific event.</summary>
-        Custom = 6,
+        Custom = 7,
     }
 }

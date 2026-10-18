@@ -52,6 +52,7 @@ namespace Ballverse.Core.Tests.Audio
             Assert.True(h.TryTrigger(1, 100f, out _));
             Assert.Throws<ArgumentException>(() => new HapticsLimiter(1f, 1f));
             Assert.Throws<ArgumentException>(() => new HapticsLimiter(float.NaN, 1f));
+            Assert.Throws<ArgumentNullException>(() => new HapticsLimiter((SoundPack)null));
         }
     }
 }

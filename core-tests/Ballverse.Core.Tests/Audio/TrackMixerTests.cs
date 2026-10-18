@@ -141,5 +141,87 @@ namespace Ballverse.Core.Tests.Audio
             Assert.Throws<ArgumentException>(() => TrackMixer.Mix(default, default, default, new float[3], new TrackMixSettings()));
             Assert.Throws<ArgumentNullException>(() => TrackMixer.Mix(default, default, default, new float[4], null));
         }
+
+        [Fact]
+        public void MixAndMasterWithoutNormalizeStillLimits()
+        {
+            double ceiling = new PeakLimiter().Ceiling;
+            var sim = AudioTestUtil.Sine(220, 1.5, 2 * Sr, 2);
+            var o = new float[sim.Length];
+            var r = TrackMixer.MixAndMaster(sim, sim, default, o, new TrackMixSettings { Normalize = false, SimGain = 2f, UserGain = 2f });
+            Assert.True(r.Input.TruePeakDbtp > 15);
+            Assert.Equal(0.0, r.GainDb);
+            Assert.True(r.LimiterReductionDb < -15);
+            Assert.True(TruePeak.Measure(o, 2) <= ceiling);
+            Assert.True(r.Output.TruePeak <= ceiling);
+
+            // Within the ceiling: limiter leaves the mix bit-for-bit as mixed, loudness unchanged.
+            var quiet = AudioTestUtil.Sine(1000, 0.1, 2 * Sr, 2);
+            var mixed = new float[quiet.Length];
+            TrackMixer.Mix(quiet, default, default, mixed, new TrackMixSettings());
+            var mastered = new float[quiet.Length];
+            var q = TrackMixer.MixAndMaster(quiet, default, default, mastered, new TrackMixSettings { Normalize = false });
+            AudioTestUtil.AssertBitIdentical(mixed, mastered);
+            Assert.Equal(0.0, q.LimiterReductionDb);
+            Assert.Equal(q.Input.IntegratedLufs, q.Output.IntegratedLufs);
+        }
+
+        [Fact]
+        public void OutputMayAliasSimOrUser()
+        {
+            var rng = Rng.FromSeed(31UL);
+            var sim = new float[2 * Sr];
+            var user = new float[2 * Sr];
+            var music = new float[3 * Sr];
+            for (int i = 0; i < sim.Length; i++) sim[i] = rng.NextFloat(-0.5f, 0.5f);
+            for (int i = 0; i < user.Length; i++) user[i] = (i / 2000) % 3 == 0 ? rng.NextFloat(-0.3f, 0.3f) : 0f;
+            for (int i = 0; i < music.Length; i++) music[i] = rng.NextFloat(-0.2f, 0.2f);
+            var settings = new TrackMixSettings { MusicStartFrame = 1234, MusicFadeInSeconds = 0.2f, MusicFadeOutSeconds = 0.3f, SimGain = 1.3f };
+            var expected = new float[sim.Length];
+            TrackMixer.Mix(sim, user, music, expected, settings);
+
+            var simInPlace = (float[])sim.Clone();
+            TrackMixer.Mix(simInPlace, user, music, simInPlace, settings);
+            AudioTestUtil.AssertBitIdentical(expected, simInPlace);
+
+            var userInPlace = (float[])user.Clone();
+            TrackMixer.Mix(sim, userInPlace, music, userInPlace, settings);
+            AudioTestUtil.AssertBitIdentical(expected, userInPlace);
+
+            var a = (float[])sim.Clone();
+            var b = new float[sim.Length];
+            var ra = TrackMixer.MixAndMaster(a, user, music, a, settings);
+            var rb = TrackMixer.MixAndMaster(sim, user, music, b, settings);
+            AudioTestUtil.AssertBitIdentical(b, a);
+            Assert.Equal(rb.GainDb, ra.GainDb);
+        }
+
+        /// <summary>
+        /// Export memory (spec §7.11): mastering scratch must not grow with the clip length — the whole-buffer limiter used to
+        /// allocate 8 bytes per frame (≈ 69 MB for 180 s).
+        /// </summary>
+        [Fact]
+        public void MasteringScratchDoesNotGrowWithLength()
+        {
+            long small = MasterAllocation(1);
+            long large = MasterAllocation(5);
+            Assert.True(large < 256 * 1024, "allocated " + large + " bytes for 5 s");
+            Assert.True(large - small < 64 * 1024, "grows with length: " + small + " → " + large);
+        }
+
+        static long MasterAllocation(int seconds)
+        {
+            var rng = Rng.FromSeed(77UL);
+            var sim = new float[2 * seconds * Sr];
+            var warm = new float[2 * 4800];
+            for (int i = 0; i < warm.Length; i++) warm[i] = rng.NextFloat(-3f, 3f);
+            TrackMixer.MixAndMaster(warm, default, default, warm, new TrackMixSettings()); // warm-up (JIT, statics)
+            for (int i = 0; i < sim.Length; i++) sim[i] = (i / 2) % 24000 < 300 ? rng.NextFloat(-0.9f, 0.9f) : rng.NextFloat(-0.02f, 0.02f);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            var r = TrackMixer.MixAndMaster(sim, default, default, sim, new TrackMixSettings());
+            long after = GC.GetAllocatedBytesForCurrentThread();
+            Assert.True(r.Trials > 0 && r.LimiterReductionDb < -1);
+            return after - before;
+        }
     }
 }

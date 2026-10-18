@@ -138,5 +138,41 @@ namespace Ballverse.Core.Tests.Audio
             Assert.Equal(0, m.VoicesStolen);
             Assert.Equal(1, m.ActiveVoiceCount);
         }
+
+        [Fact]
+        public void MelodyNoteThatAdvancesAlwaysStartsAVoice()
+        {
+            // Long piano notes at the 20 notes/s limit fill all 32 voices with loud recent notes; every 10th hit is soft.
+            // A soft note must still sound: the melody already moved past it (spec §2.7 «каждая нота значима»).
+            var bank = new InMemorySampleBank();
+            bank.Add("melody/piano", AudioTestUtil.DecayingSine(262, 240000, false));
+            var melody = MelodyTests.Scale(64);
+            var events = new List<SoundEvent>();
+            var rng = Rng.FromSeed(7UL);
+            for (int i = 0; i < 200; i++)
+            {
+                float impulse = (i % 10 == 9) ? 0.35f : rng.NextFloat(3f, 6f);
+                events.Add(SoundEvent.Hit(i * 3, i % 40, impulse));
+            }
+            var m = new EventMixer(SoundPackCatalog.Get(SoundPackId.Melody), bank, melody);
+            m.RenderOffline(events, new float[2 * 601 * 800]);
+            int advanced = m.Processor.MelodyCursor.Loops * melody.Count + m.Processor.MelodyCursor.NextIndex;
+            Assert.Equal(200, advanced);
+            Assert.Equal(advanced, m.VoicesStarted);
+            Assert.Equal(0, m.VoicesDroppedQuiet);
+            Assert.True(m.VoicesStolen > 20, "stolen " + m.VoicesStolen);
+        }
+
+        [Fact]
+        public void NonMelodySoundQuieterThanEveryVoiceIsStillDropped()
+        {
+            var m = NewMixer();
+            var events = new List<SoundEvent>();
+            for (int b = 0; b < 32; b++) events.Add(Hit(0, b, 11f));
+            events.Add(Hit(1, 40, 1f)); // volume 0.15 < every playing voice
+            Run(m, events, 900);
+            Assert.Equal(1, m.VoicesDroppedQuiet);
+            Assert.Equal(0, m.VoicesStolen);
+        }
     }
 }
