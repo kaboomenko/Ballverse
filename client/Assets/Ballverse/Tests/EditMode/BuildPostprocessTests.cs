@@ -233,11 +233,15 @@ namespace Ballverse.Tests
             StringAssert.Contains("<key>" + IosExportCompliance.EncryptionKey + "</key>\n\t<false/>", patched);
             StringAssert.Contains("<key>CFBundleIdentifier</key>", patched);
 
+            // Back-date to a whole second and read the stored value back: file systems keep coarser
+            // timestamps than DateTime ticks (CI's overlay fs), so compare against what was actually stored.
             DateTime written = File.GetLastWriteTimeUtc(plistPath);
-            File.SetLastWriteTimeUtc(plistPath, written.AddMinutes(-5));
+            DateTime backDated = new DateTime(written.Ticks - written.Ticks % TimeSpan.TicksPerSecond, DateTimeKind.Utc).AddMinutes(-5);
+            File.SetLastWriteTimeUtc(plistPath, backDated);
+            DateTime stored = File.GetLastWriteTimeUtc(plistPath);
             IosExportCompliance.PatchInfoPlistAt(_temp + Path.DirectorySeparatorChar);
             Assert.AreEqual(patched, File.ReadAllText(plistPath));
-            Assert.AreEqual(written.AddMinutes(-5), File.GetLastWriteTimeUtc(plistPath), "an unchanged plist is not rewritten");
+            Assert.AreEqual(stored, File.GetLastWriteTimeUtc(plistPath), "an unchanged plist is not rewritten");
 
             Assert.Throws<BuildFailedException>(() => IosExportCompliance.PatchInfoPlistAt(Path.Combine(_temp, "missing")));
         }
