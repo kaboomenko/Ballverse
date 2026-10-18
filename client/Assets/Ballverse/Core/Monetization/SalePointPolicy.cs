@@ -102,19 +102,32 @@ namespace Ballverse.Core.Monetization
         }
 
         /// <summary>
-        /// The one-time screen after the first-video quest (spec §5.2 "После выполнения квеста первого ролика — Один экран с
-        /// All Modes — Один раз"; spec §4.3 "без давления, кнопка «Позже» равнозначна по размеру"): All Modes when not yet
-        /// shown and the smart storefront shows it; otherwise <see cref="FirstVideoQuestScreen.None"/>.
+        /// The offer block of the one-time screen after the first-video quest (spec §5.2 "После выполнения квеста первого
+        /// ролика — Один экран с All Modes — Один раз"; spec §4.3 "без давления, кнопка «Позже» равнозначна по размеру"):
+        /// All Modes when not yet shown and the smart storefront shows it; otherwise <see cref="FirstVideoQuestScreen.None"/>.
+        /// <para>
+        /// Scope: only the purchase offer depends on this result. The §4.3 celebration ("короткий праздничный экран") is
+        /// outside Core and shown whenever the quest completes, including for All Modes / Ultimate owners and right after an
+        /// interstitial (§5.2 "После interstitial — Не предлагается" forbids only the purchase).
+        /// </para>
         /// <para>
         /// "Без давления": unlike the paid-card sheet, the offer is not <see cref="StorefrontOffer.Emphasized"/>, and the
-        /// screen carries a «Позже» button of equal weight (<see cref="FirstVideoQuestScreen.LaterButtonWeight"/>).
+        /// offer block carries a «Позже» button of the same size (<see cref="FirstVideoQuestScreen.LaterButtonSameSizeAsOffer"/>).
+        /// </para>
+        /// <para>
+        /// Decision (§4.3 vs §5.2 wording): §4.3 "предложение попробовать платный режим" is read as the §5.2 screen
+        /// "Один экран с All Modes", the monetization chapter being authoritative for sale points; "попробовать" is taken as
+        /// marketing wording, not as a trial entry point. The trial demo (§5.2 "Пробный просмотр платного режима") stays
+        /// reachable from the paid mode card (<see cref="CanStartTrialPreview"/>), and is not added to this screen. Open
+        /// owner question: should the post-quest screen also offer a trial demo of a locked paid mode?
         /// </para>
         /// <para>
         /// Decision: when the storefront hides All Modes (owned, nothing new, every mode already available, or only one mode
-        /// missing so the single is the cheaper equivalent) the screen is skipped rather than replaced, consistent with
-        /// <see cref="Storefront.ModeSheet"/>. The caller persists <paramref name="alreadyShown"/> = true once the screen is
-        /// displayed (whether bought or dismissed with «Позже»); a skipped screen may be persisted as shown too, so it never
-        /// appears later. A screen suppressed only by <paramref name="interstitialJustShown"/> is not consumed.
+        /// missing so the single is the cheaper equivalent) the offer is skipped rather than replaced by a single or a trial,
+        /// consistent with <see cref="Storefront.ModeSheet"/> and the §5.2 "Один экран с All Modes" wording; a single locked
+        /// paid mode remains reachable through its own card. The caller persists <paramref name="alreadyShown"/> = true once
+        /// the offer is displayed (whether bought or dismissed with «Позже»); a skipped offer may be persisted as shown too,
+        /// so it never appears later. An offer suppressed only by <paramref name="interstitialJustShown"/> is not consumed.
         /// </para>
         /// </summary>
         /// <param name="alreadyShown">Persisted one-shot flag.</param>

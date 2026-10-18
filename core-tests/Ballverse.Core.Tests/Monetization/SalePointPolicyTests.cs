@@ -337,11 +337,11 @@ namespace Ballverse.Core.Tests.Monetization
         public void FirstVideoQuest_ShowsAllModesOnce()
         {
             var screen = Quest(false, new string[0]);
-            Assert.True(screen.Show);
+            Assert.True(screen.ShowOffer);
             Assert.Equal(ProductIds.AllModes, screen.Offer.ProductId);
             Assert.Single(screen.Offers);
             Assert.Same(screen.Offer, screen.Offers[0]);
-            Assert.False(Quest(true, new string[0]).Show);
+            Assert.False(Quest(true, new string[0]).ShowOffer);
         }
 
         [Fact]
@@ -354,22 +354,34 @@ namespace Ballverse.Core.Tests.Monetization
         }
 
         [Fact]
-        public void FirstVideoQuest_LaterButtonHasEqualWeight()
+        public void FirstVideoQuest_LaterButtonSameSizeAsOffer()
         {
-            var screen = Quest(false, new string[0]);
-            Assert.True(screen.HasLaterButton);
-            Assert.Equal(SalePointButtonWeight.Equal, screen.LaterButtonWeight);
-            Assert.Equal(screen.OfferButtonWeight, screen.LaterButtonWeight);
+            Assert.True(Quest(false, new string[0]).LaterButtonSameSizeAsOffer);
+            Assert.True(Quest(false, new[] { ProductIds.ModeColorWar }).LaterButtonSameSizeAsOffer);
+        }
+
+        /// <summary>
+        /// The internal guard is the last line of defence against §4.3 "давление": even if the storefront started to emphasize
+        /// All Modes or the policy stopped clearing the flag, an emphasized offer can never reach the quest screen.
+        /// </summary>
+        [Fact]
+        public void FirstVideoQuestScreen_RejectsEmphasizedOffer()
+        {
+            var offer = Storefront.Build(new string[0]).Get(ProductIds.AllModes);
+            Assert.Throws<ArgumentException>(() => new FirstVideoQuestScreen(offer.WithEmphasis(true)));
+            var screen = new FirstVideoQuestScreen(offer.WithEmphasis(false));
+            Assert.True(screen.ShowOffer);
+            Assert.False(screen.Offer.Emphasized);
         }
 
         [Fact]
         public void FirstVideoQuest_NoneHasNoOfferAndNoButtons()
         {
             var none = FirstVideoQuestScreen.None;
-            Assert.False(none.Show);
+            Assert.False(none.ShowOffer);
             Assert.Null(none.Offer);
             Assert.Empty(none.Offers);
-            Assert.False(none.HasLaterButton);
+            Assert.False(none.LaterButtonSameSizeAsOffer);
             Assert.Same(none, Quest(true, new string[0]));
         }
 
@@ -385,7 +397,7 @@ namespace Ballverse.Core.Tests.Monetization
         public void FirstVideoQuest_PartialOwnerSeesModeCount()
         {
             var screen = Quest(false, new[] { ProductIds.ModeColorWar });
-            Assert.True(screen.Show);
+            Assert.True(screen.ShowOffer);
             Assert.Equal(1, screen.Offer.OwnedModeCount);
             Assert.True(screen.Offer.PartiallyOwned);
         }
@@ -393,22 +405,22 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void FirstVideoQuest_SkippedWhenStorefrontHidesAllModes()
         {
-            Assert.False(Quest(false, new[] { ProductIds.AllModes }).Show);
-            Assert.False(Quest(false, new[] { ProductIds.Ultimate }).Show);
+            Assert.False(Quest(false, new[] { ProductIds.AllModes }).ShowOffer);
+            Assert.False(Quest(false, new[] { ProductIds.Ultimate }).ShowOffer);
             var nineSingles = ProductCatalog.All.Where(p => p.Kind == ProductKind.SingleMode && p.Mode != ModeCode.M15)
                 .Select(p => p.Id).ToArray();
-            Assert.False(Quest(false, nineSingles).Show);
+            Assert.False(Quest(false, nineSingles).ShowOffer);
             var allFree = new MonetizationConfig(Enumerable.Range(6, 10).Select(m => (ModeCode)m));
-            Assert.False(Quest(false, new string[0], false, allFree).Show);
+            Assert.False(Quest(false, new string[0], false, allFree).ShowOffer);
             var allGrandfathered = Enumerable.Range(6, 10).Select(m => (ModeCode)m).ToArray();
-            Assert.False(Quest(false, new string[0], false, null, allGrandfathered).Show);
+            Assert.False(Quest(false, new string[0], false, null, allGrandfathered).ShowOffer);
         }
 
         [Fact]
         public void FirstVideoQuest_NeverRightAfterInterstitial()
         {
-            Assert.False(Quest(false, new string[0], interstitial: true).Show);
-            Assert.False(Quest(true, new string[0], interstitial: true).Show);
+            Assert.False(Quest(false, new string[0], interstitial: true).ShowOffer);
+            Assert.False(Quest(true, new string[0], interstitial: true).ShowOffer);
         }
 
         /// <summary>
@@ -421,14 +433,14 @@ namespace Ballverse.Core.Tests.Monetization
             for (int mask = 0; mask < Subsets.Count; mask++)
             {
                 var owned = Subsets.Ids(mask);
-                Assert.False(Quest(true, owned).Show);
-                Assert.False(Quest(true, owned, interstitial: true).Show);
-                Assert.False(Quest(false, owned, interstitial: true).Show);
+                Assert.False(Quest(true, owned).ShowOffer);
+                Assert.False(Quest(true, owned, interstitial: true).ShowOffer);
+                Assert.False(Quest(false, owned, interstitial: true).ShowOffer);
                 if ((mask & 0x3F) != 0) continue; // the storefront comparison below on 1/64 of the subsets keeps this fast
                 var screen = Quest(false, owned);
                 var all = Storefront.Build(owned).Get(ProductIds.AllModes);
-                Assert.Equal(all.Visible, screen.Show);
-                if (screen.Show)
+                Assert.Equal(all.Visible, screen.ShowOffer);
+                if (screen.ShowOffer)
                 {
                     Assert.False(screen.Offer.Emphasized);
                     Assert.Equal(all.OwnedModeCount, screen.Offer.OwnedModeCount);
@@ -453,7 +465,7 @@ namespace Ballverse.Core.Tests.Monetization
                     bool interstitial = rng.NextUInt(3) == 0;
                     if (!interstitial && firstEligible < 0) firstEligible = step;
                     var screen = Quest(shownFlag, new string[0], interstitial);
-                    if (screen.Show)
+                    if (screen.ShowOffer)
                     {
                         shownCount++;
                         shownAt = step;
