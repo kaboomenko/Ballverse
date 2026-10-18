@@ -1,0 +1,38 @@
+# .NET (core-tests)
+core-tests/**/bin/
+core-tests/**/obj/
+core-tests/TestResults/
+*.user
+
+# Unity (client)
+client/[Ll]ibrary/
+client/[Tt]emp/
+client/[Oo]bj/
+client/[Bb]uild/
+client/[Bb]uilds/
+client/[Ll]ogs/
+client/[Uu]ser[Ss]ettings/
+client/[Mm]emoryCaptures/
+client/[Rr]ecordings/
+client/*.csproj
+client/*.sln
+client/*.slnx
+client/.vs/
+client/.vscode/
+client/.idea/
+client/*.apk
+client/*.aab
+client/*.unitypackage
+client/Assets/StreamingAssets/aa*
+
+# Native plugins
+native/android/**/build/
+native/android/.gradle/
+native/ios/**/DerivedData/
+native/ios/**/*.xcuserstate
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

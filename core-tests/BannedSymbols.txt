@@ -1,0 +1,10 @@
+T:System.Random;Use Ballverse.Core.Rng (spec §7.4, rule 2)
+P:System.DateTime.Now;Core is pure: pass time in as a parameter
+P:System.DateTime.UtcNow;Core is pure: pass time in as a parameter
+P:System.DateTime.Today;Core is pure: pass time in as a parameter
+P:System.DateTimeOffset.Now;Core is pure: pass time in as a parameter
+P:System.DateTimeOffset.UtcNow;Core is pure: pass time in as a parameter
+P:System.Environment.TickCount;Core is pure: pass time in as a parameter
+P:System.Environment.TickCount64;Core is pure: pass time in as a parameter
+M:System.Guid.NewGuid;Core is pure: pass ids in from the caller
+T:System.Diagnostics.Stopwatch;Core is pure: measure time outside Core
