@@ -73,5 +73,23 @@ namespace Ballverse.Core.Tests.Monetization
                 new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased),
             }).ToArray());
         }
+
+        [Fact]
+        public void OwnedProducts_EmptyTransactionIdIsTreatedAsMissing()
+        {
+            // Native bridges may marshal a missing id as "": such records must not share one transaction slot (spec §5.4).
+            Assert.Equal(new[] { ProductIds.AllModes, ProductIds.NoAds }, OwnedProducts.From(new[]
+            {
+                new PurchaseRecord(ProductIds.AllModes, PurchaseState.Purchased, ""),
+                new PurchaseRecord(ProductIds.NoAds, PurchaseState.Purchased, ""),
+                new PurchaseRecord(ProductIds.ModeOrbit, PurchaseState.Pending, ""),
+            }).ToArray());
+            // A pending single mode (Ask to Buy, no transaction yet) does not wipe a purchased Ultimate.
+            Assert.Equal(new[] { ProductIds.Ultimate }, OwnedProducts.From(new[]
+            {
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased, ""),
+                new PurchaseRecord(ProductIds.ModeOrbit, PurchaseState.Pending, ""),
+            }).ToArray());
+        }
     }
 }

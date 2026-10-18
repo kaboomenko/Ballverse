@@ -20,8 +20,9 @@ namespace Ballverse.Core.Monetization
         public string ProductId { get; }
         public PurchaseState State { get; }
         /// <summary>
-        /// Store transaction id (StoreKit originalTransactionID / Play purchaseToken), or null. Records sharing a non-null id
-        /// are successive states of one transaction; the last one in the sequence wins (e.g. Purchased then Revoked).
+        /// Store transaction id (StoreKit originalTransactionID / Play purchaseToken), or null/empty. Records sharing a
+        /// non-empty id are successive states of one transaction; the last one in the sequence wins (e.g. Purchased then
+        /// Revoked). An empty id (native bridges often marshal a missing string as "") counts as no id (spec §5.4).
         /// </summary>
         public string TransactionId { get; }
 
@@ -40,7 +41,7 @@ namespace Ballverse.Core.Monetization
         /// Ids with at least one transaction whose current state is <see cref="PurchaseState.Purchased"/> (pending and
         /// refunded ones grant nothing; spec §5.4 "Возврат денег … право снимается"), sorted ordinal, distinct.
         /// The current state of a transaction is its last record with the same <see cref="PurchaseRecord.TransactionId"/>;
-        /// a record without an id is taken as the current state of a transaction of its own, so pass ids when the input
+        /// a record without an id (null or empty) is taken as the current state of a transaction of its own, so pass ids when the input
         /// mixes old and updated states (e.g. iOS Transaction.updates), or pass only current states (StoreKit
         /// currentEntitlements, Play queryPurchasesAsync). Null/empty product ids are dropped; unknown ids are kept for
         /// forward compatibility.
@@ -52,7 +53,7 @@ namespace Ballverse.Core.Monetization
             var set = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var r in records)
             {
-                if (r.TransactionId != null) latest[r.TransactionId] = r;
+                if (!string.IsNullOrEmpty(r.TransactionId)) latest[r.TransactionId] = r;
                 else if (r.State == PurchaseState.Purchased && !string.IsNullOrEmpty(r.ProductId)) set.Add(r.ProductId);
             }
             // Order of the dictionary does not leak: results go into a sorted set.
