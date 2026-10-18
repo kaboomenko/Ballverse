@@ -27,7 +27,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void Nothing_ShowsExactlyTheThreeAdProducts_NoAdsRemovesWatermark()
         {
-            var s = Storefront.Build(None, R1);
+            var s = Storefront.Build(None, R1, null, false);
             Assert.Equal(new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds }, VisibleIds(s));
             Assert.False(s.AllPurchased);
             var noAds = s.Get(ProductIds.NoAds);
@@ -48,7 +48,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void RemoveExportOwned_OnlyRemoveInterstitialAsLastStep()
         {
-            var s = Storefront.Build(new[] { ProductIds.RemoveExportAds }, R1);
+            var s = Storefront.Build(new[] { ProductIds.RemoveExportAds }, R1, null, false);
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, VisibleIds(s));
             var ri = s.Get(ProductIds.RemoveInterstitialAds);
             Assert.True(ri.IsLastStep);
@@ -63,7 +63,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void RemoveInterstitialOwned_OnlyRemoveExportAsLastStep()
         {
-            var s = Storefront.Build(new[] { ProductIds.RemoveInterstitialAds }, R1);
+            var s = Storefront.Build(new[] { ProductIds.RemoveInterstitialAds }, R1, null, false);
             Assert.Equal(new[] { ProductIds.RemoveExportAds }, VisibleIds(s));
             Assert.True(s.Get(ProductIds.RemoveExportAds).IsLastStep);
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.NoAds).HiddenReason);
@@ -78,20 +78,20 @@ namespace Ballverse.Core.Tests.Monetization
         [InlineData(ProductIds.Ultimate)]
         public void AdFreeOwned_AllPurchasedWithWatermarkRemoved(params string[] owned)
         {
-            var s = Storefront.Build(owned, R1);
+            var s = Storefront.Build(owned, R1, null, false);
             Assert.True(s.AllPurchased);
             Assert.Empty(s.VisibleOffers);
             Assert.True(s.Entitlements.Contains(Entitlement.NoWatermark));
             Assert.Equal(WatermarkRow.Toggle, WatermarkPolicy.GetRow(s.Entitlements));
             Assert.False(WatermarkPolicy.ShouldApply(s.Entitlements));
-            Assert.Empty(Storefront.WatermarkOffers(owned, R1));
+            Assert.Empty(Storefront.WatermarkOffers(owned, R1, null, false));
         }
 
         [Fact]
         public void OwnedUnsellableBundle_KeepsItsRights_ShopStillSellsAds()
         {
             // E.g. All Modes restored from a store test account: the rights stay, but nothing mode-related is offered.
-            var s = Storefront.Build(new[] { ProductIds.AllModes }, R1);
+            var s = Storefront.Build(new[] { ProductIds.AllModes }, R1, null, false);
             Assert.Equal(10, s.Entitlements.ModeCount);
             Assert.Equal(new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds }, VisibleIds(s));
             Assert.Equal(OfferHiddenReason.Owned, s.Get(ProductIds.AllModes).HiddenReason);
@@ -103,25 +103,25 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void WatermarkOffers_Release1()
         {
-            Assert.Equal(new[] { ProductIds.NoAds }, Ids(Storefront.WatermarkOffers(None, R1)));
-            Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, R1)));
-            Assert.Equal(new[] { ProductIds.RemoveExportAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.RemoveInterstitialAds }, R1)));
-            Assert.DoesNotContain(ProductIds.Ultimate, Ids(Storefront.WatermarkOffers(new[] { ProductIds.ModeOrbit }, R1)));
+            Assert.Equal(new[] { ProductIds.NoAds }, Ids(Storefront.WatermarkOffers(None, R1, null, false)));
+            Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, R1, null, false)));
+            Assert.Equal(new[] { ProductIds.RemoveExportAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.RemoveInterstitialAds }, R1, null, false)));
+            Assert.DoesNotContain(ProductIds.Ultimate, Ids(Storefront.WatermarkOffers(new[] { ProductIds.ModeOrbit }, R1, null, false)));
         }
 
         [Fact]
         public void WatermarkRuleOff_NoSellablePathToWatermark_RowHasNothingToOpen()
         {
             var off = R1.WithWatermarkWithNoAds(false);
-            var s = Storefront.Build(new[] { ProductIds.NoAds }, off);
+            var s = Storefront.Build(new[] { ProductIds.NoAds }, off, null, false);
             Assert.False(s.Entitlements.Contains(Entitlement.NoWatermark));
             Assert.True(s.AllPurchased);
             Assert.Empty(s.VisibleOffers);
-            Assert.Empty(Storefront.WatermarkOffers(new[] { ProductIds.NoAds }, off));
-            Assert.Empty(Storefront.WatermarkOffers(None, off));
-            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(3, null, None, off));
-            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds }, VisibleIds(Storefront.Build(None, off)));
-            Assert.False(Storefront.Build(None, off).Get(ProductIds.NoAds).RemovesWatermark);
+            Assert.Empty(Storefront.WatermarkOffers(new[] { ProductIds.NoAds }, off, null, false));
+            Assert.Empty(Storefront.WatermarkOffers(None, off, null, false));
+            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(3, null, None, off, null, false));
+            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds }, VisibleIds(Storefront.Build(None, off, null, false)));
+            Assert.False(Storefront.Build(None, off, null, false).Get(ProductIds.NoAds).RemovesWatermark);
         }
 
         [Fact]
@@ -137,14 +137,14 @@ namespace Ballverse.Core.Tests.Monetization
         {
             foreach (var owned in new[] { None, new[] { ProductIds.ModeOrbit }, new[] { ProductIds.NoAds } })
             {
-                for (int m = 1; m <= 15; m++) Assert.Empty(Storefront.ModeSheet((ModeCode)m, owned, R1));
+                for (int m = 1; m <= 15; m++) Assert.Empty(Storefront.ModeSheet((ModeCode)m, owned, R1, null, false));
             }
         }
 
         [Fact]
         public void FirstVideoQuest_NoOfferBecauseAllModesIsNotSold()
         {
-            var screen = SalePointPolicy.FirstVideoQuest(false, None, R1, false);
+            var screen = SalePointPolicy.FirstVideoQuest(false, None, R1, false, null, false);
             Assert.False(screen.ShowOffer);
             Assert.Same(FirstVideoQuestScreen.None, screen);
         }
@@ -173,36 +173,36 @@ namespace Ballverse.Core.Tests.Monetization
             var nothing = EntitlementSet.Empty;
             Assert.Equal(TrialPreviewAccess.NotSold, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, nothing, 5, 5, c, false, null));
             Assert.Equal(TrialPreviewAccess.NotLocked,
-                SalePointPolicy.CanStartTrialPreview(ModeCode.M14, Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog), 5, 5, c, false, null));
+                SalePointPolicy.CanStartTrialPreview(ModeCode.M14, Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog, false), 5, 5, c, false, null));
             Assert.Equal(TrialPreviewAccess.NotReleased, SalePointPolicy.CanStartTrialPreview(ModeCode.M13, nothing, 5, 5, c, false, null));
             Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M03, nothing, 5, 5, c, false, null));
             // Once its single is sold, the demo is allowed.
             var sold = new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.ModeOrbit }, c.ReleasedModes, true);
             Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, nothing, null, 5, sold, true, null));
-            Assert.Equal(new[] { ProductIds.ModeOrbit }, Ids(Storefront.ModeSheet(ModeCode.M14, None, sold)));
+            Assert.Equal(new[] { ProductIds.ModeOrbit }, Ids(Storefront.ModeSheet(ModeCode.M14, None, sold, null, false)));
         }
 
         [Fact]
         public void DoneScreenLine_Release1_TargetsAdProductsNeverUltimate()
         {
-            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(2, null, None, R1));
-            Assert.Equal(new[] { ProductIds.NoAds }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, R1)));
+            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(2, null, None, R1, null, false));
+            Assert.Equal(new[] { ProductIds.NoAds }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, R1, null, false)));
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds },
-                Ids(SalePointPolicy.DoneScreenLineOffers(6, 3, new[] { ProductIds.RemoveExportAds }, R1)));
-            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(5, 3, None, R1));
-            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(9, null, new[] { ProductIds.NoAds }, R1));
+                Ids(SalePointPolicy.DoneScreenLineOffers(6, 3, new[] { ProductIds.RemoveExportAds }, R1, null, false)));
+            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(5, 3, None, R1, null, false));
+            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(9, null, new[] { ProductIds.NoAds }, R1, null, false));
             Assert.Empty(SalePointPolicy.DoneScreenLineOffers(9, null, None, R1, null, false, watermarkEnabled: false));
             Assert.Empty(SalePointPolicy.DoneScreenLineOffers(9, null, None, R1, null, false, true, interstitialJustShown: true));
-            Assert.Throws<System.ArgumentNullException>(() => SalePointPolicy.DoneScreenLineOffers(3, null, null, R1));
-            Assert.Throws<System.ArgumentOutOfRangeException>(() => SalePointPolicy.DoneScreenLineOffers(-1, null, None, R1));
+            Assert.Throws<System.ArgumentNullException>(() => SalePointPolicy.DoneScreenLineOffers(3, null, null, R1, null, false));
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => SalePointPolicy.DoneScreenLineOffers(-1, null, None, R1, null, false));
         }
 
         [Fact]
         public void DoneScreenLine_FullCatalogMatchesWatermarkOffers()
         {
-            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, MonetizationConfig.FullCatalog)));
+            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, MonetizationConfig.FullCatalog, null, false)));
             var owned = new[] { ProductIds.RemoveExportAds, ProductIds.ModeSmash };
-            Assert.Equal(Ids(Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog)), Ids(SalePointPolicy.DoneScreenLineOffers(3, null, owned, MonetizationConfig.FullCatalog)));
+            Assert.Equal(Ids(Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, null, false)), Ids(SalePointPolicy.DoneScreenLineOffers(3, null, owned, MonetizationConfig.FullCatalog, null, false)));
         }
 
         [Fact]
@@ -211,9 +211,9 @@ namespace Ballverse.Core.Tests.Monetization
             for (int mask = 0; mask < Subsets.Count; mask += 3)
             {
                 var owned = Subsets.Ids(mask);
-                var offers = SalePointPolicy.DoneScreenLineOffers(3, null, owned, R1);
+                var offers = SalePointPolicy.DoneScreenLineOffers(3, null, owned, R1, null, false);
                 Assert.All(offers, o => Assert.True(R1.IsSellable(o.ProductId)));
-                bool nw = Entitlements.From(owned, R1).Contains(Entitlement.NoWatermark);
+                bool nw = Entitlements.From(owned, R1, false).Contains(Entitlement.NoWatermark);
                 Assert.Equal(!nw, offers.Count > 0);
             }
         }

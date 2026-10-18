@@ -30,6 +30,11 @@ namespace Ballverse.Core.Monetization
     /// hidden (<see cref="OfferHiddenReason.CheaperViaParts"/>): "Ultimate (он дороже, чем недостающая часть)". Without
     /// modes Ultimate stays visible, per the §5.2 Remove Export / Remove Interstitial rows ("Ultimate показывается только
     /// если нет режимов"). Covers e.g. a mode + an ad removal, and 9 single modes ($1.99 + No Ads $8.99 &lt; $11.99).</item>
+    /// <item>Exception to rule 4 (decision): when NO_WATERMARK by parts is on and not owned, no visible offer removes the
+    /// watermark, and the only missing Ultimate parts are two or more available modes (e.g. free by a widened
+    /// <c>free_modes</c> or grandfathered, with All Modes not sold and Ultimate not sold or hidden by rule 6), the cheapest
+    /// singles completing the contents stay visible, flagged <see cref="StorefrontOffer.AlreadyAvailable"/>; otherwise the
+    /// Shop would be empty without "Всё куплено" while the watermark can still be removed.</item>
     /// </list>
     /// Repeatedly buying every visible offer always ends with every entitlement the sellable products can give, except
     /// those of available modes, including NO_WATERMARK whenever a sellable path to it exists, so nothing becomes
@@ -55,7 +60,7 @@ namespace Ballverse.Core.Monetization
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static StorefrontState Build(IEnumerable<string> ownedProductIds, MonetizationConfig config,
-            IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
+            IEnumerable<ModeCode> grandfathered, bool watermarkGrandfathered)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
             if (config == null) throw new ArgumentNullException(nameof(config));
@@ -109,6 +114,28 @@ namespace Ballverse.Core.Monetization
                 reasons[ultimate] = OfferHiddenReason.CheaperViaParts;
             }
 
+            // Rule 7: when the only missing Ultimate parts are modes the user already plays (two or more, so no single one
+            // completes the contents) and no visible offer removes the watermark, rule 4 would hide every path to
+            // NO_WATERMARK by parts. Show the cheapest parts instead.
+            if (config.WatermarkByParts && !current.Contains(Entitlement.NoWatermark))
+            {
+                var missing = Entitlements.FullUltimateContents.Except(current);
+                bool anyVisibleRemover = false;
+                for (int i = 0; i < n; i++)
+                {
+                    if (reasons[i] == OfferHiddenReason.None && gains[i].Contains(Entitlement.NoWatermark)) anyVisibleRemover = true;
+                }
+                if (!anyVisibleRemover && !missing.IsEmpty && missing.Except(availableModes).IsEmpty
+                    && TryCover(current, Entitlements.FullUltimateContents, config, out var parts, out _))
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        if (reasons[i] == OfferHiddenReason.AlreadyAvailable && parts.Contains(s_displayOrder[i].Id))
+                            reasons[i] = OfferHiddenReason.None;
+                    }
+                }
+            }
+
             int haveModes = current.Union(availableModes).ModeCount;
             var offers = new StorefrontOffer[n];
             for (int i = 0; i < n; i++)
@@ -146,7 +173,7 @@ namespace Ballverse.Core.Monetization
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static IReadOnlyList<StorefrontOffer> ModeSheet(ModeCode mode, IEnumerable<string> ownedProductIds,
-            MonetizationConfig config, IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
+            MonetizationConfig config, IEnumerable<ModeCode> grandfathered, bool watermarkGrandfathered)
         {
             var product = ProductCatalog.ForMode(mode);
             var state = Build(ownedProductIds, config, grandfathered, watermarkGrandfathered);
@@ -173,7 +200,7 @@ namespace Ballverse.Core.Monetization
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static IReadOnlyList<StorefrontOffer> WatermarkOffers(IEnumerable<string> ownedProductIds,
-            MonetizationConfig config, IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
+            MonetizationConfig config, IEnumerable<ModeCode> grandfathered, bool watermarkGrandfathered)
         {
             var state = Build(ownedProductIds, config, grandfathered, watermarkGrandfathered);
             var result = new List<StorefrontOffer>();

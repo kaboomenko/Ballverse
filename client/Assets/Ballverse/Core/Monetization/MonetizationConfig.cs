@@ -97,34 +97,51 @@ namespace Ballverse.Core.Monetization
         /// <summary>
         /// Release-1 rule (owner decision): owning NO_EXPORT_ADS + NO_INTERSTITIALS (No Ads Bundle, or both ad removals)
         /// also grants NO_WATERMARK. On in <see cref="Release1"/>, off in <see cref="FullCatalog"/>. Turning it off never
-        /// revokes the right from users who obtained it under the rule: turn it off with <see cref="WithWatermarkWithNoAdsEnded"/>,
-        /// persist <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/> and pass
-        /// the flag to <see cref="Entitlements.From"/>.
+        /// revokes the right from users who obtained it under the rule: turn it off with <see cref="WithWatermarkWithNoAdsEnded"/>
+        /// (and in release-1 builds with <see cref="WithWatermarkNoAdsCutoff"/>), persist
+        /// <see cref="WatermarkGrandfathering.FromStore"/> and pass the flag to <see cref="Entitlements.From"/>.
         /// </summary>
         public bool WatermarkWithNoAds { get; }
 
         /// <summary>
-        /// When <see cref="WatermarkWithNoAds"/> is off: the moment (Unix ms, store clock) the release that turned the rule off
-        /// took effect, or null when the rule never applied to this build's users (e.g. <see cref="FullCatalog"/> in tests).
-        /// Ad products whose store purchase time is earlier were bought under the rule, so
-        /// <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/> grandfathers
-        /// their owners from restorable store data on any device (owner decision: keep NO_WATERMARK obtained under the rule).
-        /// Ignored while the rule is on. Assumes the rule was on in every release before the cutoff (true from release 1).
+        /// The cutoff of the release-1 No Ads rule (Unix ms, store clock): ad products whose store purchase time is earlier
+        /// were bought under the rule, later ones were not. Null while no cutoff is known (release 1 before it is announced)
+        /// or when the rule never applied to this build's users (e.g. <see cref="FullCatalog"/> in tests).
+        /// <see cref="WatermarkGrandfathering.FromStore"/> grandfathers the owners of pre-cutoff purchases from restorable
+        /// store data on any device (owner decision: keep NO_WATERMARK obtained under the rule).
+        /// <para>
+        /// Contract: in every build the rule is on before the cutoff and off after it, so every build sells the same promise
+        /// at a given moment and every device derives the same flag from the same purchases. The release that turns the rule
+        /// off hard-codes the cutoff (<see cref="WithWatermarkWithNoAdsEnded"/>); release-1 binaries, which cannot be changed
+        /// any more, learn the same value from Remote Config (<see cref="WatermarkNoAdsEndedAtRemoteKey"/>) and apply it with
+        /// <see cref="WithWatermarkNoAdsCutoff"/>. Set the key well before the cutoff (at least one Remote Config fetch
+        /// interval), so release-1 builds that never update stop promising NO_WATERMARK with No Ads exactly at the cutoff.
+        /// A release-1 build that sells No Ads without having fetched the key after the cutoff still grants the right locally;
+        /// after the next complete store read under a build that knows the cutoff it is derived as post-cutoff (documented
+        /// residual risk of an unfetched config).
+        /// </para>
         /// </summary>
         public long? WatermarkWithNoAdsEndedAtUnixMs { get; }
 
-        /// <param name="freeModes">Configured <c>free_modes</c> (already resolved by the config module); united with M01–M05.</param>
-        /// <param name="watermarkByParts">See <see cref="WatermarkByParts"/>.</param>
-        /// <remarks>Creates a full-catalog config (every mode released, every product sellable, <see cref="WatermarkWithNoAds"/> off).</remarks>
-        /// <exception cref="ArgumentNullException"><paramref name="freeModes"/> is null.</exception>
-        /// <exception cref="ArgumentOutOfRangeException">A mode outside M01…M15.</exception>
-        public MonetizationConfig(IEnumerable<ModeCode> freeModes, bool watermarkByParts = true)
+        /// <summary>
+        /// Proposed Remote Config key (spec §9.3, pending in the docs track): the cutoff of the release-1 No Ads rule, Unix
+        /// milliseconds, absent by default. Parsing belongs to the config module; the App passes the value to
+        /// <see cref="WithWatermarkNoAdsCutoff"/>.
+        /// </summary>
+        public const string WatermarkNoAdsEndedAtRemoteKey = "watermark_no_ads_ended_at_ms";
+
+        /// <summary>
+        /// Test shorthand: a full-catalog config (every mode released, every product sellable, <see cref="WatermarkWithNoAds"/>
+        /// off). Internal, so the App cannot build the full catalog by accident from a Remote Config payload; it starts from
+        /// <see cref="Default"/> (<c>WithFreeModes</c>).
+        /// </summary>
+        internal MonetizationConfig(IEnumerable<ModeCode> freeModes, bool watermarkByParts = true)
             : this(freeModes, watermarkByParts, ProductIds.All, s_allModes ?? BuildAllModes(), false, null)
         {
         }
 
-        /// <summary>Same as the six-argument constructor without a rule cutoff (<see cref="WatermarkWithNoAdsEndedAtUnixMs"/> null).</summary>
-        public MonetizationConfig(IEnumerable<ModeCode> freeModes, bool watermarkByParts, IEnumerable<string> sellableProductIds,
+        /// <summary>Test shorthand: the six-argument constructor without a rule cutoff. Internal, like the two-argument one.</summary>
+        internal MonetizationConfig(IEnumerable<ModeCode> freeModes, bool watermarkByParts, IEnumerable<string> sellableProductIds,
             IEnumerable<ModeCode> releasedModes, bool watermarkWithNoAds)
             : this(freeModes, watermarkByParts, sellableProductIds, releasedModes, watermarkWithNoAds, null)
         {
@@ -224,6 +241,26 @@ namespace Ballverse.Core.Monetization
         public MonetizationConfig WithWatermarkWithNoAdsEnded(long endedAtUnixMs)
         {
             return new MonetizationConfig(_freeModes, WatermarkByParts, _sellable, _releasedModes, false, endedAtUnixMs);
+        }
+
+        /// <summary>
+        /// Applies the Remote Config cutoff of the release-1 No Ads rule (<see cref="WatermarkNoAdsEndedAtRemoteKey"/>) in a
+        /// build whose rule is on (release 1), so that it follows the contract of <see cref="WatermarkWithNoAdsEndedAtUnixMs"/>:
+        /// the result keeps the rule on while <paramref name="nowUnixMs"/> is before the cutoff and turns it off from the
+        /// cutoff on, and in both cases records the cutoff, so <see cref="WatermarkGrandfathering.FromStore"/> grandfathers
+        /// exactly the pre-cutoff purchases, as the later release does.
+        /// <para>
+        /// Returns this config unchanged when <paramref name="endedAtUnixMs"/> is null (key absent) or the rule is already
+        /// off (a later build keeps its hard-coded cutoff; a config where the rule never applied has nothing to end).
+        /// <paramref name="nowUnixMs"/> is the caller's clock (Core has none): a wrong device clock only moves the moment the
+        /// build stops promising NO_WATERMARK with No Ads; the persisted right always follows the store purchase time.
+        /// </para>
+        /// </summary>
+        public MonetizationConfig WithWatermarkNoAdsCutoff(long? endedAtUnixMs, long nowUnixMs)
+        {
+            if (!endedAtUnixMs.HasValue || !WatermarkWithNoAds) return this;
+            return new MonetizationConfig(_freeModes, WatermarkByParts, _sellable, _releasedModes,
+                nowUnixMs < endedAtUnixMs.Value, endedAtUnixMs.Value);
         }
 
         /// <summary>The same config with <see cref="WatermarkByParts"/> set to <paramref name="value"/>.</summary>

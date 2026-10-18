@@ -6,8 +6,8 @@ namespace Ballverse.Core.Tests.Monetization
     /// <summary>Spec §3.10 "Поведение" (Р13).</summary>
     public class WatermarkPolicyTests
     {
-        static readonly EntitlementSet Without = Entitlements.From(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog);
-        static readonly EntitlementSet With = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog);
+        static readonly EntitlementSet Without = Entitlements.From(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog, false);
+        static readonly EntitlementSet With = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog, false);
 
         [Fact]
         public void WithoutRight_WatermarkAlwaysOnAndRowLocked()
@@ -29,7 +29,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void ByPartsOwnerAlsoGetsToggle()
         {
-            var parts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog);
+            var parts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog, false);
             Assert.Equal(WatermarkRow.Toggle, WatermarkPolicy.GetRow(parts));
             Assert.False(WatermarkPolicy.ShouldApply(parts));
         }
@@ -45,8 +45,8 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void RefundBringsWatermarkBack()
         {
-            var before = Entitlements.From(OwnedProducts.From(new[] { new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased) }), MonetizationConfig.FullCatalog);
-            var after = Entitlements.From(OwnedProducts.From(new[] { new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Revoked) }), MonetizationConfig.FullCatalog);
+            var before = Entitlements.From(OwnedProducts.From(new[] { new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased) }), MonetizationConfig.FullCatalog, false);
+            var after = Entitlements.From(OwnedProducts.From(new[] { new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Revoked) }), MonetizationConfig.FullCatalog, false);
             Assert.False(WatermarkPolicy.ShouldApply(before));
             Assert.True(WatermarkPolicy.ShouldApply(after));
         }

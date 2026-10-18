@@ -15,7 +15,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void OnlyM01M02M05ArePlayable_ForAnyone()
         {
-            var everything = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog);
+            var everything = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog, false);
             var allGrandfathered = Enumerable.Range(1, 15).Select(m => (ModeCode)m).ToArray();
             foreach (var e in new[] { EntitlementSet.Empty, everything })
             {

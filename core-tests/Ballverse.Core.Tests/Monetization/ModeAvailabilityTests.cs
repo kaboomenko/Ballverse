@@ -25,7 +25,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void EntitlementUnlocksPaidMode()
         {
-            var e = Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog);
+            var e = Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog, false);
             Assert.Equal(ModeAccess.Entitled, ModeAvailability.GetAccess(ModeCode.M14, e, None, MonetizationConfig.FullCatalog));
             Assert.False(ModeAvailability.IsAvailable(ModeCode.M13, e, None, MonetizationConfig.FullCatalog));
             Assert.True(ModeAvailability.IsAvailable(ModeCode.M14, e, null, MonetizationConfig.FullCatalog));

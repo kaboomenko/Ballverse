@@ -32,7 +32,7 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.False(HasNw(new[] { ProductIds.RemoveExportAds }, R1, false));
             Assert.False(HasNw(new[] { ProductIds.RemoveInterstitialAds }, R1, false));
             Assert.False(HasNw(Nothing, R1, false));
-            Assert.Equal(EntitlementSet.AdFree.With(Entitlement.NoWatermark), Entitlements.From(NoAds, R1));
+            Assert.Equal(EntitlementSet.AdFree.With(Entitlement.NoWatermark), Entitlements.From(NoAds, R1, false));
         }
 
         [Fact]
@@ -146,7 +146,7 @@ namespace Ballverse.Core.Tests.Monetization
             bool gf = WatermarkGrandfathering.Update(false, NoAds, Later);
             Assert.False(gf);
             Assert.False(HasNw(NoAds, Later, gf));
-            Assert.Equal(new[] { ProductIds.Ultimate }, Storefront.WatermarkOffers(Nothing, Later).Select(o => o.ProductId).ToArray());
+            Assert.Equal(new[] { ProductIds.Ultimate }, Storefront.WatermarkOffers(Nothing, Later, null, false).Select(o => o.ProductId).ToArray());
             // With No Ads, All Modes is the last step to the watermark (by parts).
             var wm = Storefront.WatermarkOffers(NoAds, Later, null, gf).Select(o => o.ProductId).ToArray();
             Assert.Equal(new[] { ProductIds.AllModes }, wm);
@@ -240,9 +240,9 @@ namespace Ballverse.Core.Tests.Monetization
             var key = new byte[32];
             var json = EntitlementCache.Serialize(NoAds, 0L, key);
             var entry = EntitlementCache.Load(json, key);
-            Assert.False(entry.GetEntitlements(Later).Contains(Entitlement.NoWatermark));
+            Assert.False(entry.GetEntitlements(Later, false).Contains(Entitlement.NoWatermark));
             Assert.True(entry.GetEntitlements(Later, true).Contains(Entitlement.NoWatermark));
-            Assert.True(entry.GetEntitlements(R1).Contains(Entitlement.NoWatermark));
+            Assert.True(entry.GetEntitlements(R1, false).Contains(Entitlement.NoWatermark));
         }
     }
 }

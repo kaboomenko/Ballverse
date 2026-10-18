@@ -24,11 +24,11 @@ namespace Ballverse.Core.Monetization
         /// </summary>
         /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="watermarkGrandfathered">
-        /// Persisted result of <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/>: the
+        /// Persisted result of <see cref="WatermarkGrandfathering.FromStore"/>: the
         /// user obtained NO_WATERMARK under the release-1 No Ads rule, which keeps applying to them after the rule is turned off.
         /// </param>
         public static EntitlementSet From(IEnumerable<string> ownedProductIds, MonetizationConfig config,
-            bool watermarkGrandfathered = false)
+            bool watermarkGrandfathered)
         {
             return ApplyRules(DirectGrants(ownedProductIds), config, watermarkGrandfathered);
         }
@@ -52,7 +52,7 @@ namespace Ballverse.Core.Monetization
         /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="watermarkGrandfathered">See <see cref="From"/>.</param>
         public static EntitlementSet ApplyRules(EntitlementSet directGrants, MonetizationConfig config,
-            bool watermarkGrandfathered = false)
+            bool watermarkGrandfathered)
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
             if (config.WatermarkByParts && directGrants.IsSupersetOf(FullUltimateContents))

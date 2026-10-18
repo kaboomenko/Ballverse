@@ -36,7 +36,7 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(EntitlementCacheStatus.Ok, EntitlementCache.TryLoad(json, Key, out var entry));
             Assert.Equal(new[] { ProductIds.AllModes, ProductIds.Ultimate, "future.product" }.OrderBy(s => s, StringComparer.Ordinal).ToArray(), entry.OwnedProductIds.ToArray());
             Assert.Equal(Ts, entry.SavedAtUnixMs);
-            Assert.Equal(EntitlementSet.AllDefined, entry.GetEntitlements(MonetizationConfig.FullCatalog));
+            Assert.Equal(EntitlementSet.AllDefined, entry.GetEntitlements(MonetizationConfig.FullCatalog, false));
             Assert.NotNull(EntitlementCache.Load(json, Key));
         }
 
@@ -47,7 +47,7 @@ namespace Ballverse.Core.Tests.Monetization
             var entry = EntitlementCache.Load(json, Key);
             Assert.Empty(entry.OwnedProductIds);
             Assert.Equal(-5L, entry.SavedAtUnixMs);
-            Assert.Equal(EntitlementSet.Empty, entry.GetEntitlements(MonetizationConfig.FullCatalog));
+            Assert.Equal(EntitlementSet.Empty, entry.GetEntitlements(MonetizationConfig.FullCatalog, false));
         }
 
         [Fact]

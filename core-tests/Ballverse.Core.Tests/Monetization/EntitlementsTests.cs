@@ -13,19 +13,19 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void NothingOwnedGivesNothing()
         {
-            Assert.Equal(EntitlementSet.Empty, Entitlements.From(new string[0], MonetizationConfig.FullCatalog));
+            Assert.Equal(EntitlementSet.Empty, Entitlements.From(new string[0], MonetizationConfig.FullCatalog, false));
         }
 
         [Fact]
         public void UltimateGivesEverything()
         {
-            Assert.Equal(EntitlementSet.AllDefined, Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog));
+            Assert.Equal(EntitlementSet.AllDefined, Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog, false));
         }
 
         [Fact]
         public void AllModesPlusNoAdsGivesNoWatermarkByParts()
         {
-            var e = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog);
+            var e = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog, false);
             Assert.Equal(EntitlementSet.AllDefined, e);
         }
 
@@ -34,25 +34,25 @@ namespace Ballverse.Core.Tests.Monetization
         {
             var ids = ProductCatalog.All.Where(p => p.Kind != ProductKind.Bundle).Select(p => p.Id).ToList();
             Assert.Equal(12, ids.Count);
-            Assert.True(Entitlements.From(ids, MonetizationConfig.FullCatalog).Contains(Entitlement.NoWatermark));
+            Assert.True(Entitlements.From(ids, MonetizationConfig.FullCatalog, false).Contains(Entitlement.NoWatermark));
             ids.Remove(ProductIds.ModeOrbit);
-            Assert.False(Entitlements.From(ids, MonetizationConfig.FullCatalog).Contains(Entitlement.NoWatermark));
+            Assert.False(Entitlements.From(ids, MonetizationConfig.FullCatalog, false).Contains(Entitlement.NoWatermark));
         }
 
         [Fact]
         public void PartialContentsDoNotGiveNoWatermark()
         {
-            Assert.False(Entitlements.From(new[] { ProductIds.AllModes, ProductIds.RemoveExportAds }, MonetizationConfig.FullCatalog).Contains(Entitlement.NoWatermark));
-            Assert.False(Entitlements.From(new[] { ProductIds.NoAds }, MonetizationConfig.FullCatalog).Contains(Entitlement.NoWatermark));
+            Assert.False(Entitlements.From(new[] { ProductIds.AllModes, ProductIds.RemoveExportAds }, MonetizationConfig.FullCatalog, false).Contains(Entitlement.NoWatermark));
+            Assert.False(Entitlements.From(new[] { ProductIds.NoAds }, MonetizationConfig.FullCatalog, false).Contains(Entitlement.NoWatermark));
         }
 
         [Fact]
         public void WatermarkByPartsCanBeDisabledByConfig()
         {
             var config = new MonetizationConfig(MonetizationConfig.FullCatalog.FreeModes, watermarkByParts: false);
-            var parts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, config);
+            var parts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, config, false);
             Assert.Equal(Full, parts);
-            Assert.True(Entitlements.From(new[] { ProductIds.Ultimate }, config).Contains(Entitlement.NoWatermark));
+            Assert.True(Entitlements.From(new[] { ProductIds.Ultimate }, config, false).Contains(Entitlement.NoWatermark));
         }
 
         [Fact]
@@ -66,21 +66,21 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void UnknownNullAndDuplicateIdsAreIgnored()
         {
-            var e = Entitlements.From(new[] { "ballverse.mode.future_mode", null, "", ProductIds.ModeSmash, ProductIds.ModeSmash, "BALLVERSE.BUNDLE.ULTIMATE" }, MonetizationConfig.FullCatalog);
+            var e = Entitlements.From(new[] { "ballverse.mode.future_mode", null, "", ProductIds.ModeSmash, ProductIds.ModeSmash, "BALLVERSE.BUNDLE.ULTIMATE" }, MonetizationConfig.FullCatalog, false);
             Assert.Equal(Subsets.Mode(ModeCode.M11), e);
         }
 
         [Fact]
         public void NullListThrows()
         {
-            Assert.Throws<ArgumentNullException>(() => Entitlements.From(null, MonetizationConfig.FullCatalog));
+            Assert.Throws<ArgumentNullException>(() => Entitlements.From(null, MonetizationConfig.FullCatalog, false));
         }
 
         [Fact]
         public void OrderDoesNotMatter()
         {
-            var a = Entitlements.From(new[] { ProductIds.NoAds, ProductIds.ModeOrbit, ProductIds.AllModes }, MonetizationConfig.FullCatalog);
-            var b = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.ModeOrbit, ProductIds.NoAds }, MonetizationConfig.FullCatalog);
+            var a = Entitlements.From(new[] { ProductIds.NoAds, ProductIds.ModeOrbit, ProductIds.AllModes }, MonetizationConfig.FullCatalog, false);
+            var b = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.ModeOrbit, ProductIds.NoAds }, MonetizationConfig.FullCatalog, false);
             Assert.Equal(a, b);
         }
 
@@ -92,7 +92,7 @@ namespace Ballverse.Core.Tests.Monetization
             for (int mask = 0; mask < Subsets.Count; mask++)
             {
                 var ids = Subsets.Ids(mask);
-                var e = Entitlements.From(ids, MonetizationConfig.FullCatalog);
+                var e = Entitlements.From(ids, MonetizationConfig.FullCatalog, false);
 
                 // Exact union of direct grants, recomputed independently.
                 var union = EntitlementSet.Empty;
@@ -114,13 +114,13 @@ namespace Ballverse.Core.Tests.Monetization
                 // NO_WATERMARK iff Ultimate or the full contents.
                 bool nw = Subsets.Has(mask, ProductIds.Ultimate) || union.IsSupersetOf(Full);
                 Assert.Equal(nw, e.Contains(Entitlement.NoWatermark));
-                Assert.Equal(Subsets.Has(mask, ProductIds.Ultimate), Entitlements.From(ids, noParts).Contains(Entitlement.NoWatermark));
+                Assert.Equal(Subsets.Has(mask, ProductIds.Ultimate), Entitlements.From(ids, noParts, false).Contains(Entitlement.NoWatermark));
 
                 // Monotone: owning more never removes a right.
                 if (mask != 0)
                 {
                     int lower = mask & (mask - 1);
-                    Assert.True(e.IsSupersetOf(Entitlements.From(Subsets.Ids(lower), MonetizationConfig.FullCatalog)));
+                    Assert.True(e.IsSupersetOf(Entitlements.From(Subsets.Ids(lower), MonetizationConfig.FullCatalog, false)));
                 }
             }
         }

@@ -26,7 +26,7 @@ namespace Ballverse.Core.Tests.Monetization
 
         static bool Gf(MonetizationConfig config, params PurchaseRecord[] records)
         {
-            return WatermarkGrandfathering.Update(false, records, config);
+            return WatermarkGrandfathering.FromStore(records, config);
         }
 
         static bool HasNw(MonetizationConfig config, params PurchaseRecord[] records)
@@ -59,7 +59,7 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.True(oldDevice);
             var oldEnt = Entitlements.From(OwnedProducts.From(records), Later, oldDevice);
 
-            bool newDevice = WatermarkGrandfathering.Update(false, records, Later);
+            bool newDevice = WatermarkGrandfathering.FromStore(records, Later);
             Assert.True(newDevice);
             var newEnt = Entitlements.From(OwnedProducts.From(records), Later, newDevice);
             Assert.Equal(oldEnt, newEnt);
@@ -126,10 +126,11 @@ namespace Ballverse.Core.Tests.Monetization
         }
 
         [Fact]
-        public void FlagIsNeverCleared_UnknownIdsIgnored_OrderIndependent()
+        public void DerivedFromStoreDataAlone_UnknownIdsIgnored_OrderIndependent()
         {
-            Assert.True(WatermarkGrandfathering.Update(true, new PurchaseRecord[0], Later));
-            Assert.True(WatermarkGrandfathering.Update(true, new PurchaseRecord[0], MonetizationConfig.FullCatalog));
+            // A complete store read replaces the cached flag: no ad purchase, no flag (it never granted anything alone).
+            Assert.False(WatermarkGrandfathering.FromStore(new PurchaseRecord[0], Later));
+            Assert.False(WatermarkGrandfathering.FromStore(new PurchaseRecord[0], R1));
             Assert.False(Gf(Later, P("ballverse.future.ads", Before), P(null, Before), P("", Before)));
 
             var records = new[]
@@ -144,8 +145,8 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void NullArguments()
         {
-            Assert.Throws<ArgumentNullException>(() => WatermarkGrandfathering.Update(false, (IEnumerable<PurchaseRecord>)null, Later));
-            Assert.Throws<ArgumentNullException>(() => WatermarkGrandfathering.Update(false, new PurchaseRecord[0], null));
+            Assert.Throws<ArgumentNullException>(() => WatermarkGrandfathering.FromStore((IEnumerable<PurchaseRecord>)null, Later));
+            Assert.Throws<ArgumentNullException>(() => WatermarkGrandfathering.FromStore(new PurchaseRecord[0], null));
         }
 
         [Fact]
@@ -172,9 +173,9 @@ namespace Ballverse.Core.Tests.Monetization
                 bool oldGf = WatermarkGrandfathering.Update(false, owned, R1);
                 foreach (var c in laterConfigs)
                 {
-                    bool newGf = WatermarkGrandfathering.Update(false, pre, c);
+                    bool newGf = WatermarkGrandfathering.FromStore(pre, c);
                     Assert.Equal(oldGf, newGf);
-                    Assert.False(WatermarkGrandfathering.Update(false, post, c));
+                    Assert.False(WatermarkGrandfathering.FromStore(post, c));
                     if ((mask & 7) == 0)
                         Assert.Equal(Entitlements.From(owned, c, oldGf), Entitlements.From(OwnedProducts.From(pre), c, newGf));
                 }

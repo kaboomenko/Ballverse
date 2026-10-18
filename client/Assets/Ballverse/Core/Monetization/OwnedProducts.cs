@@ -28,7 +28,7 @@ namespace Ballverse.Core.Monetization
         /// <summary>
         /// Store purchase time, Unix ms (StoreKit originalPurchaseDate / Play purchaseTime), or null when the bridge did not
         /// supply it. Restorable on any device; used only to grandfather the release-1 No Ads watermark rule
-        /// (<see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/>).
+        /// (<see cref="WatermarkGrandfathering.FromStore"/>).
         /// </summary>
         public long? PurchaseTimeUnixMs { get; }
 

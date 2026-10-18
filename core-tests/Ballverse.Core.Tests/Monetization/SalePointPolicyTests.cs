@@ -10,7 +10,7 @@ namespace Ballverse.Core.Tests.Monetization
     public class SalePointPolicyTests
     {
         static readonly EntitlementSet Nothing = EntitlementSet.Empty;
-        static readonly EntitlementSet WithWatermark = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog);
+        static readonly EntitlementSet WithWatermark = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog, false);
 
         // ---- Done screen: "Не чаще 1 раза в 3 экспорта, не в первые 2 экспорта" ----
 
@@ -153,10 +153,10 @@ namespace Ballverse.Core.Tests.Monetization
         public void DoneScreenLine_NotShownWithNoWatermark()
         {
             Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(3, null, WithWatermark));
-            var byParts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog);
+            var byParts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog, false);
             Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(3, null, byParts));
             // All Modes alone does not remove the watermark: the line still shows.
-            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, Entitlements.From(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog)));
+            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, Entitlements.From(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog, false)));
         }
 
         [Fact]
@@ -192,11 +192,11 @@ namespace Ballverse.Core.Tests.Monetization
             // 9 singles: Ultimate hidden as CheaperViaParts; the line opens the missing parts instead (spec §5.2).
             var owned = ProductCatalog.All.Where(p => p.Kind == ProductKind.SingleMode && p.Mode != ModeCode.M15)
                 .Select(p => p.Id).ToArray();
-            var e = Entitlements.From(owned, MonetizationConfig.FullCatalog);
+            var e = Entitlements.From(owned, MonetizationConfig.FullCatalog, false);
             Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, e));
-            var target = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog).Select(o => o.ProductId).ToArray();
+            var target = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, null, false).Select(o => o.ProductId).ToArray();
             Assert.DoesNotContain(ProductIds.Ultimate, target);
-            Assert.Contains(Entitlement.NoWatermark, Entitlements.From(owned.Concat(target), MonetizationConfig.FullCatalog).ToArray());
+            Assert.Contains(Entitlement.NoWatermark, Entitlements.From(owned.Concat(target), MonetizationConfig.FullCatalog, false).ToArray());
         }
 
         // ---- Trial preview: "По умолчанию включено (вопрос В2), 1 демо на режим в сутки" ----
@@ -267,7 +267,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void TrialPreview_ResultPrecedence()
         {
-            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog);
+            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog, false);
             // NotPaid wins over everything.
             Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M01, Nothing, 5, 5, MonetizationConfig.FullCatalog, trialEnabled: false));
             // NotLocked wins over Disabled and UsedToday.
@@ -303,7 +303,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void TrialPreview_PlayableModesNeedNoDemo()
         {
-            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog);
+            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog, false);
             Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, null, 1, MonetizationConfig.FullCatalog));
             Assert.Equal(TrialPreviewAccess.NotLocked,
                 SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 1, MonetizationConfig.FullCatalog, true, new[] { ModeCode.M08 }));
@@ -330,7 +330,7 @@ namespace Ballverse.Core.Tests.Monetization
         static FirstVideoQuestScreen Quest(bool alreadyShown, IEnumerable<string> owned, bool interstitial = false,
             MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null)
         {
-            return SalePointPolicy.FirstVideoQuest(alreadyShown, owned, config ?? MonetizationConfig.FullCatalog, interstitial, grandfathered);
+            return SalePointPolicy.FirstVideoQuest(alreadyShown, owned, config ?? MonetizationConfig.FullCatalog, interstitial, grandfathered, false);
         }
 
         [Fact]
@@ -350,7 +350,7 @@ namespace Ballverse.Core.Tests.Monetization
             // §4.3 "без давления": no visual priority, unlike the paid-card sheet where All Modes is emphasized.
             Assert.False(Quest(false, new string[0]).Offer.Emphasized);
             Assert.False(Quest(false, new[] { ProductIds.ModeColorWar }).Offer.Emphasized);
-            Assert.True(Storefront.ModeSheet(ModeCode.M06, new string[0], MonetizationConfig.FullCatalog).Single(o => o.ProductId == ProductIds.AllModes).Emphasized);
+            Assert.True(Storefront.ModeSheet(ModeCode.M06, new string[0], MonetizationConfig.FullCatalog, null, false).Single(o => o.ProductId == ProductIds.AllModes).Emphasized);
         }
 
         [Fact]
@@ -367,7 +367,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void FirstVideoQuestScreen_RejectsEmphasizedOffer()
         {
-            var offer = Storefront.Build(new string[0], MonetizationConfig.FullCatalog).Get(ProductIds.AllModes);
+            var offer = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, null, false).Get(ProductIds.AllModes);
             Assert.Throws<ArgumentException>(() => new FirstVideoQuestScreen(offer.WithEmphasis(true)));
             var screen = new FirstVideoQuestScreen(offer.WithEmphasis(false));
             Assert.True(screen.ShowOffer);
@@ -438,7 +438,7 @@ namespace Ballverse.Core.Tests.Monetization
                 Assert.False(Quest(false, owned, interstitial: true).ShowOffer);
                 if ((mask & 0x3F) != 0) continue; // the storefront comparison below on 1/64 of the subsets keeps this fast
                 var screen = Quest(false, owned);
-                var all = Storefront.Build(owned, MonetizationConfig.FullCatalog).Get(ProductIds.AllModes);
+                var all = Storefront.Build(owned, MonetizationConfig.FullCatalog, null, false).Get(ProductIds.AllModes);
                 Assert.Equal(all.Visible, screen.ShowOffer);
                 if (screen.ShowOffer)
                 {
@@ -487,8 +487,8 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void FirstVideoQuest_NullOwnedThrows()
         {
-            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(false, null, MonetizationConfig.FullCatalog));
-            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(true, null, MonetizationConfig.FullCatalog));
+            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(false, null, MonetizationConfig.FullCatalog, false, null, false));
+            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(true, null, MonetizationConfig.FullCatalog, false, null, false));
         }
     }
 }

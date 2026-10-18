@@ -105,8 +105,8 @@ namespace Ballverse.Core.Monetization
         /// <exception cref="ArgumentNullException"><paramref name="ownedProductIds"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">A negative export number.</exception>
         public static IReadOnlyList<StorefrontOffer> DoneScreenLineOffers(int completedExports, int? lastShownAtExport,
-            IEnumerable<string> ownedProductIds, MonetizationConfig config, IEnumerable<ModeCode> grandfathered = null,
-            bool watermarkGrandfathered = false, bool watermarkEnabled = true, bool interstitialJustShown = false)
+            IEnumerable<string> ownedProductIds, MonetizationConfig config, IEnumerable<ModeCode> grandfathered,
+            bool watermarkGrandfathered, bool watermarkEnabled = true, bool interstitialJustShown = false)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
             if (config == null) throw new ArgumentNullException(nameof(config));
@@ -203,8 +203,8 @@ namespace Ballverse.Core.Monetization
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static FirstVideoQuestScreen FirstVideoQuest(bool alreadyShown, IEnumerable<string> ownedProductIds,
-            MonetizationConfig config, bool interstitialJustShown = false, IEnumerable<ModeCode> grandfathered = null,
-            bool watermarkGrandfathered = false)
+            MonetizationConfig config, bool interstitialJustShown, IEnumerable<ModeCode> grandfathered,
+            bool watermarkGrandfathered)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
             if (config == null) throw new ArgumentNullException(nameof(config));

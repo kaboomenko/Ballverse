@@ -5,39 +5,41 @@ namespace Ballverse.Core.Monetization
 {
     /// <summary>
     /// Keeps NO_WATERMARK for users who obtained it under the release-1 No Ads rule
-    /// (<see cref="MonetizationConfig.WatermarkWithNoAds"/>) after a later release turns the rule off, like grandfathered free
-    /// modes (spec §5.1 <c>grandfathered_modes</c>). Pure functions.
+    /// (<see cref="MonetizationConfig.WatermarkWithNoAds"/>) after the rule is turned off, like grandfathered free modes
+    /// (spec §5.1 <c>grandfathered_modes</c>). Pure functions.
     /// <para>
-    /// Two sources, so a reinstall or a second device never loses the paid right:
-    /// <list type="bullet">
-    /// <item>Store data (authoritative, restorable anywhere): ad products whose store purchase time
+    /// The flag is derived from store data (authoritative, restorable anywhere), so every device with the same purchases
+    /// and a build that knows the cutoff gets the same flag: ad products whose store purchase time
     /// (<see cref="PurchaseRecord.PurchaseTimeUnixMs"/>) is before <see cref="MonetizationConfig.WatermarkWithNoAdsEndedAtUnixMs"/>
-    /// were bought under the rule; see <see cref="Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/>.</item>
-    /// <item>A caller-persisted local flag (e.g. <c>watermark_no_ads_grandfathered</c>), a cache of the result that also
-    /// covers offline launches from the entitlement cache.</item>
-    /// </list>
+    /// were bought under the rule (<see cref="FromStore"/>). The caller persists the result (e.g.
+    /// <c>watermark_no_ads_grandfathered</c>) only as a cache for launches without a complete store read.
     /// </para>
     /// <para>
-    /// Lifecycle: on every store read (launch, purchase, restore) call the <see cref="PurchaseRecord"/> overload with the
-    /// persisted flag and persist the result; offline, the product-id overload keeps the flag. Pass the flag to
+    /// Lifecycle: after every complete store read (launch, purchase, restore finished) persist <see cref="FromStore"/>,
+    /// replacing the stored value; without one (offline, store unavailable, restore not finished) keep the stored value with
+    /// <see cref="Update(bool, IEnumerable{string}, MonetizationConfig)"/>, which never clears it. Pass the flag to
     /// <see cref="Entitlements.From"/>, <see cref="Storefront.Build"/> and the other storefront functions.
     /// </para>
     /// <para>
-    /// Decisions: the flag is never cleared, so a transiently empty owned list (store unavailable, restore not finished)
-    /// cannot wipe it. It keeps the rule, not the right: NO_WATERMARK still requires owning NO_EXPORT_ADS + NO_INTERSTITIALS,
-    /// so a refund brings the watermark back (spec §3.10, §5.4) and re-buying the ad removals restores it. Pending purchases
-    /// never qualify, because they grant nothing (spec §5.4). A purchase without a store time cannot prove it was made under
-    /// the rule and does not qualify by date (the bridges must pass the time). The local flag is not signed: forging it
-    /// gives NO_WATERMARK only to a user who already owns both ad rights, the release-1 price of the right.
+    /// Decisions: the flag keeps the rule, not the right: NO_WATERMARK still requires owning NO_EXPORT_ADS +
+    /// NO_INTERSTITIALS, so a refund brings the watermark back (spec §3.10, §5.4). Re-buying restores it only where the
+    /// rule still applies to the new purchase (before the cutoff, or while no cutoff is known): a refund followed by a
+    /// post-cutoff re-purchase gives no NO_WATERMARK on any device, because the store no longer returns the refunded
+    /// pre-cutoff transaction. Overwriting the cache on a complete read is safe: the flag never grants anything without
+    /// current ad ownership, and a pre-cutoff purchase derives it again on the next read. Pending purchases never qualify,
+    /// because they grant nothing (spec §5.4). A purchase without a store time cannot prove it was made before a known
+    /// cutoff (the bridges must pass the original purchase time). The local flag is not signed: forging it gives
+    /// NO_WATERMARK only to a user who already owns both ad rights, the release-1 price of the right.
     /// </para>
     /// </summary>
     public static class WatermarkGrandfathering
     {
         /// <summary>
-        /// The updated flag to persist: true if it already was, or if <paramref name="config"/> has
-        /// <see cref="MonetizationConfig.WatermarkWithNoAds"/> on and the user owns NO_EXPORT_ADS + NO_INTERSTITIALS (No Ads,
-        /// both ad removals, or Ultimate). Otherwise false. Cannot restore the flag on a new device after the rule is off:
-        /// use the <see cref="PurchaseRecord"/> overload whenever store data is at hand.
+        /// The flag to keep without a complete store read (offline launch from the entitlement cache): true if it already
+        /// was, or if <paramref name="config"/> has <see cref="MonetizationConfig.WatermarkWithNoAds"/> on with no known
+        /// cutoff and the user owns NO_EXPORT_ADS + NO_INTERSTITIALS (No Ads, both ad removals, or Ultimate). Otherwise false.
+        /// Never clears the flag. Product ids carry no purchase time, so once a cutoff is known
+        /// (<see cref="MonetizationConfig.WatermarkWithNoAdsEndedAtUnixMs"/>) only <see cref="FromStore"/> can set it.
         /// </summary>
         /// <param name="grandfathered">The persisted flag (false on first run).</param>
         /// <param name="ownedProductIds">Current owned products (<see cref="OwnedProducts.From"/>); unknown ids ignored.</param>
@@ -53,40 +55,35 @@ namespace Ballverse.Core.Monetization
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
             if (grandfathered) return true;
-            return Entitlements.QualifiesByNoAds(directGrants, config.WatermarkWithNoAds);
+            return !config.WatermarkWithNoAdsEndedAtUnixMs.HasValue
+                && Entitlements.QualifiesByNoAds(directGrants, config.WatermarkWithNoAds);
         }
 
         /// <summary>
-        /// The updated flag to persist, from store transactions (spec §5.4): the product-id rule of
-        /// <see cref="Update(bool, IEnumerable{string}, MonetizationConfig)"/> on the owned products
-        /// (<see cref="OwnedProducts.From"/>), or, when the rule is off and <see cref="MonetizationConfig.WatermarkWithNoAdsEndedAtUnixMs"/>
-        /// is set, true if the currently purchased transactions with a store purchase time strictly before that cutoff
-        /// together grant NO_EXPORT_ADS + NO_INTERSTITIALS (the user had NO_WATERMARK under the rule). A fresh install
-        /// restoring a pre-cutoff No Ads purchase therefore keeps NO_WATERMARK; a post-cutoff purchase, or one ad removal
-        /// before and the other after the cutoff, does not.
+        /// The flag to persist after a complete store read (spec §5.4), derived from the transactions alone (the stored value
+        /// is replaced). With a known cutoff (<see cref="MonetizationConfig.WatermarkWithNoAdsEndedAtUnixMs"/>, rule on or
+        /// off): true if the currently purchased transactions with a store purchase time strictly before the cutoff together
+        /// grant NO_EXPORT_ADS + NO_INTERSTITIALS. Without one: true if the rule is on and the currently purchased products
+        /// grant both ad rights. A fresh install restoring a pre-cutoff No Ads purchase therefore keeps NO_WATERMARK; a
+        /// post-cutoff purchase, or one ad removal before and the other after the cutoff, does not, on every device.
         /// </summary>
-        /// <param name="grandfathered">The persisted flag (false on first run or a new device).</param>
-        /// <param name="records">Store transactions as passed to <see cref="OwnedProducts.From"/>.</param>
+        /// <param name="records">Store transactions as passed to <see cref="OwnedProducts.From"/>, with original purchase times.</param>
         /// <param name="config">Release catalog and rules (required).</param>
-        public static bool Update(bool grandfathered, IEnumerable<PurchaseRecord> records, MonetizationConfig config)
+        public static bool FromStore(IEnumerable<PurchaseRecord> records, MonetizationConfig config)
         {
             if (records == null) throw new ArgumentNullException(nameof(records));
             if (config == null) throw new ArgumentNullException(nameof(config));
-            if (grandfathered) return true;
             var current = OwnedProducts.CurrentPurchased(records);
-            var all = EntitlementSet.Empty;
-            var beforeCutoff = EntitlementSet.Empty;
             long? cutoff = config.WatermarkWithNoAdsEndedAtUnixMs;
+            var qualifying = EntitlementSet.Empty;
             // Unions are order-independent, so the unspecified record order cannot leak.
             foreach (var r in current)
             {
                 if (!ProductCatalog.TryGet(r.ProductId, out var p)) continue;
-                all = all.Union(p.Grants);
-                if (cutoff.HasValue && r.PurchaseTimeUnixMs.HasValue && r.PurchaseTimeUnixMs.Value < cutoff.Value)
-                    beforeCutoff = beforeCutoff.Union(p.Grants);
+                if (!cutoff.HasValue || (r.PurchaseTimeUnixMs.HasValue && r.PurchaseTimeUnixMs.Value < cutoff.Value))
+                    qualifying = qualifying.Union(p.Grants);
             }
-            if (Entitlements.QualifiesByNoAds(all, config.WatermarkWithNoAds)) return true;
-            return !config.WatermarkWithNoAds && Entitlements.QualifiesByNoAds(beforeCutoff, cutoff.HasValue);
+            return Entitlements.QualifiesByNoAds(qualifying, cutoff.HasValue || config.WatermarkWithNoAds);
         }
     }
 }

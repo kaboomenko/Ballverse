@@ -158,12 +158,12 @@ namespace Ballverse.Core.Tests.Monetization
             var c = new MonetizationConfig(new ModeCode[0], true, new string[0], new[] { ModeCode.M01 }, false);
             Assert.Empty(c.SellableProductIds);
             Assert.Equal(EntitlementSet.Empty, c.SellableGrants);
-            var s = Storefront.Build(new string[0], c);
+            var s = Storefront.Build(new string[0], c, null, false);
             Assert.Empty(s.VisibleOffers);
             Assert.True(s.AllPurchased);
             Assert.All(s.Offers, o => Assert.Equal(OfferHiddenReason.NotSellable, o.HiddenReason));
-            Assert.Empty(Storefront.WatermarkOffers(new string[0], c));
-            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(3, null, new string[0], c));
+            Assert.Empty(Storefront.WatermarkOffers(new string[0], c, null, false));
+            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(3, null, new string[0], c, null, false));
         }
     }
 }

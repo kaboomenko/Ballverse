@@ -25,13 +25,13 @@ namespace Ballverse.Core.Tests.Monetization
         public void ModeSheet_LeavesOutTheUnsoldSingle()
         {
             var c = new MonetizationConfig(NoModes, true, ProductIds.All.Where(id => id != ProductIds.ModeOrbit), AllModeCodes, false);
-            var sheet = Storefront.ModeSheet(ModeCode.M14, None, c);
+            var sheet = Storefront.ModeSheet(ModeCode.M14, None, c, null, false);
             Assert.Equal(new[] { ProductIds.AllModes }, Ids(sheet));
             Assert.True(sheet[0].Emphasized);
-            Assert.Equal(OfferHiddenReason.NotSellable, Storefront.Build(None, c).Get(ProductIds.ModeOrbit).HiddenReason);
+            Assert.Equal(OfferHiddenReason.NotSellable, Storefront.Build(None, c, null, false).Get(ProductIds.ModeOrbit).HiddenReason);
             // Only M14 missing: All Modes would be the cheaper-equivalent victim of the single, but the single is not sold.
             var owned = ProductIds.All.Where(id => ProductCatalog.Get(id).Kind == ProductKind.SingleMode && id != ProductIds.ModeOrbit).ToArray();
-            Assert.Equal(new[] { ProductIds.AllModes }, Ids(Storefront.ModeSheet(ModeCode.M14, owned, c)));
+            Assert.Equal(new[] { ProductIds.AllModes }, Ids(Storefront.ModeSheet(ModeCode.M14, owned, c, null, false)));
         }
 
         /// <summary>
@@ -46,7 +46,7 @@ namespace Ballverse.Core.Tests.Monetization
                 released, true);
             Assert.Equal(ModeAccess.Locked, ModeAvailability.GetAccess(ModeCode.M14, EntitlementSet.Empty, null, c));
             Assert.False(c.IsModeSold(ModeCode.M14));
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M14, None, c));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M14, None, c, null, false));
             Assert.Equal(TrialPreviewAccess.NotSold, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, EntitlementSet.Empty, null, 0, c));
         }
 
@@ -57,11 +57,11 @@ namespace Ballverse.Core.Tests.Monetization
             var c = new MonetizationConfig(NoModes, true, new[] { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds },
                 new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05 }, true);
             var expected = new[] { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds };
-            Assert.Equal(expected, Ids(Storefront.WatermarkOffers(None, c)));
-            Assert.Equal(expected, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, c)));
-            Assert.Equal(expected, Ids(Storefront.Build(None, c).VisibleOffers));
+            Assert.Equal(expected, Ids(Storefront.WatermarkOffers(None, c, null, false)));
+            Assert.Equal(expected, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, c, null, false)));
+            Assert.Equal(expected, Ids(Storefront.Build(None, c, null, false).VisibleOffers));
             // After one removal the other one is the last step and removes the watermark on its own.
-            var last = Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, c);
+            var last = Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, c, null, false);
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, Ids(last));
             Assert.True(last[0].IsLastStep);
         }
@@ -96,8 +96,12 @@ namespace Ballverse.Core.Tests.Monetization
 
         // ---- Seeded random-config invariants ----
 
-        static MonetizationConfig RandomConfig(ref Rng rng, out ModeCode[] grandfathered)
+        /// <param name="biased">
+        /// Favours the states behind the QA round-2 stuck Shop: All Modes often unsold, many modes free or grandfathered.
+        /// </param>
+        static MonetizationConfig RandomConfig(ref Rng rng, bool biased, out ModeCode[] grandfathered)
         {
+            uint availableOdds = biased ? 4u : 10u;
             var released = new List<ModeCode> { ModeCode.M01, ModeCode.M02, ModeCode.M05 };
             bool allReleased = rng.NextUInt(3) == 0;
             for (int m = 3; m <= 15; m++)
@@ -112,14 +116,14 @@ namespace Ballverse.Core.Tests.Monetization
                 {
                     if (EntitlementInfo.TryGetMode(e, out var mode) && !released.Contains(mode)) ok = false;
                 }
-                if (ok && rng.NextUInt(4) != 0) sellable.Add(id);
+                if (ok && rng.NextUInt(4) != 0 && !(biased && id == ProductIds.AllModes && rng.NextBool())) sellable.Add(id);
             }
             var free = new List<ModeCode>();
             var g = new List<ModeCode>();
             for (int m = 6; m <= 15; m++)
             {
-                if (rng.NextUInt(10) == 0) free.Add((ModeCode)m);
-                if (rng.NextUInt(10) == 0) g.Add((ModeCode)m);
+                if (rng.NextUInt(availableOdds) == 0) free.Add((ModeCode)m);
+                if (rng.NextUInt(availableOdds) == 0) g.Add((ModeCode)m);
             }
             grandfathered = g.ToArray();
             return new MonetizationConfig(free, rng.NextBool(), sellable, released, rng.NextBool());
@@ -139,12 +143,27 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void RandomPartialReleases_OnlySellableOffers_EverythingReachable()
         {
-            var rng = Rng.FromSeed(0x5E11AB1EUL, 7UL);
-            for (int ci = 0; ci < 300; ci++)
+            CheckRandomPartialReleases(0x5E11AB1EUL, 7UL, 300, 20, false);
+        }
+
+        /// <summary>
+        /// QA round 2: the generator biased toward two or more available modes with All Modes unsold, where an empty Shop
+        /// without "Всё куплено" used to appear (the unbiased run needed 60000 samples to hit it).
+        /// </summary>
+        [Fact]
+        public void RandomPartialReleases_ManyAvailableModes_EverythingReachable()
+        {
+            CheckRandomPartialReleases(0xC0FFEE1234UL, 99UL, 200, 15, true);
+        }
+
+        static void CheckRandomPartialReleases(ulong seed, ulong stream, int configs, int samples, bool biased)
+        {
+            var rng = Rng.FromSeed(seed, stream);
+            for (int ci = 0; ci < configs; ci++)
             {
-                var c = RandomConfig(ref rng, out var g);
+                var c = RandomConfig(ref rng, biased, out var g);
                 var available = AvailableModes(c, g);
-                for (int k = 0; k < 20; k++)
+                for (int k = 0; k < samples; k++)
                 {
                     int mask = (int)rng.NextUInt((uint)Subsets.Count);
                     bool gf = rng.NextBool();

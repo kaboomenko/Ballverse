@@ -15,7 +15,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void NothingOwned_SingleThenEmphasizedAllModes()
         {
-            var offers = Storefront.ModeSheet(ModeCode.M08, new string[0], MonetizationConfig.FullCatalog);
+            var offers = Storefront.ModeSheet(ModeCode.M08, new string[0], MonetizationConfig.FullCatalog, null, false);
             Assert.Equal(new[] { ProductIds.ModeColorWar, ProductIds.AllModes }, Ids(offers));
             Assert.False(offers[0].Emphasized);
             Assert.True(offers[1].Emphasized);
@@ -26,21 +26,21 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void ModeAlreadyOwned_NothingOffered()
         {
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M08, new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog));
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M08, new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog));
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M08, new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M08, new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog, null, false));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M08, new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog, null, false));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M08, new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog, null, false));
         }
 
         [Fact]
         public void FreeModeHasNoProduct()
         {
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M01, new string[0], MonetizationConfig.FullCatalog));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M01, new string[0], MonetizationConfig.FullCatalog, null, false));
         }
 
         [Fact]
         public void OtherModesOwned_AllModesShowsPartialCount()
         {
-            var offers = Storefront.ModeSheet(ModeCode.M15, new[] { ProductIds.ModeOrbit, ProductIds.ModeSmash }, MonetizationConfig.FullCatalog);
+            var offers = Storefront.ModeSheet(ModeCode.M15, new[] { ProductIds.ModeOrbit, ProductIds.ModeSmash }, MonetizationConfig.FullCatalog, null, false);
             Assert.Equal(new[] { ProductIds.ModeLiquidSand, ProductIds.AllModes }, Ids(offers));
             Assert.Equal(2, offers[1].OwnedModeCount);
             Assert.True(offers[1].PartiallyOwned);
@@ -50,7 +50,7 @@ namespace Ballverse.Core.Tests.Monetization
         public void OnlyThisModeMissing_AllModesLeftOut()
         {
             var owned = ProductCatalog.All.Where(p => p.Kind == ProductKind.SingleMode && p.Mode != ModeCode.M15).Select(p => p.Id).ToArray();
-            var offers = Storefront.ModeSheet(ModeCode.M15, owned, MonetizationConfig.FullCatalog);
+            var offers = Storefront.ModeSheet(ModeCode.M15, owned, MonetizationConfig.FullCatalog, null, false);
             Assert.Equal(new[] { ProductIds.ModeLiquidSand }, Ids(offers));
         }
 
@@ -60,11 +60,11 @@ namespace Ballverse.Core.Tests.Monetization
             for (int mask = 0; mask < Subsets.Count; mask += 7)
             {
                 var owned = Subsets.Ids(mask);
-                var e = Entitlements.From(owned, MonetizationConfig.FullCatalog);
+                var e = Entitlements.From(owned, MonetizationConfig.FullCatalog, false);
                 for (int m = 1; m <= 15; m++)
                 {
                     var mode = (ModeCode)m;
-                    var offers = Storefront.ModeSheet(mode, owned, MonetizationConfig.FullCatalog);
+                    var offers = Storefront.ModeSheet(mode, owned, MonetizationConfig.FullCatalog, null, false);
                     if (m <= 5 || e.ContainsMode(mode))
                     {
                         Assert.Empty(offers);
@@ -80,27 +80,27 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void WatermarkOffers_NothingOwned_Ultimate()
         {
-            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(Storefront.WatermarkOffers(new string[0], MonetizationConfig.FullCatalog)));
+            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(Storefront.WatermarkOffers(new string[0], MonetizationConfig.FullCatalog, null, false)));
         }
 
         [Fact]
         public void WatermarkOffers_AllModes_NoAdsLastStep()
         {
-            Assert.Equal(new[] { ProductIds.NoAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog)));
+            Assert.Equal(new[] { ProductIds.NoAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog, null, false)));
         }
 
         [Fact]
         public void WatermarkOffers_PartsPathWhenUltimateHidden()
         {
-            var offers = Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds, ProductIds.ModeSmash }, MonetizationConfig.FullCatalog);
+            var offers = Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds, ProductIds.ModeSmash }, MonetizationConfig.FullCatalog, null, false);
             Assert.Equal(new[] { ProductIds.AllModes, ProductIds.RemoveInterstitialAds }, Ids(offers));
         }
 
         [Fact]
         public void WatermarkOffers_OwnedNoWatermark_Empty()
         {
-            Assert.Empty(Storefront.WatermarkOffers(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog));
-            Assert.Empty(Storefront.WatermarkOffers(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog));
+            Assert.Empty(Storefront.WatermarkOffers(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog, null, false));
+            Assert.Empty(Storefront.WatermarkOffers(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog, null, false));
         }
 
         [Fact]
@@ -109,8 +109,8 @@ namespace Ballverse.Core.Tests.Monetization
             for (int mask = 0; mask < Subsets.Count; mask++)
             {
                 var owned = Subsets.Ids(mask);
-                var offers = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog);
-                if (Entitlements.From(owned, MonetizationConfig.FullCatalog).Contains(Entitlement.NoWatermark))
+                var offers = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, null, false);
+                if (Entitlements.From(owned, MonetizationConfig.FullCatalog, false).Contains(Entitlement.NoWatermark))
                 {
                     Assert.Empty(offers);
                     continue;
@@ -124,7 +124,7 @@ namespace Ballverse.Core.Tests.Monetization
                 else
                 {
                     var all = owned.Concat(offers.Select(o => o.ProductId)).ToList();
-                    Assert.True(Entitlements.From(all, MonetizationConfig.FullCatalog).Contains(Entitlement.NoWatermark));
+                    Assert.True(Entitlements.From(all, MonetizationConfig.FullCatalog, false).Contains(Entitlement.NoWatermark));
                 }
             }
         }

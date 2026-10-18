@@ -20,26 +20,26 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void LastStep_NotOnAFirstPurchase()
         {
-            var noAds = Storefront.Build(None, MonetizationConfig.Release1).Get(ProductIds.NoAds);
+            var noAds = Storefront.Build(None, MonetizationConfig.Release1, null, false).Get(ProductIds.NoAds);
             Assert.True(noAds.RemovesWatermark);
             Assert.False(noAds.IsLastStep);
 
             var ruleOn = MonetizationConfig.FullCatalog.WithWatermarkWithNoAds(true);
-            var s = Storefront.Build(None, ruleOn);
+            var s = Storefront.Build(None, ruleOn, null, false);
             Assert.True(s.Get(ProductIds.NoAds).RemovesWatermark);
             Assert.False(s.Get(ProductIds.NoAds).IsLastStep);
             // Owning a mode does not start the ad set: No Ads is still a first ad purchase.
-            Assert.False(Storefront.Build(new[] { ProductIds.ModeOrbit }, ruleOn).Get(ProductIds.NoAds).IsLastStep);
+            Assert.False(Storefront.Build(new[] { ProductIds.ModeOrbit }, ruleOn, null, false).Get(ProductIds.NoAds).IsLastStep);
         }
 
         [Fact]
         public void LastStep_CompletesAStartedSet()
         {
             // Release 1: the missing ad removal.
-            var r1 = Storefront.Build(new[] { ProductIds.RemoveExportAds }, MonetizationConfig.Release1);
+            var r1 = Storefront.Build(new[] { ProductIds.RemoveExportAds }, MonetizationConfig.Release1, null, false);
             Assert.True(r1.Get(ProductIds.RemoveInterstitialAds).IsLastStep);
             // Full catalog §5.2 "All Modes | No Ads как «последний шаг»".
-            var full = Storefront.Build(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog);
+            var full = Storefront.Build(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog, null, false);
             Assert.True(full.Get(ProductIds.NoAds).IsLastStep);
             // Grandfathered user in a later release: the missing removal completes the ad set.
             var gf = Storefront.Build(new[] { ProductIds.RemoveExportAds }, MonetizationConfig.FullCatalog, null, true);
@@ -61,9 +61,9 @@ namespace Ballverse.Core.Tests.Monetization
                 Ids(SalePointPolicy.DoneScreenLineOffers(3, null, owned, c, null, true)));
 
             var ruleOn = MonetizationConfig.FullCatalog.WithWatermarkWithNoAds(true);
-            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, ruleOn)));
+            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, ruleOn, null, false)));
             // Single standalone remover: unchanged.
-            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, c)));
+            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, c, null, false)));
         }
 
         /// <summary>

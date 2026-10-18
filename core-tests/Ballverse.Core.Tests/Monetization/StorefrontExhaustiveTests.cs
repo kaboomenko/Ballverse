@@ -213,11 +213,11 @@ namespace Ballverse.Core.Tests.Monetization
                     shuffled[j] = t;
                 }
                 if (shuffled.Count > 0) shuffled.Add(shuffled[0]);
-                var a = Storefront.Build(ids, MonetizationConfig.FullCatalog);
-                var b = Storefront.Build(shuffled, MonetizationConfig.FullCatalog);
+                var a = Storefront.Build(ids, MonetizationConfig.FullCatalog, null, false);
+                var b = Storefront.Build(shuffled, MonetizationConfig.FullCatalog, null, false);
                 Assert.Equal(a.Offers.Select(Describe), b.Offers.Select(Describe));
-                var r1a = Storefront.Build(ids, MonetizationConfig.Release1);
-                var r1b = Storefront.Build(shuffled, MonetizationConfig.Release1);
+                var r1a = Storefront.Build(ids, MonetizationConfig.Release1, null, false);
+                var r1b = Storefront.Build(shuffled, MonetizationConfig.Release1, null, false);
                 Assert.Equal(r1a.Offers.Select(Describe), r1b.Offers.Select(Describe));
             }
         }
