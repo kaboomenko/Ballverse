@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Ballverse.App;
+using Ballverse.Platform;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -92,7 +93,7 @@ namespace Ballverse.Tests
         public void SafeAreaConvertsUnityBottomLeftRectToEdgeInsets()
         {
             // 1080x2400 portrait phone: 120 px status bar/notch at the top, 60 px home indicator at the bottom.
-            var insets = SafeAreaInsets.FromUnityRect(new Rect(0f, 60f, 1080f, 2220f), 1080, 2400);
+            var insets = SafeAreaProvider.FromUnityRect(new Rect(0f, 60f, 1080f, 2220f), 1080, 2400);
             Assert.AreEqual(0, insets.Left);
             Assert.AreEqual(0, insets.Right);
             Assert.AreEqual(120, insets.Top);
@@ -100,9 +101,52 @@ namespace Ballverse.Tests
             Assert.AreEqual(0.05f, insets.TopNormalized, 1e-6f);
             Assert.AreEqual(0.025f, insets.BottomNormalized, 1e-6f);
 
-            var clipped = SafeAreaInsets.FromUnityRect(new Rect(-10f, -10f, 2000f, 3000f), 1080, 2400);
+            var clipped = SafeAreaProvider.FromUnityRect(new Rect(-10f, -10f, 2000f, 3000f), 1080, 2400);
             Assert.AreEqual(new SafeAreaInsets(1080, 2400, 0, 0, 0, 0), clipped);
-            Assert.IsTrue(SafeAreaInsets.FromUnityRect(new Rect(0f, 0f, 10f, 10f), 0, 0).IsEmpty);
+            Assert.IsTrue(SafeAreaProvider.FromUnityRect(new Rect(0f, 0f, 10f, 10f), 0, 0).IsEmpty);
+        }
+
+        [Test]
+        public void SafeAreaRoundsLikeUnityAndClipsInvertedRects()
+        {
+            // Mathf.RoundToInt rounds .5 to even: 60.5 -> 60, 61.5 -> 62.
+            var insets = SafeAreaInsets.FromBottomLeftRect(0f, 60.5f, 1080f, 2338.5f, 1080, 2400);
+            Assert.AreEqual(60, insets.Bottom);
+            Assert.AreEqual(2400 - 2338, insets.Top);
+            // xMax below xMin collapses to an empty safe width instead of negative insets.
+            var inverted = SafeAreaInsets.FromBottomLeftRect(500f, 0f, 100f, 2400f, 1080, 2400);
+            Assert.AreEqual(500, inverted.Left);
+            Assert.AreEqual(580, inverted.Right);
+            Assert.AreEqual(new SafeAreaInsets(0, 0, 0, 0, 0, 0), SafeAreaInsets.FromBottomLeftRect(float.NaN, 0f, 1f, 1f, -1, 10));
+        }
+
+        [Test]
+        public void PlatformContractsLiveInAnEngineFreeAssemblyWithoutProjectReferences()
+        {
+            // Feature assemblies (UI, Services, Media, Studio, Sim, Audio) reference Ballverse.Platform; Ballverse.App
+            // references them, so the contracts must not live in App (cyclic asmdef) and must not pull in the engine.
+            System.Reflection.Assembly contracts = typeof(IScreenAwake).Assembly;
+            Assert.AreEqual("Ballverse.Platform", contracts.GetName().Name);
+            foreach (Type t in new[] { typeof(IAppLifecycle), typeof(IFrameRatePolicy), typeof(ISafeAreaProvider), typeof(SafeAreaInsets), typeof(IAppPaths) })
+                Assert.AreSame(contracts, t.Assembly, t.Name);
+            foreach (System.Reflection.AssemblyName reference in contracts.GetReferencedAssemblies())
+            {
+                StringAssert.DoesNotStartWith("UnityEngine", reference.Name);
+                StringAssert.DoesNotStartWith("UnityEditor", reference.Name);
+                StringAssert.DoesNotStartWith("Ballverse", reference.Name);
+            }
+        }
+
+        [Test]
+        public void ProjectsFolderMatchesTheCoreProjectStoreLayout()
+        {
+            // Core's project store (Ballverse.Core.Projects.ProjectPaths.ProjectsRoot) owns the layout; looked up by
+            // reflection so this assembly also compiles against a Core without the Projects module.
+            Type projectPaths = typeof(Ballverse.Core.Rng).Assembly.GetType("Ballverse.Core.Projects.ProjectPaths", false);
+            if (projectPaths == null) Assert.Ignore("Ballverse.Core.Projects is not part of this Core yet.");
+            System.Reflection.FieldInfo root = projectPaths.GetField("ProjectsRoot", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            Assert.IsNotNull(root, "ProjectPaths.ProjectsRoot");
+            Assert.AreEqual(root.GetValue(null), AppPaths.ProjectsDirName);
         }
 
         [Test]

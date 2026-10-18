@@ -9,10 +9,27 @@ namespace Ballverse.Editor
     /// unity-builder passes to a custom build method (-customBuildPath, -buildVersion, -androidVersionCode,
     /// -androidKeystoreName/-Pass, -androidKeyaliasName/-Pass, -androidTargetSdkVersion) plus Ballverse options
     /// passed through customParameters (-iosTeamId, -iosProvisioningProfileId, -iosProvisioningProfileType,
-    /// -iosBuildNumber, -ballverseDevelopment). Empty values (GameCI passes "" for unset inputs) count as absent.
+    /// -iosBuildNumber, -ballverseDevelopment, -ballverseAllowTestAds). Empty values (GameCI passes "" for unset
+    /// inputs) count as absent.
+    /// <para>The options in <see cref="IsValueOption"/> always take the next argument as their value, even when it starts
+    /// with '-' (a keystore password such as "-Secr3t"). Other options take the next argument unless it looks like an
+    /// option itself, so bare flags (-batchmode, -quit) work.</para>
     /// </summary>
     public sealed class BuildArgs
     {
+        static readonly HashSet<string> s_valueOptions = new HashSet<string>(StringComparer.Ordinal)
+        {
+            // GameCI unity-builder (passed as separate argv entries, values may be "" or start with '-').
+            "customBuildName", "customBuildPath", "customBuildTarget", "customBuildProfile", "buildVersion",
+            "androidVersionCode", "androidKeystoreName", "androidKeystorePass", "androidKeyaliasName",
+            "androidKeyaliasPass", "androidTargetSdkVersion", "androidExportType", "androidSymbolType",
+            // Ballverse customParameters.
+            "iosTeamId", "iosProvisioningProfileId", "iosProvisioningProfileType", "iosBuildNumber",
+        };
+
+        /// <summary>True for options that always consume the following argument as their value.</summary>
+        public static bool IsValueOption(string key) => key != null && s_valueOptions.Contains(key);
+
         readonly Dictionary<string, string> _values;
 
         BuildArgs(Dictionary<string, string> values)
@@ -33,7 +50,7 @@ namespace Ballverse.Editor
                     if (string.IsNullOrEmpty(token) || token.Length < 2 || token[0] != '-') continue;
                     string key = token.Substring(1);
                     string value = string.Empty;
-                    if (i + 1 < args.Count && !IsOption(args[i + 1]))
+                    if (i + 1 < args.Count && (IsValueOption(key) || !IsOption(args[i + 1])))
                     {
                         value = args[i + 1] ?? string.Empty;
                         i++;

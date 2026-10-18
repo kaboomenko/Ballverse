@@ -16,8 +16,8 @@ namespace Ballverse.Editor
     /// <summary>
     /// Brings the Unity project to the state release 1 needs, idempotently: URP 2D pipeline asset assigned in
     /// Graphics and Quality settings, the boot scene with its Bootstrap object, build scene list, player settings
-    /// (identity, portrait only, linear colour, Android/iOS targets) and the AdMob app ids the ads plugin requires
-    /// to build. Every build runs it first, so a fresh checkout (no generated assets committed yet) builds in CI.
+    /// (identity, portrait only, linear colour, GPU minimum, Android/iOS targets) and the AdMob app ids the ads plugin
+    /// requires to build (sample ids for development builds; see <see cref="AdMobDefaults"/>). Every build runs it first, so a fresh checkout (no generated assets committed yet) builds in CI.
     /// Run it in the Editor with Ballverse > Project Setup and commit what it creates.
     /// </summary>
     public static class ProjectSetup
@@ -37,6 +37,8 @@ namespace Ballverse.Editor
 
         /// <summary>Android 8.0 (spec §8.1).</summary>
         public const int AndroidMinSdk = 26;
+        /// <summary>android:appCategory; "game" keeps the portrait lock on Android 16 tablets and foldables (spec §8.1).</summary>
+        public const string AndroidCategory = "game";
         /// <summary>iOS 16 (spec §8.1).</summary>
         public const string IosMinVersion = "16.0";
 
@@ -245,6 +247,10 @@ namespace Ballverse.Editor
             PlayerSettings.SetScriptingBackend(NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             PlayerSettings.Android.minSdkVersion = (AndroidSdkVersions)AndroidMinSdk;
+            // Minimum GPU (spec §8.1): OpenGL ES 3.1 (or Vulkan 1.1); keeps ES 3.0-only devices out of the Play listing.
+            PlayerSettings.openGLRequireES31 = true;
+            // Android 16 (target API 36) ignores the portrait lock on large screens unless the app is a game.
+            PlayerSettings.Android.appCategory = AndroidCategory;
 
             // iOS: IL2CPP (the only backend), iOS 16+, device SDK.
             PlayerSettings.SetScriptingBackend(NamedBuildTarget.iOS, ScriptingImplementation.IL2CPP);

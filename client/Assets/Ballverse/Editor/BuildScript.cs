@@ -8,16 +8,6 @@ using UnityEngine;
 
 namespace Ballverse.Editor
 {
-    public enum BuildKind
-    {
-        /// <summary>Development APK for sideloading on a test phone (debug keystore unless a keystore is passed).</summary>
-        AndroidApk = 0,
-        /// <summary>Release Android App Bundle for Google Play (needs an upload keystore to be accepted by Play).</summary>
-        AndroidAab = 1,
-        /// <summary>Xcode project; signing and the actual iPhone build happen in Xcode or the macOS CI job.</summary>
-        IosXcode = 2,
-    }
-
     /// <summary>
     /// Player builds for CI (GameCI unity-builder "buildMethod") and the Ballverse > Build menu.
     /// Each build runs <see cref="ProjectSetup.Run"/> first, so a fresh checkout builds without generated assets.
@@ -89,7 +79,9 @@ namespace Ballverse.Editor
                 !EditorUserBuildSettings.SwitchActiveBuildTarget(group, target))
                 throw new InvalidOperationException("Could not switch the active build target to " + target + ".");
 
+            bool development = BuildPolicy.IsDevelopment(kind, args);
             ProjectSetup.Run();
+            CheckReleaseAdIds(target, development, args);
             ApplyVersion(args);
             if (target == BuildTarget.Android) ApplyAndroid(kind, args);
             else ApplyIos(args);
@@ -103,7 +95,6 @@ namespace Ballverse.Editor
             string parent = Path.GetDirectoryName(Path.GetFullPath(output));
             if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
 
-            bool development = args.GetBool("ballverseDevelopment") ?? kind == BuildKind.AndroidApk;
             var options = new BuildPlayerOptions
             {
                 scenes = scenes,
@@ -117,6 +108,17 @@ namespace Ballverse.Editor
             BuildReport report = BuildPipeline.BuildPlayer(options);
             LogSummary(kind, report);
             return report;
+        }
+
+        static void CheckReleaseAdIds(BuildTarget target, bool development, BuildArgs args)
+        {
+            if (development) return;
+            bool allow = args.GetBool(BuildPolicy.AllowTestAdsOption) == true;
+            (string android, string ios)? ids = AdMobDefaults.ReadAppIds();
+            string problem = BuildPolicy.ReleaseAdIdsProblem(target, false, allow, ids);
+            if (problem != null) throw new InvalidOperationException(problem);
+            if (allow && ids.HasValue && BuildPolicy.IsGoogleSampleId(target == BuildTarget.iOS ? ids.Value.ios : ids.Value.android))
+                Debug.LogWarning("[Ballverse] Release build with Google's sample AdMob app id (-" + BuildPolicy.AllowTestAdsOption + "): it serves test ads only and must not be published to the store.");
         }
 
         static string DefaultOutput(BuildKind kind)

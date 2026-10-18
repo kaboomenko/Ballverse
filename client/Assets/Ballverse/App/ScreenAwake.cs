@@ -1,23 +1,10 @@
 using System;
 using System.Collections.Generic;
+using Ballverse.Platform;
 
 namespace Ballverse.App
 {
-    /// <summary>
-    /// Keeps the screen on while at least one holder needs it (live simulation, preview playback, export).
-    /// Holders take a token and dispose it when done; the screen goes back to the system sleep setting
-    /// when the last token is released.
-    /// </summary>
-    public interface IScreenAwake
-    {
-        bool IsKeptAwake { get; }
-
-        /// <summary>Reasons of the tokens currently held, for diagnostics.</summary>
-        IReadOnlyCollection<string> ActiveReasons { get; }
-
-        IDisposable Acquire(string reason);
-    }
-
+    /// <summary><see cref="IScreenAwake"/> with reference-counted tokens; applies on/off through a callback (<see cref="UnityApply"/> on device).</summary>
     public sealed class ScreenAwake : IScreenAwake
     {
         readonly Action<bool> _apply;

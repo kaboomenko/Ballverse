@@ -2,17 +2,25 @@ name: Unity iOS
 
 # 1) "Xcode project" (ubuntu): Unity exports the iOS Xcode project (IL2CPP, iOS 16+) and uploads it as a .tar.gz
 #    artifact (tar keeps the executable bits Xcode build scripts need). Open it on a Mac: docs/dev/unity.md.
-# 2) "Archive" (macOS, manual dispatch with archive = true): installs CocoaPods dependencies and archives the project.
-#    With the signing secrets it produces a signed IPA; without them an unsigned .xcarchive (compile check only).
+# 2) "Archive" (macOS, manual dispatch with archive = true): selects the newest Xcode 26, installs CocoaPods
+#    dependencies and archives the project. With the signing secrets it produces a signed IPA; without them an unsigned
+#    .xcarchive (compile check only). With an App Store provisioning profile and the App Store Connect API key secrets
+#    the IPA is uploaded to TestFlight (no Mac needed to install: TestFlight app on the iPhone).
 # Secrets: UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD (required; jobs are skipped with a notice without them).
 # Signing (optional, all four together): IOS_P12_BASE64, IOS_P12_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64, APPLE_TEAM_ID.
 # APPLE_TEAM_ID alone switches the Xcode project to automatic signing with that team.
+# TestFlight upload (optional, all three together): ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_BASE64.
+# Release (App Store profile) builds refuse Google's sample AdMob app id unless allow_test_ads is ticked (spec §8.9).
 
 on:
   workflow_dispatch:
     inputs:
       archive:
-        description: "Also archive on macOS (signed IPA if signing secrets exist, unsigned archive otherwise)"
+        description: "Also archive on macOS (signed IPA if signing secrets exist, unsigned archive otherwise; TestFlight upload with an App Store profile and ASC_* secrets)"
+        type: boolean
+        default: false
+      allow_test_ads:
+        description: "Allow Google's sample AdMob app id in an App Store/TestFlight build (test ads only; never for a store release)"
         type: boolean
         default: false
   push:
@@ -40,6 +48,7 @@ jobs:
     outputs:
       ready: ${{ steps.check.outputs.ready }}
       signing: ${{ steps.check.outputs.signing }}
+      testflight: ${{ steps.check.outputs.testflight }}
     steps:
       - name: Check Unity and signing secrets
         id: check
@@ -51,6 +60,9 @@ jobs:
           IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
         run: |
           missing=""
           [ -n "$UNITY_LICENSE" ] || missing="$missing UNITY_LICENSE"
@@ -72,6 +84,13 @@ jobs:
           else
             echo "signing=false" >> "$GITHUB_OUTPUT"
             echo "iOS signing secrets are not (all) set: the macOS archive, if requested, is unsigned."
+          fi
+          if [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -n "$ASC_KEY_P8_BASE64" ]; then
+            echo "testflight=true" >> "$GITHUB_OUTPUT"
+            echo "App Store Connect API key secrets are present: App Store builds are uploaded to TestFlight."
+          else
+            echo "testflight=false" >> "$GITHUB_OUTPUT"
+            echo "App Store Connect API key secrets are not (all) set: no TestFlight upload."
           fi
 
   xcode:
@@ -102,23 +121,35 @@ jobs:
           SIGNING: ${{ needs.check-secrets.outputs.signing }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          ALLOW_TEST_ADS: ${{ inputs.allow_test_ads && 'true' || 'false' }}
         run: |
-          params=""
+          # Development player unless the profile is an App Store profile (Distribution without a device list):
+          # only that build is a store release, which must not carry Google's sample AdMob app id (spec §8.9).
+          params="-ballverseDevelopment true"
+          release=false
           if [ "$SIGNING" = "true" ]; then
             profile="$RUNNER_TEMP/profile.mobileprovision"
             echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$profile"
             openssl smime -inform der -verify -noverify -in "$profile" -out "$RUNNER_TEMP/profile.plist" 2>/dev/null
-            read -r uuid ptype < <(python3 -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); print(d["UUID"], "Development" if d.get("Entitlements",{}).get("get-task-allow") else "Distribution")' "$RUNNER_TEMP/profile.plist")
+            read -r uuid ptype store < <(python3 -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); dev=bool(d.get("Entitlements",{}).get("get-task-allow")); print(d["UUID"], "Development" if dev else "Distribution", "false" if dev or "ProvisionedDevices" in d else "true")' "$RUNNER_TEMP/profile.plist")
             rm -f "$profile" "$RUNNER_TEMP/profile.plist"
-            params="-iosTeamId $APPLE_TEAM_ID -iosProvisioningProfileId $uuid -iosProvisioningProfileType $ptype"
-            echo "Manual signing: profile $uuid ($ptype)."
+            if [ "$store" = "true" ]; then
+              release=true
+              params="-ballverseDevelopment false"
+            fi
+            params="$params -iosTeamId $APPLE_TEAM_ID -iosProvisioningProfileId $uuid -iosProvisioningProfileType $ptype"
+            echo "Manual signing: profile $uuid ($ptype, App Store: $store)."
           elif [ -n "$APPLE_TEAM_ID" ]; then
-            params="-iosTeamId $APPLE_TEAM_ID"
+            params="$params -iosTeamId $APPLE_TEAM_ID"
             echo "Automatic signing with the team from APPLE_TEAM_ID."
           else
             echo "No team: choose a team in Xcode > Signing & Capabilities."
           fi
+          if [ "$ALLOW_TEST_ADS" = "true" ]; then
+            params="$params -ballverseAllowTestAds true"
+          fi
           echo "params=$params" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
 
       - name: Build Xcode project
         uses: game-ci/unity-builder@v5
@@ -135,6 +166,22 @@ jobs:
           versioning: Custom
           version: ${{ env.BUILD_VERSION }}
           customParameters: ${{ steps.signing.outputs.params }}
+
+      - name: Check release Info.plist for Google sample ad ids
+        if: steps.signing.outputs.release == 'true'
+        env:
+          ALLOW_TEST_ADS: ${{ inputs.allow_test_ads && 'true' || 'false' }}
+        run: |
+          plist=build/iOS/Ballverse/Info.plist
+          grep -A1 -E "GADApplicationIdentifier|ITSAppUsesNonExemptEncryption" "$plist" || true
+          if grep -q "3940256099942544" "$plist"; then
+            if [ "$ALLOW_TEST_ADS" = "true" ]; then
+              echo "::warning title=Test ads in release build::Info.plist uses Google's sample AdMob app id (allow_test_ads). TestFlight only; never submit this build for review."
+            else
+              echo "::error title=Test ads in release build::Info.plist contains Google's sample AdMob app id. Enter the real id or tick allow_test_ads (spec §8.9)."
+              exit 1
+            fi
+          fi
 
       - name: Pack Xcode project
         run: tar -czf ballverse-ios-xcode.tar.gz -C build/iOS Ballverse
@@ -155,7 +202,24 @@ jobs:
     timeout-minutes: 90
     env:
       SIGNING: ${{ needs.check-secrets.outputs.signing }}
+      TESTFLIGHT: ${{ needs.check-secrets.outputs.testflight }}
     steps:
+      - name: Select Xcode 26
+        run: |
+          # App Store Connect accepts uploads built with the current SDK only (spec §8.8: Xcode 26 / iOS 26 SDK in 2026).
+          xcode=""
+          for candidate in /Applications/Xcode_26*.app; do
+            [ -d "$candidate" ] || continue
+            case "$candidate" in *[Bb]eta*|*_RC*|*Release_Candidate*) continue ;; esac
+            xcode="$(printf '%s\n%s\n' "$xcode" "$candidate" | sed '/^$/d' | sort -V | tail -n 1)"
+          done
+          if [ -n "$xcode" ]; then
+            sudo xcode-select -s "$xcode/Contents/Developer"
+          else
+            echo "::warning title=Xcode 26 not found::Using the runner's default Xcode; App Store Connect may reject an upload built with an older SDK."
+          fi
+          xcodebuild -version
+
       - name: Download Xcode project
         uses: actions/download-artifact@v7
         with:
@@ -190,6 +254,8 @@ jobs:
           security import "$RUNNER_TEMP/cert.p12" -P "$IOS_P12_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
           rm -f "$RUNNER_TEMP/cert.p12"
           security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain" > /dev/null
+          # Word splitting is intended: each existing keychain path becomes one argument.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
 
           profile="$RUNNER_TEMP/profile.mobileprovision"
@@ -222,6 +288,7 @@ jobs:
           </dict>
           </plist>
           PLIST
+          echo "EXPORT_METHOD=${method}" >> "$GITHUB_ENV"
           echo "Installed profile $uuid; export method ${method}."
 
       - name: Archive
@@ -253,6 +320,33 @@ jobs:
           path: ${{ runner.temp }}/ipa/*.ipa
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload to TestFlight
+        if: env.SIGNING == 'true' && env.EXPORT_METHOD == 'app-store-connect' && env.TESTFLIGHT == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          major="$(xcodebuild -version | head -n 1 | sed -E 's/^Xcode ([0-9]+).*/\1/')"
+          if [ "${major:-0}" -lt 26 ]; then
+            echo "::error title=Xcode too old for upload::Xcode ${major} is selected; App Store Connect requires Xcode 26 (iOS 26 SDK)."
+            exit 1
+          fi
+          # altool looks for AuthKey_<id>.p8 in ~/.appstoreconnect/private_keys.
+          keydir="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$keydir"
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$keydir/AuthKey_${ASC_KEY_ID}.p8"
+          ipas=("$RUNNER_TEMP"/ipa/*.ipa)
+          ipa="${ipas[0]}"
+          xcrun altool --upload-app --type ios --file "$ipa" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          rm -f "$keydir/AuthKey_${ASC_KEY_ID}.p8"
+          echo "### Uploaded to TestFlight" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build ${BUILD_VERSION} was sent to App Store Connect. It appears in TestFlight after processing (usually 5–30 minutes)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: TestFlight upload skipped
+        if: env.SIGNING == 'true' && env.EXPORT_METHOD == 'app-store-connect' && env.TESTFLIGHT != 'true'
+        run: echo "::notice title=No TestFlight upload::App Store profile but ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8_BASE64 are not all set; the IPA is only uploaded as an artifact."
 
       - name: Pack unsigned archive
         if: env.SIGNING != 'true'

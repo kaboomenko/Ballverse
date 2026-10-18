@@ -6,7 +6,8 @@ namespace Ballverse.App
     /// The registration list of app modules, in boot order (spec §7.9). This is the single place where feature
     /// assemblies join the app:
     /// <list type="number">
-    /// <item>add the assembly name to the "references" of Ballverse.App.asmdef;</item>
+    /// <item>add the assembly name to the "references" of Ballverse.App.asmdef (the feature assembly itself references
+    /// Ballverse.Platform for the platform contracts, never Ballverse.App);</item>
     /// <item>add an <see cref="IAppModule"/> class for it under Assets/Ballverse/App/Modules/ (it registers the
     /// assembly's services and starts it);</item>
     /// <item>append one line below, at the position that matches its init order.</item>

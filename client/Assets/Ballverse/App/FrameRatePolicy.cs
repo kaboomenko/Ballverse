@@ -1,27 +1,13 @@
 using System;
+using Ballverse.Platform;
 
 namespace Ballverse.App
 {
-    /// <summary>
-    /// Display frame rate policy (spec §8.2): 60 FPS cap in release 1 (120 Hz screens are not used, to save battery);
-    /// screens may lower it temporarily, e.g. to 30 FPS for idle UI in Low Power Mode.
-    /// </summary>
-    public interface IFrameRatePolicy
-    {
-        int DefaultFps { get; }
-
-        int TargetFps { get; }
-
-        /// <summary>Sets the target, clamped to [<see cref="FrameRatePolicy.MinFps"/>, <see cref="DefaultFps"/>].</summary>
-        void SetTarget(int fps);
-
-        void ResetToDefault();
-    }
-
+    /// <summary><see cref="IFrameRatePolicy"/> applied to the engine through a callback (<see cref="UnityApply"/> on device).</summary>
     public sealed class FrameRatePolicy : IFrameRatePolicy
     {
-        public const int ReleaseDefaultFps = 60;
-        public const int MinFps = 15;
+        public const int ReleaseDefaultFps = FrameRates.ReleaseDefaultFps;
+        public const int MinFps = FrameRates.MinFps;
 
         readonly Action<int> _apply;
 

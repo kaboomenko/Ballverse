@@ -4,6 +4,7 @@
     "references": [
         "Ballverse.Core",
         "Ballverse.App",
+        "Ballverse.Platform",
         "Ballverse.Editor",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",

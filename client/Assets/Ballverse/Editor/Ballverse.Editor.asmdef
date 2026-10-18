@@ -3,6 +3,7 @@
     "rootNamespace": "Ballverse.Editor",
     "references": [
         "Ballverse.App",
+        "Ballverse.Platform",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
         "Unity.RenderPipelines.Universal.2D.Runtime"

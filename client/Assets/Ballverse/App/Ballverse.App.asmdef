@@ -2,7 +2,8 @@
     "name": "Ballverse.App",
     "rootNamespace": "Ballverse.App",
     "references": [
-        "Ballverse.Core"
+        "Ballverse.Core",
+        "Ballverse.Platform"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

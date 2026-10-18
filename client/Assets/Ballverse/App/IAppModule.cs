@@ -19,7 +19,16 @@ namespace Ballverse.App
     /// <para>
     /// Boot order: every module's <see cref="Register"/> runs first, in catalog order, while the service registry is
     /// open; then the registry is sealed and <see cref="Start"/> runs per phase, in catalog order. Shutdown runs in
-    /// reverse start order. A module that throws is reported and skipped; the rest of the app keeps booting.
+    /// reverse start order. A module that throws is reported and skipped; the rest of the app keeps booting. When
+    /// <see cref="Register"/> throws, the services it registered before the exception are removed again, so nothing
+    /// of a skipped module stays resolvable.
+    /// </para>
+    /// <para>
+    /// Feature assemblies cannot reference Ballverse.App (that would be a cycle). They consume the platform services
+    /// (<c>IAppLifecycle</c>, <c>IScreenAwake</c>, <c>IFrameRatePolicy</c>, <c>ISafeAreaProvider</c>,
+    /// <c>IAppPaths</c>) through the engine-free contracts assembly Ballverse.Platform
+    /// (Assets/Ballverse/App/Platform), which any assembly may reference; their module class here passes the
+    /// resolved services in.
     /// </para>
     /// </summary>
     public interface IAppModule

@@ -93,6 +93,8 @@ namespace Ballverse.Tests
             Assert.AreEqual(AndroidArchitecture.ARM64, PlayerSettings.Android.targetArchitectures);
             Assert.AreEqual((AndroidSdkVersions)ProjectSetup.AndroidMinSdk, PlayerSettings.Android.minSdkVersion);
             Assert.AreEqual(ProjectSetup.IosMinVersion, PlayerSettings.iOS.targetOSVersionString);
+            Assert.IsTrue(PlayerSettings.openGLRequireES31, "OpenGL ES 3.1 minimum (spec §8.1)");
+            Assert.AreEqual(ProjectSetup.AndroidCategory, PlayerSettings.Android.appCategory);
         }
 
         [Test]
@@ -103,6 +105,32 @@ namespace Ballverse.Tests
             Assert.IsTrue(ids.HasValue);
             Assert.IsFalse(string.IsNullOrWhiteSpace(ids.Value.android));
             Assert.IsFalse(string.IsNullOrWhiteSpace(ids.Value.ios));
+        }
+
+        [Test]
+        public void AdMobIdsThatAreAlreadySetAreKept()
+        {
+            ScriptableObject settings = AdMobDefaults.CreateTransientSettings();
+            if (settings == null) Assert.Ignore("Google Mobile Ads plugin is not installed.");
+            try
+            {
+                Assert.IsTrue(AdMobDefaults.FillEmptyIds(settings), "empty ids are filled");
+                Assert.AreEqual((AdMobDefaults.SampleAndroidAppId, AdMobDefaults.SampleIosAppId), AdMobDefaults.ReadAppIds(settings));
+
+                const string realAndroid = "ca-app-pub-1234567890123456~1111111111";
+                const string realIos = "ca-app-pub-1234567890123456~2222222222";
+                var so = new SerializedObject(settings);
+                so.FindProperty("adMobAndroidAppId").stringValue = realAndroid;
+                so.FindProperty("adMobIOSAppId").stringValue = realIos;
+                so.ApplyModifiedPropertiesWithoutUndo();
+
+                Assert.IsFalse(AdMobDefaults.FillEmptyIds(settings), "ids that are set are never touched");
+                Assert.AreEqual((realAndroid, realIos), AdMobDefaults.ReadAppIds(settings));
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
         }
 
         [Test]
@@ -117,6 +145,44 @@ namespace Ballverse.Tests
             Assert.AreEqual(pipelineGuid, AssetDatabase.AssetPathToGUID(ProjectSetup.PipelineAssetPath));
             Assert.AreEqual(sceneGuid, AssetDatabase.AssetPathToGUID(ProjectSetup.BootScenePath));
             Assert.AreEqual(sceneCount, EditorBuildSettings.scenes.Length);
+            Assert.AreEqual(1, CountBootstrapsInBootScene(), "a second run does not add another Bootstrap");
+        }
+
+        [Test]
+        public void SetupRestoresAMissingBootstrapInAnExistingBootScene()
+        {
+            string sceneGuid = AssetDatabase.AssetPathToGUID(ProjectSetup.BootScenePath);
+            Scene scene = EditorSceneManager.OpenScene(ProjectSetup.BootScenePath, OpenSceneMode.Additive);
+            try
+            {
+                foreach (Bootstrap b in scene.GetRootGameObjects().SelectMany(go => go.GetComponentsInChildren<Bootstrap>(true)).ToArray())
+                    Object.DestroyImmediate(b.gameObject);
+                EditorSceneManager.MarkSceneDirty(scene);
+                Assert.IsTrue(EditorSceneManager.SaveScene(scene));
+            }
+            finally
+            {
+                if (SceneManager.sceneCount > 1) EditorSceneManager.CloseScene(scene, true);
+            }
+            Assert.AreEqual(0, CountBootstrapsInBootScene());
+
+            ProjectSetup.Run();
+
+            Assert.AreEqual(1, CountBootstrapsInBootScene(), "the repair path adds exactly one Bootstrap");
+            Assert.AreEqual(sceneGuid, AssetDatabase.AssetPathToGUID(ProjectSetup.BootScenePath), "the scene asset is repaired, not recreated");
+        }
+
+        static int CountBootstrapsInBootScene()
+        {
+            Scene scene = EditorSceneManager.OpenScene(ProjectSetup.BootScenePath, OpenSceneMode.Additive);
+            try
+            {
+                return scene.GetRootGameObjects().SelectMany(go => go.GetComponentsInChildren<Bootstrap>(true)).Count();
+            }
+            finally
+            {
+                if (SceneManager.sceneCount > 1) EditorSceneManager.CloseScene(scene, true);
+            }
         }
     }
 }

@@ -4,6 +4,8 @@ name: Unity Android
 # dispatch optionally the release App Bundle signed with the upload keystore.
 # Secrets: UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD (required; the jobs are skipped with a notice without them).
 # Signing with the upload keystore (optional; APK and App Bundle): ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASS, ANDROID_KEYALIAS_NAME, ANDROID_KEYALIAS_PASS.
+# The release App Bundle refuses Google's sample AdMob app id unless allow_test_ads is ticked (spec §8.9); a CI step
+# also checks the bundle's manifest for it.
 # See docs/dev/unity.md.
 
 on:
@@ -11,6 +13,10 @@ on:
     inputs:
       bundle:
         description: "Also build the release App Bundle (.aab)"
+        type: boolean
+        default: false
+      allow_test_ads:
+        description: "Allow Google's sample AdMob app id in the release App Bundle (test ads only, e.g. for internal testing; never for production)"
         type: boolean
         default: false
   push:
@@ -162,12 +168,31 @@ jobs:
           version: ${{ env.BUILD_VERSION }}
           androidExportType: androidAppBundle
           androidTargetSdkVersion: ${{ env.ANDROID_TARGET_SDK }}
+          customParameters: -ballverseAllowTestAds ${{ inputs.allow_test_ads && 'true' || 'false' }}
           # GameCI writes the decoded keystore to client/<androidKeystoreName> when the base64 secret is set.
           androidKeystoreBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           androidKeystoreName: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && 'ballverse-upload.keystore' || '' }}
           androidKeystorePass: ${{ secrets.ANDROID_KEYSTORE_PASS }}
           androidKeyaliasName: ${{ secrets.ANDROID_KEYALIAS_NAME }}
           androidKeyaliasPass: ${{ secrets.ANDROID_KEYALIAS_PASS }}
+
+      - name: Check release manifest for Google sample ad ids
+        env:
+          ALLOW_TEST_ADS: ${{ inputs.allow_test_ads && 'true' || 'false' }}
+        run: |
+          aabs=(build/Android/*.aab)
+          aab="${aabs[0]}"
+          # The bundle manifest is a protobuf; its strings (meta-data values) are stored as plain UTF-8.
+          if unzip -p "$aab" base/manifest/AndroidManifest.xml | grep -a -q "3940256099942544"; then
+            if [ "$ALLOW_TEST_ADS" = "true" ]; then
+              echo "::warning title=Test ads in release bundle::The bundle uses Google's sample AdMob app id (allow_test_ads). Internal testing only; never promote it to production."
+            else
+              echo "::error title=Test ads in release bundle::The bundle manifest contains Google's sample AdMob app id. Enter the real id or tick allow_test_ads (spec §8.9)."
+              exit 1
+            fi
+          else
+            echo "No Google sample AdMob app id in the bundle manifest."
+          fi
 
       - name: Upload App Bundle
         uses: actions/upload-artifact@v6

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Ballverse.App;
+using Ballverse.Platform;
 using NUnit.Framework;
 
 namespace Ballverse.Tests
@@ -125,6 +126,70 @@ namespace Ballverse.Tests
             log.Clear();
             host.Shutdown();
             CollectionAssert.AreEqual(new[] { "Good.Shutdown" }, log, "only started modules shut down");
+        }
+
+        interface IFarewell
+        {
+        }
+
+        sealed class Farewell : IFarewell
+        {
+        }
+
+        [Test]
+        public void ModuleThatThrowsMidRegisterLeavesNoServicesBehind()
+        {
+            var log = new List<string>();
+            var before = new FakeModule("Before", AppStartPhase.Immediate, log)
+            {
+                OnRegister = s => s.Register<IFarewell>(new Farewell()),
+            };
+            var half = new FakeModule("Half", AppStartPhase.Immediate, log)
+            {
+                OnRegister = s =>
+                {
+                    s.Register<IGreeting>(new Greeting());
+                    throw new InvalidOperationException("boom after the first service");
+                },
+            };
+            bool sawGreeting = true;
+            var consumer = new FakeModule("Consumer", AppStartPhase.Immediate, log)
+            {
+                OnStart = ctx => sawGreeting = ctx.Services.Contains<IGreeting>(),
+            };
+            var host = new AppHost(new IAppModule[] { before, half, consumer }, Report);
+
+            host.Boot();
+            Assert.IsFalse(host.Services.TryGet(out IGreeting _), "service of the skipped module was removed");
+            Assert.IsFalse(sawGreeting);
+            Assert.IsTrue(host.Services.Contains<IFarewell>(), "services of other modules stay");
+            Assert.AreEqual(1, host.Services.Count);
+            CollectionAssert.DoesNotContain(log, "Half.Start");
+            Assert.AreEqual(1, host.Failures.Count);
+            Assert.AreEqual("Half", host.Failures[0].ModuleName);
+        }
+
+        [Test]
+        public void ModuleThatHitsADuplicateRegistrationIsRolledBack()
+        {
+            var log = new List<string>();
+            var first = new FakeModule("First", AppStartPhase.Immediate, log)
+            {
+                OnRegister = s => s.Register<IGreeting>(new Greeting()),
+            };
+            var clash = new FakeModule("Clash", AppStartPhase.Immediate, log)
+            {
+                OnRegister = s =>
+                {
+                    s.Register<IFarewell>(new Farewell());
+                    s.Register<IGreeting>(new Greeting()); // duplicate: throws
+                },
+            };
+            var host = new AppHost(new IAppModule[] { first, clash }, Report);
+            host.Boot();
+            Assert.IsTrue(host.Services.Contains<IGreeting>(), "the first module's service is untouched");
+            Assert.IsFalse(host.Services.Contains<IFarewell>(), "the clashing module's earlier service is removed");
+            CollectionAssert.AreEqual(new IAppModule[] { first }, host.StartedModules);
         }
 
         [Test]

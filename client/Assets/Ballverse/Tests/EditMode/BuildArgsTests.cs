@@ -36,6 +36,31 @@ namespace Ballverse.Tests
         }
 
         [Test]
+        public void PasswordsStartingWithADashStayValues()
+        {
+            // GameCI passes each secret as its own argv entry, so a value may start with '-'.
+            var args = BuildArgs.Parse(new[]
+            {
+                "-androidKeystoreName", "k.keystore",
+                "-androidKeystorePass", "-Secr3t",
+                "-androidKeyaliasName", "upload",
+                "-androidKeyaliasPass", "--x",
+                "-quit",
+            });
+            Assert.AreEqual("-Secr3t", args.Get("androidKeystorePass"));
+            Assert.AreEqual("upload", args.Get("androidKeyaliasName"));
+            Assert.AreEqual("--x", args.Get("androidKeyaliasPass"));
+            Assert.IsFalse(args.Has("Secr3t"), "the password is not parsed as an option");
+            Assert.AreEqual(true, args.GetBool("quit"));
+
+            var trailing = BuildArgs.Parse(new[] { "-androidKeystorePass" });
+            Assert.IsTrue(trailing.Has("androidKeystorePass"));
+            Assert.IsNull(trailing.Get("androidKeystorePass"));
+            Assert.IsTrue(BuildArgs.IsValueOption("iosTeamId"));
+            Assert.IsFalse(BuildArgs.IsValueOption("ballverseDevelopment"), "flags may be bare");
+        }
+
+        [Test]
         public void TargetSdkParsing()
         {
             Assert.AreEqual(AndroidSdkVersions.AndroidApiLevelAuto, BuildScript.ParseTargetSdk(null));

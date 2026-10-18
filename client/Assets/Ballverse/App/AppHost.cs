@@ -77,7 +77,10 @@ namespace Ballverse.App
             if (State != AppHostState.Created) throw new InvalidOperationException("Boot can run once; state is " + State);
             for (int i = 0; i < _modules.Length; i++)
             {
+                int mark = Services.RegistrationMark;
                 _registered[i] = Invoke(_modules[i], "Register", m => m.Register(Services));
+                // A skipped module must not leave half of its services behind for others to resolve.
+                if (!_registered[i]) Services.RemoveRegisteredSince(mark);
             }
             Services.Seal();
             StartPhase(AppStartPhase.Immediate);
