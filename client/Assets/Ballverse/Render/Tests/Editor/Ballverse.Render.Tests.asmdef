@@ -1,0 +1,26 @@
+{
+    "name": "Ballverse.Render.Tests",
+    "rootNamespace": "Ballverse.Render.Tests",
+    "references": [
+        "Ballverse.Core",
+        "Ballverse.Render",
+        "Ballverse.Render.Editor",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
