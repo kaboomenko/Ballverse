@@ -5,19 +5,21 @@ namespace Ballverse.Core.Monetization
     {
         /// <summary>Kill switch <c>watermark_enabled = false</c>: no watermark for anyone, no row.</summary>
         Hidden = 0,
-        /// <summary>No NO_WATERMARK: locked row; a tap opens the Ultimate sheet or, per the smart storefront and the release catalog, the missing part (<see cref="Storefront.WatermarkOffers"/>; release 1: No Ads or the missing ad removal). Export is never blocked.</summary>
+        /// <summary>No NO_WATERMARK: locked row; a tap opens the No Ads sheet or the missing ad removal (after release 1 also Ultimate where sold), per the smart storefront and the release catalog (<see cref="Storefront.WatermarkOffers"/>, spec §3.10, §5.0.3). Export is never blocked.</summary>
         Locked = 1,
         /// <summary>NO_WATERMARK owned: a switch, off (no watermark) by default.</summary>
         Toggle = 2,
     }
 
     /// <summary>
-    /// Watermark decision at export time (spec §3.10, owner decision Р13). Pure. NO_WATERMARK comes from
-    /// <see cref="Entitlements.From"/>: Ultimate, the Ultimate contents by parts, or (release 1, and grandfathered after it)
-    /// No Ads / both ad removals.
+    /// Watermark decision at export time (spec §3.10, owner decisions Р13, Р21). Pure. NO_WATERMARK comes from
+    /// <see cref="Entitlements.From"/> by the permanent rule of spec §5.0.2: Ultimate, or NO_EXPORT_ADS + NO_INTERSTITIALS
+    /// from any products (No Ads Bundle or both ad removals).
     /// </summary>
     public static class WatermarkPolicy
     {
+        /// <summary>The export-sheet "Водяной знак" row for these entitlements (spec §3.10 "Поведение").</summary>
+        /// <param name="watermarkEnabled">Remote Config kill switch <c>watermark_enabled</c> (spec §9.3).</param>
         public static WatermarkRow GetRow(EntitlementSet entitlements, bool watermarkEnabled = true)
         {
             if (!watermarkEnabled) return WatermarkRow.Hidden;

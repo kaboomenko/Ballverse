@@ -31,7 +31,7 @@ namespace Ballverse.Core.Monetization
         /// Access of <paramref name="mode"/>, checked in order NotReleased, Free, Grandfathered, Entitled.
         /// </summary>
         /// <param name="grandfathered">Persisted grandfathered modes; null means none.</param>
-        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        /// <param name="config">Release catalog (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         public static ModeAccess GetAccess(ModeCode mode, EntitlementSet entitlements,
             IEnumerable<ModeCode> grandfathered, MonetizationConfig config)
         {

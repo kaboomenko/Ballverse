@@ -101,8 +101,8 @@ namespace Ballverse.Core.Tests.Monetization
         {
             var records = new[] { new PurchaseRecord(ProductIds.NoAds, PurchaseState.Pending, "GPA.pending-1") };
             Assert.Empty(OwnedProducts.From(records));
-            Assert.Equal(EntitlementSet.Empty, Entitlements.From(OwnedProducts.From(records), MonetizationConfig.FullCatalog, false));
-            Assert.Equal(EntitlementSet.Empty, Entitlements.From(OwnedProducts.From(records), MonetizationConfig.Release1, false));
+            Assert.Equal(EntitlementSet.Empty, Entitlements.From(OwnedProducts.From(records), MonetizationConfig.FullCatalog));
+            Assert.Equal(EntitlementSet.Empty, Entitlements.From(OwnedProducts.From(records), MonetizationConfig.Release1));
         }
 
         [Theory]
@@ -116,10 +116,10 @@ namespace Ballverse.Core.Tests.Monetization
         {
             var owned = OwnedProducts.From(new[] { new PurchaseRecord(productId, PurchaseState.Pending, "token-" + productId) });
             Assert.Empty(owned);
-            Assert.Equal(EntitlementSet.Empty, Entitlements.From(owned, MonetizationConfig.Release1, false));
+            Assert.Equal(EntitlementSet.Empty, Entitlements.From(owned, MonetizationConfig.Release1));
             // The shop still offers it (Release 1 ad products), so the user is not told it is owned.
             if (MonetizationConfig.Release1.IsSellable(productId))
-                Assert.False(Storefront.Build(owned, MonetizationConfig.Release1, null, false).Get(productId).Owned);
+                Assert.False(Storefront.Build(owned, MonetizationConfig.Release1, null).Get(productId).Owned);
         }
 
         [Fact]
@@ -129,7 +129,7 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Empty(OwnedProducts.From(new[] { pending }));
             var owned = OwnedProducts.From(new[] { pending, new PurchaseRecord(ProductIds.NoAds, PurchaseState.Purchased, "GPA.1") });
             Assert.Equal(new[] { ProductIds.NoAds }, owned.ToArray());
-            Assert.True(Entitlements.From(owned, MonetizationConfig.Release1, false).Contains(Entitlement.NoWatermark));
+            Assert.True(Entitlements.From(owned, MonetizationConfig.Release1).Contains(Entitlement.NoWatermark));
         }
 
         /// <summary>
@@ -186,15 +186,14 @@ namespace Ballverse.Core.Tests.Monetization
                 new PurchaseRecord(ProductIds.RemoveInterstitialAds, PurchaseState.Pending, "GPA.21"),
             });
             Assert.Equal(new[] { ProductIds.RemoveExportAds }, onlyPendingSecond.ToArray());
-            // The pending second removal neither completes the ads nor unlocks NO_WATERMARK (release-1 rule), and the shop
+            // The pending second removal neither completes the ads nor unlocks NO_WATERMARK (spec §5.0.2), and the shop
             // keeps offering it as the last step.
             var r1 = MonetizationConfig.Release1;
-            var e = Entitlements.From(onlyPendingSecond, r1, false);
+            var e = Entitlements.From(onlyPendingSecond, r1);
             Assert.False(e.Contains(Entitlement.NoInterstitials));
             Assert.False(e.Contains(Entitlement.NoWatermark));
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds },
-                Storefront.Build(onlyPendingSecond, r1, null, false).VisibleOffers.Select(o => o.ProductId).ToArray());
-            Assert.False(WatermarkGrandfathering.Update(false, onlyPendingSecond, r1));
+                Storefront.Build(onlyPendingSecond, r1, null).VisibleOffers.Select(o => o.ProductId).ToArray());
         }
 
         /// <summary>Rng-driven: whatever the interleaving, a product is owned iff some transaction's last state is Purchased.</summary>

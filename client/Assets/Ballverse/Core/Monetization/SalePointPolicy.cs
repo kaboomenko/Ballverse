@@ -95,26 +95,25 @@ namespace Ballverse.Core.Monetization
         /// products removing the watermark on their own come cheapest first (base USD price, ties in display order); parts
         /// that only remove it together keep display order. The spec wording "Убрать водяной знак — Ultimate" names Ultimate,
         /// but the line must name the first returned offer: the cheapest way to remove the watermark (release 1: No Ads, or
-        /// the missing ad removal as the last step; a later release: the $5.99 missing ad removal before Ultimate for a
-        /// grandfathered user), never an unsold product. The caller persists
+        /// the missing ad removal as the last step; a later release: the missing ad removal before Ultimate), never an unsold
+        /// product. The caller persists
         /// <paramref name="completedExports"/> as the new <paramref name="lastShownAtExport"/> only when the result is not empty.
         /// </summary>
-        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        /// <param name="config">Release catalog (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
-        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         /// <exception cref="ArgumentNullException"><paramref name="ownedProductIds"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">A negative export number.</exception>
         public static IReadOnlyList<StorefrontOffer> DoneScreenLineOffers(int completedExports, int? lastShownAtExport,
             IEnumerable<string> ownedProductIds, MonetizationConfig config, IEnumerable<ModeCode> grandfathered,
-            bool watermarkGrandfathered, bool watermarkEnabled = true, bool interstitialJustShown = false)
+            bool watermarkEnabled = true, bool interstitialJustShown = false)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
             if (config == null) throw new ArgumentNullException(nameof(config));
             var owned = new List<string>(ownedProductIds);
-            var entitlements = Entitlements.From(owned, config, watermarkGrandfathered);
+            var entitlements = Entitlements.From(owned, config);
             if (!ShouldShowDoneScreenLine(completedExports, lastShownAtExport, entitlements, watermarkEnabled, interstitialJustShown))
                 return Array.Empty<StorefrontOffer>();
-            var offers = Storefront.WatermarkOffers(owned, config, grandfathered, watermarkGrandfathered);
+            var offers = Storefront.WatermarkOffers(owned, config, grandfathered);
             var standalone = new List<StorefrontOffer>();
             var parts = new List<StorefrontOffer>();
             foreach (var o in offers) (o.RemovesWatermark ? standalone : parts).Add(o);
@@ -151,11 +150,13 @@ namespace Ballverse.Core.Monetization
         /// </summary>
         /// <param name="lastDemoDay">Day index of this mode's last demo; null = never.</param>
         /// <param name="todayIndex">Caller's current day index.</param>
+        /// <param name="config">Release catalog (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        /// <param name="grandfathered">
+        /// Persisted <c>grandfathered_modes</c> (spec §5.1); required like on every other entry point, null means none.
+        /// </param>
         /// <param name="trialEnabled">Remote Config <c>paid_mode_trial_enabled</c> (spec §9.3, default true).</param>
-        /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
-        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         public static TrialPreviewAccess CanStartTrialPreview(ModeCode mode, EntitlementSet entitlements, int? lastDemoDay,
-            int todayIndex, MonetizationConfig config, bool trialEnabled = true, IEnumerable<ModeCode> grandfathered = null)
+            int todayIndex, MonetizationConfig config, IEnumerable<ModeCode> grandfathered, bool trialEnabled = true)
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
             if (ProductCatalog.ForMode(mode) == null) return TrialPreviewAccess.NotPaid;
@@ -199,17 +200,15 @@ namespace Ballverse.Core.Monetization
         /// </summary>
         /// <param name="alreadyShown">Persisted one-shot flag.</param>
         /// <param name="interstitialJustShown">An interstitial closed right before this screen (spec §5.2 "После interstitial").</param>
-        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        /// <param name="config">Release catalog (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
-        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static FirstVideoQuestScreen FirstVideoQuest(bool alreadyShown, IEnumerable<string> ownedProductIds,
-            MonetizationConfig config, bool interstitialJustShown, IEnumerable<ModeCode> grandfathered,
-            bool watermarkGrandfathered)
+            MonetizationConfig config, bool interstitialJustShown, IEnumerable<ModeCode> grandfathered)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
             if (config == null) throw new ArgumentNullException(nameof(config));
             if (alreadyShown || interstitialJustShown) return FirstVideoQuestScreen.None;
-            var all = Storefront.Build(ownedProductIds, config, grandfathered, watermarkGrandfathered).Get(ProductIds.AllModes);
+            var all = Storefront.Build(ownedProductIds, config, grandfathered).Get(ProductIds.AllModes);
             return all.Visible ? new FirstVideoQuestScreen(all.WithEmphasis(false)) : FirstVideoQuestScreen.None;
         }
     }

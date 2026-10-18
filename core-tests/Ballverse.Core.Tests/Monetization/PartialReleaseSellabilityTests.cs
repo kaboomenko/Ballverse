@@ -24,14 +24,14 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void ModeSheet_LeavesOutTheUnsoldSingle()
         {
-            var c = new MonetizationConfig(NoModes, true, ProductIds.All.Where(id => id != ProductIds.ModeOrbit), AllModeCodes, false);
-            var sheet = Storefront.ModeSheet(ModeCode.M14, None, c, null, false);
+            var c = new MonetizationConfig(NoModes, ProductIds.All.Where(id => id != ProductIds.ModeOrbit), AllModeCodes);
+            var sheet = Storefront.ModeSheet(ModeCode.M14, None, c, null);
             Assert.Equal(new[] { ProductIds.AllModes }, Ids(sheet));
             Assert.True(sheet[0].Emphasized);
-            Assert.Equal(OfferHiddenReason.NotSellable, Storefront.Build(None, c, null, false).Get(ProductIds.ModeOrbit).HiddenReason);
+            Assert.Equal(OfferHiddenReason.NotSellable, Storefront.Build(None, c, null).Get(ProductIds.ModeOrbit).HiddenReason);
             // Only M14 missing: All Modes would be the cheaper-equivalent victim of the single, but the single is not sold.
             var owned = ProductIds.All.Where(id => ProductCatalog.Get(id).Kind == ProductKind.SingleMode && id != ProductIds.ModeOrbit).ToArray();
-            Assert.Equal(new[] { ProductIds.AllModes }, Ids(Storefront.ModeSheet(ModeCode.M14, owned, c, null, false)));
+            Assert.Equal(new[] { ProductIds.AllModes }, Ids(Storefront.ModeSheet(ModeCode.M14, owned, c, null)));
         }
 
         /// <summary>
@@ -42,26 +42,26 @@ namespace Ballverse.Core.Tests.Monetization
         public void ModeSheet_EmptyForReleasedUnsoldMode()
         {
             var released = new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05, ModeCode.M14 };
-            var c = new MonetizationConfig(NoModes, true, new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds },
-                released, true);
+            var c = new MonetizationConfig(NoModes, new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds },
+                released);
             Assert.Equal(ModeAccess.Locked, ModeAvailability.GetAccess(ModeCode.M14, EntitlementSet.Empty, null, c));
             Assert.False(c.IsModeSold(ModeCode.M14));
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M14, None, c, null, false));
-            Assert.Equal(TrialPreviewAccess.NotSold, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, EntitlementSet.Empty, null, 0, c));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M14, None, c, null));
+            Assert.Equal(TrialPreviewAccess.NotSold, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, EntitlementSet.Empty, null, 0, c, null));
         }
 
-        /// <summary>No Ads not sold, rule on: the watermark row falls back to both ad removals (spec §5.2 "недостающая часть").</summary>
+        /// <summary>No Ads not sold: the watermark row falls back to both ad removals (spec §5.0.2, §5.0.3 "недостающая покупка").</summary>
         [Fact]
         public void WatermarkOffers_AdRemovalsFallbackWhenNoAdsNotSold()
         {
-            var c = new MonetizationConfig(NoModes, true, new[] { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds },
-                new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05 }, true);
+            var c = new MonetizationConfig(NoModes, new[] { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds },
+                new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05 });
             var expected = new[] { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds };
-            Assert.Equal(expected, Ids(Storefront.WatermarkOffers(None, c, null, false)));
-            Assert.Equal(expected, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, c, null, false)));
-            Assert.Equal(expected, Ids(Storefront.Build(None, c, null, false).VisibleOffers));
+            Assert.Equal(expected, Ids(Storefront.WatermarkOffers(None, c, null)));
+            Assert.Equal(expected, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, c, null)));
+            Assert.Equal(expected, Ids(Storefront.Build(None, c, null).VisibleOffers));
             // After one removal the other one is the last step and removes the watermark on its own.
-            var last = Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, c, null, false);
+            var last = Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, c, null);
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, Ids(last));
             Assert.True(last[0].IsLastStep);
         }
@@ -70,7 +70,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void CheapestParts_UseNoAdsWhenRemovalsNotSold()
         {
-            var c = new MonetizationConfig(NoModes, true, new[] { ProductIds.NoAds }, AllModeCodes, false);
+            var c = new MonetizationConfig(NoModes, new[] { ProductIds.NoAds }, AllModeCodes);
             Assert.Equal(new[] { ProductIds.NoAds },
                 Storefront.CheapestPartsToComplete(EntitlementSet.PaidModes10.With(Entitlement.NoExportAds), c).ToArray());
             Assert.Equal(new[] { ProductIds.NoAds },
@@ -78,9 +78,8 @@ namespace Ballverse.Core.Tests.Monetization
             // Modes missing and no mode product sold: cannot be completed.
             Assert.Empty(Storefront.CheapestPartsToComplete(EntitlementSet.Empty, c));
 
-            // Same through the watermark row for a grandfathered user who owns one ad removal (No Ads rule applies to them).
-            var g = new MonetizationConfig(NoModes, false, new[] { ProductIds.NoAds }, AllModeCodes, false);
-            Assert.Equal(new[] { ProductIds.NoAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, g, null, true)));
+            // Same through the watermark row for a user who owns one ad removal (spec §5.0.2: both ad rights remove it).
+            Assert.Equal(new[] { ProductIds.NoAds }, Ids(Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }, c, null)));
         }
 
         /// <summary>Only the singles sold (no All Modes, no Ultimate): the parts are the missing singles and an ad product.</summary>
@@ -88,7 +87,7 @@ namespace Ballverse.Core.Tests.Monetization
         public void CheapestParts_UseSinglesWhenAllModesNotSold()
         {
             var sellable = ProductIds.All.Where(id => id != ProductIds.AllModes && id != ProductIds.Ultimate);
-            var c = new MonetizationConfig(NoModes, true, sellable, AllModeCodes, false);
+            var c = new MonetizationConfig(NoModes, sellable, AllModeCodes);
             var parts = Storefront.CheapestPartsToComplete(EntitlementSet.AdFree, c);
             Assert.Equal(10, parts.Count);
             Assert.All(parts, id => Assert.Equal(ProductKind.SingleMode, ProductCatalog.Get(id).Kind));
@@ -126,7 +125,7 @@ namespace Ballverse.Core.Tests.Monetization
                 if (rng.NextUInt(availableOdds) == 0) g.Add((ModeCode)m);
             }
             grandfathered = g.ToArray();
-            return new MonetizationConfig(free, rng.NextBool(), sellable, released, rng.NextBool());
+            return new MonetizationConfig(free, sellable, released);
         }
 
         static EntitlementSet AvailableModes(MonetizationConfig c, ModeCode[] grandfathered)
@@ -166,13 +165,11 @@ namespace Ballverse.Core.Tests.Monetization
                 for (int k = 0; k < samples; k++)
                 {
                     int mask = (int)rng.NextUInt((uint)Subsets.Count);
-                    bool gf = rng.NextBool();
                     var owned = Subsets.Ids(mask);
                     var direct = Entitlements.DirectGrants(owned);
-                    var s = Storefront.Build(owned, c, g, gf);
+                    var s = Storefront.Build(owned, c, g);
                     string ctx = "config " + ci + " sample " + k + " sell=" + string.Join(",", c.SellableProductIds) + " rel=" + string.Join(",", c.ReleasedModes)
-                        + " free=" + string.Join(",", c.FreeModes) + " g=" + string.Join(",", g) + " gf=" + gf + " owned=" + string.Join(",", owned)
-                        + " byParts=" + c.WatermarkByParts + " rule=" + c.WatermarkWithNoAds;
+                        + " free=" + string.Join(",", c.FreeModes) + " g=" + string.Join(",", g) + " owned=" + string.Join(",", owned);
 
                     foreach (var o in s.VisibleOffers)
                     {
@@ -184,30 +181,30 @@ namespace Ballverse.Core.Tests.Monetization
 
                     // Repeatedly buying every visible offer reaches every obtainable right except available modes, and
                     // NO_WATERMARK whenever a sellable path to it exists.
-                    var obtainable = Entitlements.ApplyRules(direct.Union(c.SellableGrants), c, gf);
+                    var obtainable = Entitlements.ApplyRules(direct.Union(c.SellableGrants));
                     var bought = new List<string>(owned);
                     for (int round = 0; round < 6; round++)
                     {
-                        var visible = Storefront.Build(bought, c, g, gf).VisibleOffers;
+                        var visible = Storefront.Build(bought, c, g).VisibleOffers;
                         if (visible.Count == 0) break;
                         bought.AddRange(visible.Select(o => o.ProductId));
                     }
-                    var final = Entitlements.From(bought, c, gf);
+                    var final = Entitlements.From(bought, c);
                     Assert.True(final.IsSupersetOf(obtainable.Except(available)), ctx);
                     Assert.True(!obtainable.Contains(Entitlement.NoWatermark) || final.Contains(Entitlement.NoWatermark), ctx);
 
                     // Watermark row: sellable only; non-empty exactly when a sellable path exists; buying it all removes it.
                     bool has = s.Entitlements.Contains(Entitlement.NoWatermark);
                     bool reachable = !has && obtainable.Contains(Entitlement.NoWatermark);
-                    var wm = Storefront.WatermarkOffers(owned, c, g, gf);
+                    var wm = Storefront.WatermarkOffers(owned, c, g);
                     Assert.All(wm, o => Assert.True(c.IsSellable(o.ProductId), ctx));
                     Assert.True(reachable == (wm.Count > 0), ctx);
                     if (reachable)
-                        Assert.True(Entitlements.From(owned.Concat(Ids(wm)), c, gf).Contains(Entitlement.NoWatermark), ctx);
+                        Assert.True(Entitlements.From(owned.Concat(Ids(wm)), c).Contains(Entitlement.NoWatermark), ctx);
 
                     // Done-screen line: the same offers, standalone removers first and cheapest first; the first one alone
                     // removes the watermark when it is a standalone remover.
-                    var line = SalePointPolicy.DoneScreenLineOffers(3, null, owned, c, g, gf);
+                    var line = SalePointPolicy.DoneScreenLineOffers(3, null, owned, c, g);
                     Assert.Equal(Ids(wm).OrderBy(id => id), Ids(line).OrderBy(id => id));
                     for (int i = 1; i < line.Count; i++)
                     {
@@ -216,14 +213,14 @@ namespace Ballverse.Core.Tests.Monetization
                             Assert.True(line[i - 1].Product.BasePriceUsdCents <= line[i].Product.BasePriceUsdCents, ctx);
                     }
                     if (line.Count > 0 && line[0].RemovesWatermark)
-                        Assert.True(Entitlements.From(owned.Concat(new[] { line[0].ProductId }), c, gf).Contains(Entitlement.NoWatermark), ctx);
+                        Assert.True(Entitlements.From(owned.Concat(new[] { line[0].ProductId }), c).Contains(Entitlement.NoWatermark), ctx);
 
                     // Mode sheet: sellable only; non-empty exactly for a locked mode whose single or All Modes is sold (the
                     // sheet never offers Ultimate, spec §5.2 "этот режим + All Modes").
                     for (int m = 6; m <= 15; m++)
                     {
                         var mode = (ModeCode)m;
-                        var sheet = Storefront.ModeSheet(mode, owned, c, g, gf);
+                        var sheet = Storefront.ModeSheet(mode, owned, c, g);
                         Assert.All(sheet, o => Assert.True(c.IsSellable(o.ProductId) && o.Visible, ctx));
                         bool locked = ModeAvailability.GetAccess(mode, s.Entitlements, g, c) == ModeAccess.Locked;
                         bool sheetProductSold = c.IsSellable(ProductCatalog.ForMode(mode).Id) || c.IsSellable(ProductIds.AllModes);

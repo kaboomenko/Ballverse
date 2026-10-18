@@ -10,7 +10,7 @@ namespace Ballverse.Core.Tests.Monetization
     public class SalePointPolicyTests
     {
         static readonly EntitlementSet Nothing = EntitlementSet.Empty;
-        static readonly EntitlementSet WithWatermark = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog, false);
+        static readonly EntitlementSet WithWatermark = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog);
 
         // ---- Done screen: "Не чаще 1 раза в 3 экспорта, не в первые 2 экспорта" ----
 
@@ -153,10 +153,10 @@ namespace Ballverse.Core.Tests.Monetization
         public void DoneScreenLine_NotShownWithNoWatermark()
         {
             Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(3, null, WithWatermark));
-            var byParts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog, false);
+            var byParts = Entitlements.From(new[] { ProductIds.AllModes, ProductIds.NoAds }, MonetizationConfig.FullCatalog);
             Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(3, null, byParts));
             // All Modes alone does not remove the watermark: the line still shows.
-            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, Entitlements.From(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog, false)));
+            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, Entitlements.From(new[] { ProductIds.AllModes }, MonetizationConfig.FullCatalog)));
         }
 
         [Fact]
@@ -192,11 +192,11 @@ namespace Ballverse.Core.Tests.Monetization
             // 9 singles: Ultimate hidden as CheaperViaParts; the line opens the missing parts instead (spec §5.2).
             var owned = ProductCatalog.All.Where(p => p.Kind == ProductKind.SingleMode && p.Mode != ModeCode.M15)
                 .Select(p => p.Id).ToArray();
-            var e = Entitlements.From(owned, MonetizationConfig.FullCatalog, false);
+            var e = Entitlements.From(owned, MonetizationConfig.FullCatalog);
             Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, e));
-            var target = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, null, false).Select(o => o.ProductId).ToArray();
+            var target = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, null).Select(o => o.ProductId).ToArray();
             Assert.DoesNotContain(ProductIds.Ultimate, target);
-            Assert.Contains(Entitlement.NoWatermark, Entitlements.From(owned.Concat(target), MonetizationConfig.FullCatalog, false).ToArray());
+            Assert.Contains(Entitlement.NoWatermark, Entitlements.From(owned.Concat(target), MonetizationConfig.FullCatalog).ToArray());
         }
 
         // ---- Trial preview: "По умолчанию включено (вопрос В2), 1 демо на режим в сутки" ----
@@ -204,10 +204,10 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void TrialPreview_LockedPaidMode_AllowedOncePerDayPerMode()
         {
-            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 100, MonetizationConfig.FullCatalog));
-            Assert.Equal(TrialPreviewAccess.UsedToday, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 100, 100, MonetizationConfig.FullCatalog));
-            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 99, 100, MonetizationConfig.FullCatalog));
-            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 100, 101, MonetizationConfig.FullCatalog));
+            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 100, MonetizationConfig.FullCatalog, null));
+            Assert.Equal(TrialPreviewAccess.UsedToday, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 100, 100, MonetizationConfig.FullCatalog, null));
+            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 99, 100, MonetizationConfig.FullCatalog, null));
+            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 100, 101, MonetizationConfig.FullCatalog, null));
         }
 
         /// <summary>
@@ -222,12 +222,12 @@ namespace Ballverse.Core.Tests.Monetization
                 var mode = (ModeCode)m;
                 foreach (int today in new[] { int.MinValue, -1, 0, 1, 365, int.MaxValue })
                 {
-                    Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, null, today, MonetizationConfig.FullCatalog));
-                    Assert.Equal(TrialPreviewAccess.UsedToday, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today, today, MonetizationConfig.FullCatalog));
+                    Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, null, today, MonetizationConfig.FullCatalog, null));
+                    Assert.Equal(TrialPreviewAccess.UsedToday, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today, today, MonetizationConfig.FullCatalog, null));
                     if (today != int.MinValue)
-                        Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today - 1, today, MonetizationConfig.FullCatalog));
+                        Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today - 1, today, MonetizationConfig.FullCatalog, null));
                     if (today != int.MaxValue)
-                        Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today + 1, today, MonetizationConfig.FullCatalog));
+                        Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today + 1, today, MonetizationConfig.FullCatalog, null));
                 }
             }
         }
@@ -246,7 +246,7 @@ namespace Ballverse.Core.Tests.Monetization
                 {
                     var mode = (ModeCode)(6 + (int)rng.NextUInt(10));
                     int? last = lastDemoDay.TryGetValue(mode, out var d) ? d : (int?)null;
-                    var access = SalePointPolicy.CanStartTrialPreview(mode, Nothing, last, day, MonetizationConfig.FullCatalog);
+                    var access = SalePointPolicy.CanStartTrialPreview(mode, Nothing, last, day, MonetizationConfig.FullCatalog, null);
                     bool alreadyToday = demos.ContainsKey((mode, day));
                     Assert.Equal(alreadyToday ? TrialPreviewAccess.UsedToday : TrialPreviewAccess.Allowed, access);
                     if (access == TrialPreviewAccess.Allowed)
@@ -267,15 +267,15 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void TrialPreview_ResultPrecedence()
         {
-            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog, false);
+            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog);
             // NotPaid wins over everything.
-            Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M01, Nothing, 5, 5, MonetizationConfig.FullCatalog, trialEnabled: false));
+            Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M01, Nothing, 5, 5, MonetizationConfig.FullCatalog, null, trialEnabled: false));
             // NotLocked wins over Disabled and UsedToday.
-            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, 5, 5, MonetizationConfig.FullCatalog, trialEnabled: false));
-            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, 5, 5, MonetizationConfig.FullCatalog));
+            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, 5, 5, MonetizationConfig.FullCatalog, null, trialEnabled: false));
+            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, 5, 5, MonetizationConfig.FullCatalog, null));
             // Disabled wins over UsedToday.
-            Assert.Equal(TrialPreviewAccess.Disabled, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 5, 5, MonetizationConfig.FullCatalog, trialEnabled: false));
-            Assert.Equal(TrialPreviewAccess.Disabled, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 4, 5, MonetizationConfig.FullCatalog, trialEnabled: false));
+            Assert.Equal(TrialPreviewAccess.Disabled, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 5, 5, MonetizationConfig.FullCatalog, null, trialEnabled: false));
+            Assert.Equal(TrialPreviewAccess.Disabled, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 4, 5, MonetizationConfig.FullCatalog, null, trialEnabled: false));
         }
 
         [Fact]
@@ -283,33 +283,33 @@ namespace Ballverse.Core.Tests.Monetization
         {
             var lastDemoDay = new Dictionary<ModeCode, int> { { ModeCode.M08, 7 } };
             int? Last(ModeCode m) => lastDemoDay.TryGetValue(m, out var d) ? d : (int?)null;
-            Assert.Equal(TrialPreviewAccess.UsedToday, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, Last(ModeCode.M08), 7, MonetizationConfig.FullCatalog));
-            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M09, Nothing, Last(ModeCode.M09), 7, MonetizationConfig.FullCatalog));
+            Assert.Equal(TrialPreviewAccess.UsedToday, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, Last(ModeCode.M08), 7, MonetizationConfig.FullCatalog, null));
+            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M09, Nothing, Last(ModeCode.M09), 7, MonetizationConfig.FullCatalog, null));
         }
 
         [Fact]
         public void TrialPreview_ClockMovedBackDoesNotLock()
         {
-            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 120, 100, MonetizationConfig.FullCatalog));
+            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 120, 100, MonetizationConfig.FullCatalog, null));
         }
 
         [Fact]
         public void TrialPreview_DisabledByRemoteConfig()
         {
             Assert.Equal(TrialPreviewAccess.Disabled,
-                SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 100, MonetizationConfig.FullCatalog, trialEnabled: false));
+                SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 100, MonetizationConfig.FullCatalog, null, trialEnabled: false));
         }
 
         [Fact]
         public void TrialPreview_PlayableModesNeedNoDemo()
         {
-            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog, false);
-            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, null, 1, MonetizationConfig.FullCatalog));
+            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar }, MonetizationConfig.FullCatalog);
+            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, null, 1, MonetizationConfig.FullCatalog, null));
             Assert.Equal(TrialPreviewAccess.NotLocked,
-                SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 1, MonetizationConfig.FullCatalog, true, new[] { ModeCode.M08 }));
+                SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 1, MonetizationConfig.FullCatalog, new[] { ModeCode.M08 }, true));
             Assert.Equal(TrialPreviewAccess.NotLocked,
-                SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 1, new MonetizationConfig(new[] { ModeCode.M08 }), true, null));
-            Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M01, Nothing, null, 1, MonetizationConfig.FullCatalog));
+                SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, null, 1, new MonetizationConfig(new[] { ModeCode.M08 }), null, true));
+            Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M01, Nothing, null, 1, MonetizationConfig.FullCatalog, null));
         }
 
         [Fact]
@@ -317,11 +317,11 @@ namespace Ballverse.Core.Tests.Monetization
         {
             for (int m = 6; m <= 15; m++)
             {
-                Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview((ModeCode)m, Nothing, null, 0, MonetizationConfig.FullCatalog));
+                Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview((ModeCode)m, Nothing, null, 0, MonetizationConfig.FullCatalog, null));
             }
             for (int m = 1; m <= 5; m++)
             {
-                Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview((ModeCode)m, Nothing, null, 0, MonetizationConfig.FullCatalog));
+                Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview((ModeCode)m, Nothing, null, 0, MonetizationConfig.FullCatalog, null));
             }
         }
 
@@ -330,7 +330,7 @@ namespace Ballverse.Core.Tests.Monetization
         static FirstVideoQuestScreen Quest(bool alreadyShown, IEnumerable<string> owned, bool interstitial = false,
             MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null)
         {
-            return SalePointPolicy.FirstVideoQuest(alreadyShown, owned, config ?? MonetizationConfig.FullCatalog, interstitial, grandfathered, false);
+            return SalePointPolicy.FirstVideoQuest(alreadyShown, owned, config ?? MonetizationConfig.FullCatalog, interstitial, grandfathered);
         }
 
         [Fact]
@@ -350,7 +350,7 @@ namespace Ballverse.Core.Tests.Monetization
             // §4.3 "без давления": no visual priority, unlike the paid-card sheet where All Modes is emphasized.
             Assert.False(Quest(false, new string[0]).Offer.Emphasized);
             Assert.False(Quest(false, new[] { ProductIds.ModeColorWar }).Offer.Emphasized);
-            Assert.True(Storefront.ModeSheet(ModeCode.M06, new string[0], MonetizationConfig.FullCatalog, null, false).Single(o => o.ProductId == ProductIds.AllModes).Emphasized);
+            Assert.True(Storefront.ModeSheet(ModeCode.M06, new string[0], MonetizationConfig.FullCatalog, null).Single(o => o.ProductId == ProductIds.AllModes).Emphasized);
         }
 
         [Fact]
@@ -367,7 +367,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void FirstVideoQuestScreen_RejectsEmphasizedOffer()
         {
-            var offer = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, null, false).Get(ProductIds.AllModes);
+            var offer = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, null).Get(ProductIds.AllModes);
             Assert.Throws<ArgumentException>(() => new FirstVideoQuestScreen(offer.WithEmphasis(true)));
             var screen = new FirstVideoQuestScreen(offer.WithEmphasis(false));
             Assert.True(screen.ShowOffer);
@@ -438,7 +438,7 @@ namespace Ballverse.Core.Tests.Monetization
                 Assert.False(Quest(false, owned, interstitial: true).ShowOffer);
                 if ((mask & 0x3F) != 0) continue; // the storefront comparison below on 1/64 of the subsets keeps this fast
                 var screen = Quest(false, owned);
-                var all = Storefront.Build(owned, MonetizationConfig.FullCatalog, null, false).Get(ProductIds.AllModes);
+                var all = Storefront.Build(owned, MonetizationConfig.FullCatalog, null).Get(ProductIds.AllModes);
                 Assert.Equal(all.Visible, screen.ShowOffer);
                 if (screen.ShowOffer)
                 {
@@ -487,8 +487,8 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void FirstVideoQuest_NullOwnedThrows()
         {
-            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(false, null, MonetizationConfig.FullCatalog, false, null, false));
-            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(true, null, MonetizationConfig.FullCatalog, false, null, false));
+            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(false, null, MonetizationConfig.FullCatalog, false, null));
+            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(true, null, MonetizationConfig.FullCatalog, false, null));
         }
     }
 }

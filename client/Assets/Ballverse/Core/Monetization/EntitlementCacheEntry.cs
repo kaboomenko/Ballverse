@@ -34,12 +34,14 @@ namespace Ballverse.Core.Monetization
             SavedAtUnixMs = savedAtUnixMs;
         }
 
-        /// <summary>Entitlements of the cached products (spec §5.1 <c>Entitlements.From</c>).</summary>
-        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
-        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
-        public EntitlementSet GetEntitlements(MonetizationConfig config, bool watermarkGrandfathered)
+        /// <summary>
+        /// Entitlements of the cached products (spec §5.1 <c>Entitlements.From</c>, §5.4 "Магазин недоступен"), NO_WATERMARK
+        /// included by the permanent rule of spec §5.0.2: the cache needs nothing but the product ids.
+        /// </summary>
+        /// <param name="config">Release catalog (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        public EntitlementSet GetEntitlements(MonetizationConfig config)
         {
-            return Entitlements.From(_ownedProductIds, config, watermarkGrandfathered);
+            return Entitlements.From(_ownedProductIds, config);
         }
     }
 }

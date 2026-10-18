@@ -18,8 +18,8 @@ namespace Ballverse.Core.Monetization
         /// </summary>
         CheaperViaParts = 4,
         /// <summary>
-        /// It would only re-sell paid modes the user can already play (free by config or grandfathered, spec §5.1) and does
-        /// not complete NO_WATERMARK: "Покупатель не должен платить за то, что у него уже есть" (spec §5.2).
+        /// It would only re-sell paid modes the user can already play (free by config or grandfathered, spec §5.1):
+        /// "Покупатель не должен платить за то, что у него уже есть" (spec §5.2).
         /// </summary>
         AlreadyAvailable = 5,
         /// <summary>
@@ -54,21 +54,22 @@ namespace Ballverse.Core.Monetization
         /// <summary>All Modes only: the user has 1…9 of its 10 modes.</summary>
         public bool PartiallyOwned { get; }
         /// <summary>
-        /// Visible non-Ultimate product that removes the watermark by completing a set the user has already started
-        /// (spec §5.2 "последний шаг: … и водяной знак уйдут"): the full Ultimate contents (§5.1 NO_WATERMARK by parts),
-        /// or, under the release-1 No Ads rule or its grandfathering, both ad rights (e.g. Remove Interstitial after
-        /// Remove Export). False on a first purchase that removes the watermark on its own (No Ads with nothing owned);
-        /// use <see cref="RemovesWatermark"/> for the "+ без водяного знака" badge.
+        /// Visible non-Ultimate product that completes a set the user has already started (spec §5.0.3, §5.2 "последний
+        /// шаг"): both ad rights, which also removes the watermark (spec §5.0.2; e.g. Remove Interstitial after Remove
+        /// Export: "без рекламы и без водяного знака"), or the full Ultimate contents (e.g. No Ads after All Modes: "реклама
+        /// и водяной знак уйдут"; All Modes after No Ads: "все режимы", the watermark already gone). Decision: the label is
+        /// the same flag for both; the UI picks the wording from <see cref="RemovesWatermark"/>. False on a first purchase
+        /// that completes a set on its own (No Ads with nothing owned).
         /// </summary>
         public bool IsLastStep { get; }
-        /// <summary>Buying it grants NO_WATERMARK; on Ultimate this is the "+ без водяного знака" badge (spec §5.2, §3.10).</summary>
+        /// <summary>Buying it grants NO_WATERMARK: the "+ без водяного знака" badge on No Ads and Ultimate (spec §5.0.3, §5.2, §3.10).</summary>
         public bool RemovesWatermark => Gain.Contains(Entitlement.NoWatermark);
         /// <summary>Show larger than its neighbours (mode sheet: "крупнее — Все 10 режимов", spec §5.2).</summary>
         public bool Emphasized { get; }
         /// <summary>
         /// Single modes only: the mode is playable without its entitlement (free by config or grandfathered, spec §5.1).
-        /// Such an offer is visible only as a last step (buying it still grants MODE_* toward NO_WATERMARK by parts);
-        /// the UI should mark it "уже доступен".
+        /// Such an offer is always hidden (<see cref="OfferHiddenReason.AlreadyAvailable"/>, or a stronger reason); the flag
+        /// lets the UI mark the mode "уже доступен" where it lists hidden offers.
         /// </summary>
         public bool AlreadyAvailable { get; }
 

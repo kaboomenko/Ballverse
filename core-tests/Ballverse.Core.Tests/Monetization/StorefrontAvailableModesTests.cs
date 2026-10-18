@@ -24,7 +24,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void ModeFreeByConfig_SingleHiddenAndCountedInAllModes()
         {
-            var s = Storefront.Build(new string[0], M06Free, null, false);
+            var s = Storefront.Build(new string[0], M06Free, null);
             var single = s.Get(ProductIds.ModeBallBattle);
             Assert.Equal(OfferHiddenReason.AlreadyAvailable, single.HiddenReason);
             Assert.True(single.AlreadyAvailable);
@@ -37,62 +37,71 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.True(s.Get(ProductIds.Ultimate).Visible);
             Assert.False(s.Get(ProductIds.ModeLastStanding).AlreadyAvailable);
 
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M06, new string[0], M06Free, null, false));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M06, new string[0], M06Free, null));
             Assert.Equal(new[] { ProductIds.ModeLastStanding, ProductIds.AllModes },
-                Storefront.ModeSheet(ModeCode.M07, new string[0], M06Free, null, false).Select(o => o.ProductId).ToArray());
+                Storefront.ModeSheet(ModeCode.M07, new string[0], M06Free, null).Select(o => o.ProductId).ToArray());
         }
 
         [Fact]
         public void GrandfatheredMode_SingleHiddenAndModeSheetEmpty()
         {
             var g = new[] { ModeCode.M06 };
-            var s = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, g, false);
+            var s = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, g);
             Assert.Equal(OfferHiddenReason.AlreadyAvailable, s.Get(ProductIds.ModeBallBattle).HiddenReason);
             Assert.Equal(1, s.Get(ProductIds.AllModes).OwnedModeCount);
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M06, new string[0], MonetizationConfig.FullCatalog, g, false));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M06, new string[0], MonetizationConfig.FullCatalog, g));
 
             // Grandfathered M01–M05 entries have no product and change nothing.
-            var s2 = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, new[] { ModeCode.M02 }, false);
-            Assert.Equal(VisibleIds(Storefront.Build(new string[0], MonetizationConfig.FullCatalog, null, false)), VisibleIds(s2));
+            var s2 = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, new[] { ModeCode.M02 });
+            Assert.Equal(VisibleIds(Storefront.Build(new string[0], MonetizationConfig.FullCatalog, null)), VisibleIds(s2));
             Assert.Equal(0, s2.Get(ProductIds.AllModes).OwnedModeCount);
         }
 
+        /// <summary>No Ads already removes the watermark (spec §5.0.2), so the grandfathered M06 is never re-sold.</summary>
         [Fact]
-        public void AvailableModeStillOfferedAsLastStepForWatermark()
+        public void AvailableModeNeverReSold_WatermarkAlreadyOwned()
         {
             var owned = SinglesM07ToM15.Concat(new[] { ProductIds.NoAds }).ToArray();
-            var s = Storefront.Build(owned, MonetizationConfig.FullCatalog, new[] { ModeCode.M06 }, false);
-            Assert.Equal(new[] { ProductIds.ModeBallBattle }, VisibleIds(s));
+            var s = Storefront.Build(owned, MonetizationConfig.FullCatalog, new[] { ModeCode.M06 });
+            Assert.Empty(VisibleIds(s));
+            Assert.True(s.AllPurchased);
+            Assert.True(s.Entitlements.Contains(Entitlement.NoWatermark));
             var single = s.Get(ProductIds.ModeBallBattle);
             Assert.True(single.AlreadyAvailable);
-            Assert.True(single.IsLastStep);
-            Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.AllModes).HiddenReason);
-            Assert.Equal(ProductIds.ModeBallBattle, s.Get(ProductIds.Ultimate).CheaperAlternativeId);
-            Assert.Equal(new[] { ProductIds.ModeBallBattle },
-                Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, new[] { ModeCode.M06 }, false).Select(o => o.ProductId).ToArray());
+            Assert.Equal(OfferHiddenReason.AlreadyAvailable, single.HiddenReason);
+            Assert.False(single.IsLastStep);
+            Assert.Equal(OfferHiddenReason.AlreadyAvailable, s.Get(ProductIds.AllModes).HiddenReason);
+            Assert.Equal(OfferHiddenReason.AlreadyAvailable, s.Get(ProductIds.Ultimate).HiddenReason);
+            Assert.Empty(Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, new[] { ModeCode.M06 }));
         }
 
+        /// <summary>The watermark path never needs a mode the user already plays: the missing ad removal suffices.</summary>
         [Fact]
-        public void WatermarkPathIncludesAvailableModeHiddenInShop()
+        public void WatermarkPathNeedsNoAvailableMode()
         {
             var owned = SinglesM07ToM15.Concat(new[] { ProductIds.RemoveExportAds }).ToArray();
             var g = new[] { ModeCode.M06 };
-            var s = Storefront.Build(owned, MonetizationConfig.FullCatalog, g, false);
+            var s = Storefront.Build(owned, MonetizationConfig.FullCatalog, g);
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, VisibleIds(s));
-            Assert.Equal(OfferHiddenReason.CheaperViaParts, s.Get(ProductIds.Ultimate).HiddenReason);
+            Assert.True(s.Get(ProductIds.RemoveInterstitialAds).IsLastStep);
+            // Ultimate would add only NO_INTERSTITIALS + NO_WATERMARK beyond the available M06: the $5.99 removal gives that.
+            Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.Ultimate).HiddenReason);
+            Assert.Equal(ProductIds.RemoveInterstitialAds, s.Get(ProductIds.Ultimate).CheaperAlternativeId);
 
-            var offers = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, g, false);
-            Assert.Equal(new[] { ProductIds.RemoveInterstitialAds, ProductIds.ModeBallBattle }, offers.Select(o => o.ProductId).ToArray());
-            Assert.Equal(OfferHiddenReason.AlreadyAvailable, offers[1].HiddenReason);
-            Assert.True(offers[1].AlreadyAvailable);
+            var offers = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, g);
+            Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, offers.Select(o => o.ProductId).ToArray());
         }
 
         [Fact]
-        public void AllPaidModesFree_AllModesAndSinglesHidden_UltimateStillSellsAdsAndWatermark()
+        public void AllPaidModesFree_AllModesSinglesAndUltimateHidden_NoAdsSellsAdsAndWatermark()
         {
             var config = new MonetizationConfig(Enumerable.Range(6, 10).Select(m => (ModeCode)m));
-            var s = Storefront.Build(new string[0], config, null, false);
-            Assert.Equal(new[] { ProductIds.Ultimate, ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds }, VisibleIds(s));
+            var s = Storefront.Build(new string[0], config, null);
+            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds }, VisibleIds(s));
+            // Ultimate's value beyond the free modes equals No Ads' (both ad rights + NO_WATERMARK), at a higher price.
+            Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.Ultimate).HiddenReason);
+            Assert.Equal(ProductIds.NoAds, s.Get(ProductIds.Ultimate).CheaperAlternativeId);
+            Assert.True(s.Get(ProductIds.NoAds).RemovesWatermark);
             var all = s.Get(ProductIds.AllModes);
             Assert.Equal(OfferHiddenReason.AlreadyAvailable, all.HiddenReason);
             Assert.Equal(10, all.OwnedModeCount);
@@ -107,7 +116,7 @@ namespace Ballverse.Core.Tests.Monetization
         public void AllModesHiddenWhenItsValueEqualsTheSingle_FreeByConfig()
         {
             var config = new MonetizationConfig(Enumerable.Range(6, 9).Select(m => (ModeCode)m));
-            var s = Storefront.Build(new string[0], config, null, false);
+            var s = Storefront.Build(new string[0], config, null);
             var all = s.Get(ProductIds.AllModes);
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, all.HiddenReason);
             Assert.Equal(ProductIds.ModeLiquidSand, all.CheaperAlternativeId);
@@ -115,18 +124,18 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.NotEqual(all.Gain, s.Get(ProductIds.ModeLiquidSand).Gain);
             Assert.True(s.Get(ProductIds.ModeLiquidSand).Visible);
             Assert.Equal(new[] { ProductIds.ModeLiquidSand },
-                Storefront.ModeSheet(ModeCode.M15, new string[0], config, null, false).Select(o => o.ProductId).ToArray());
+                Storefront.ModeSheet(ModeCode.M15, new string[0], config, null).Select(o => o.ProductId).ToArray());
         }
 
         [Fact]
         public void AllModesHiddenWhenItsValueEqualsTheSingle_Grandfathered()
         {
             var g = Enumerable.Range(6, 9).Select(m => (ModeCode)m).ToArray();
-            var s = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, g, false);
+            var s = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, g);
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.AllModes).HiddenReason);
             Assert.Equal(ProductIds.ModeLiquidSand, s.Get(ProductIds.AllModes).CheaperAlternativeId);
             Assert.Equal(new[] { ProductIds.ModeLiquidSand },
-                Storefront.ModeSheet(ModeCode.M15, new string[0], MonetizationConfig.FullCatalog, g, false).Select(o => o.ProductId).ToArray());
+                Storefront.ModeSheet(ModeCode.M15, new string[0], MonetizationConfig.FullCatalog, g).Select(o => o.ProductId).ToArray());
         }
 
         /// <summary>Rng-driven property test over random free sets, grandfathered sets and owned products.</summary>
@@ -138,11 +147,11 @@ namespace Ballverse.Core.Tests.Monetization
             {
                 var free = Enumerable.Range(6, 10).Where(_ => rng.NextUInt(4) == 0).Select(m => (ModeCode)m).ToArray();
                 var g = Enumerable.Range(1, 15).Where(_ => rng.NextUInt(5) == 0).Select(m => (ModeCode)m).ToArray();
-                var config = new MonetizationConfig(free, rng.NextUInt(4) != 0);
+                var config = new MonetizationConfig(free);
                 var owned = Subsets.Ids((int)rng.NextUInt((uint)Subsets.Count));
                 var available = EntitlementSet.Of(free.Concat(g).Where(m => (int)m >= 6).Select(m => (Entitlement)(int)m));
 
-                var s = Storefront.Build(owned, config, g, false);
+                var s = Storefront.Build(owned, config, g);
                 foreach (var o in s.Offers)
                 {
                     bool expectFlag = o.Product.Kind == ProductKind.SingleMode && available.ContainsMode(o.Product.Mode.Value)
@@ -177,23 +186,23 @@ namespace Ballverse.Core.Tests.Monetization
                 for (int m = 6; m <= 15; m++)
                 {
                     if (ModeAvailability.IsAvailable((ModeCode)m, s.Entitlements, g, config))
-                        Assert.Empty(Storefront.ModeSheet((ModeCode)m, owned, config, g, false));
+                        Assert.Empty(Storefront.ModeSheet((ModeCode)m, owned, config, g));
                 }
 
-                var wm = Storefront.WatermarkOffers(owned, config, g, false);
+                var wm = Storefront.WatermarkOffers(owned, config, g);
                 if (s.Entitlements.Contains(Entitlement.NoWatermark)) Assert.Empty(wm);
                 else Assert.Contains(Entitlement.NoWatermark,
-                    Entitlements.From(owned.Concat(wm.Select(o => o.ProductId)), config, false).ToArray());
+                    Entitlements.From(owned.Concat(wm.Select(o => o.ProductId)), config).ToArray());
 
                 // Buying every visible offer, repeatedly, ends with everything not already available, plus NO_WATERMARK.
                 var have = new List<string>(owned);
                 for (int round = 0; round < 5; round++)
                 {
-                    var visible = Storefront.Build(have, config, g, false).VisibleOffers;
+                    var visible = Storefront.Build(have, config, g).VisibleOffers;
                     if (visible.Count == 0) break;
                     have.AddRange(visible.Select(o => o.ProductId));
                 }
-                var final = Storefront.Build(have, config, g, false);
+                var final = Storefront.Build(have, config, g);
                 Assert.Empty(final.VisibleOffers);
                 Assert.True(final.Entitlements.Union(available).IsSupersetOf(EntitlementSet.AllDefined));
                 Assert.True(final.Entitlements.Contains(Entitlement.NoWatermark));

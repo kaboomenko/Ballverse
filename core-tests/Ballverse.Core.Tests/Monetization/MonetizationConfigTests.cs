@@ -35,13 +35,15 @@ namespace Ballverse.Core.Tests.Monetization
             }
         }
 
+        /// <summary>Spec §5.0.2: the watermark rule has no config switch; both presets grant it the same way.</summary>
         [Fact]
-        public void Release1_WatermarkRules()
+        public void WatermarkRuleIsNotConfigurable()
         {
-            Assert.True(MonetizationConfig.Release1.WatermarkWithNoAds);
-            Assert.True(MonetizationConfig.Release1.WatermarkByParts);
-            Assert.False(MonetizationConfig.FullCatalog.WatermarkWithNoAds);
-            Assert.True(MonetizationConfig.FullCatalog.WatermarkByParts);
+            var t = typeof(MonetizationConfig);
+            foreach (var m in t.GetMembers())
+                Assert.DoesNotContain("Watermark", m.Name);
+            Assert.Single(t.GetConstructors());
+            Assert.Equal(3, t.GetConstructors()[0].GetParameters().Length);
         }
 
         [Fact]
@@ -59,11 +61,9 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void LegacyConstructorBuildsFullCatalog()
         {
-            var c = new MonetizationConfig(new[] { ModeCode.M07 }, false);
+            var c = new MonetizationConfig(new[] { ModeCode.M07 });
             Assert.Equal(ProductIds.All.ToArray(), c.SellableProductIds.ToArray());
             Assert.Equal(AllModes, c.ReleasedModes.ToArray());
-            Assert.False(c.WatermarkWithNoAds);
-            Assert.False(c.WatermarkByParts);
             Assert.True(c.IsFree(ModeCode.M07));
         }
 
@@ -74,7 +74,6 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(MonetizationConfig.Release1.FreeModes.ToArray(), c.FreeModes.ToArray());
             Assert.Equal(AdIds, c.SellableProductIds.ToArray());
             Assert.Equal(MonetizationConfig.Release1.ReleasedModes.ToArray(), c.ReleasedModes.ToArray());
-            Assert.True(c.WatermarkWithNoAds);
 
             var widened = MonetizationConfig.Release1.WithFreeModes(new[] { ModeCode.M09 });
             Assert.True(widened.IsFree(ModeCode.M09));
@@ -83,23 +82,10 @@ namespace Ballverse.Core.Tests.Monetization
         }
 
         [Fact]
-        public void WithFlags_ChangeOnlyThatFlag()
-        {
-            var off = MonetizationConfig.Release1.WithWatermarkWithNoAds(false);
-            Assert.False(off.WatermarkWithNoAds);
-            Assert.True(off.WatermarkByParts);
-            Assert.Equal(AdIds, off.SellableProductIds.ToArray());
-            var noParts = MonetizationConfig.Release1.WithWatermarkByParts(false);
-            Assert.False(noParts.WatermarkByParts);
-            Assert.True(noParts.WatermarkWithNoAds);
-            Assert.True(MonetizationConfig.FullCatalog.WithWatermarkWithNoAds(true).WatermarkWithNoAds);
-        }
-
-        [Fact]
         public void SellableOrderAndDuplicatesDoNotDependOnInput()
         {
-            var a = new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.NoAds },
-                new[] { ModeCode.M05, ModeCode.M01, ModeCode.M05 }, true);
+            var a = new MonetizationConfig(new ModeCode[0], new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.NoAds },
+                new[] { ModeCode.M05, ModeCode.M01, ModeCode.M05 });
             Assert.Equal(new[] { ProductIds.RemoveExportAds, ProductIds.NoAds }, a.SellableProductIds.ToArray());
             Assert.Equal(new[] { ModeCode.M01, ModeCode.M05 }, a.ReleasedModes.ToArray());
         }
@@ -108,29 +94,29 @@ namespace Ballverse.Core.Tests.Monetization
         public void SellingAProductThatPromisesAnUnreleasedModeThrows()
         {
             var r1Modes = MonetizationConfig.Release1.ReleasedModes;
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.AllModes }, r1Modes, true));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.Ultimate }, r1Modes, true));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.ModeOrbit }, r1Modes, true));
+            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.AllModes }, r1Modes));
+            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.Ultimate }, r1Modes));
+            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.ModeOrbit }, r1Modes));
             // Releasing M14 allows its single, but not the bundles that also promise M06–M15.
             var withM14 = r1Modes.Concat(new[] { ModeCode.M14 }).ToArray();
-            var c = new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.ModeOrbit }, withM14, true);
+            var c = new MonetizationConfig(new ModeCode[0], new[] { ProductIds.ModeOrbit }, withM14);
             Assert.True(c.IsModeSold(ModeCode.M14));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.AllModes }, withM14, true));
+            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { ProductIds.AllModes }, withM14));
         }
 
         [Fact]
         public void InvalidInputThrows()
         {
             var modes = MonetizationConfig.Release1.ReleasedModes;
-            Assert.Throws<ArgumentNullException>(() => new MonetizationConfig(null, true, AdIds, modes, true));
-            Assert.Throws<ArgumentNullException>(() => new MonetizationConfig(new ModeCode[0], true, null, modes, true));
-            Assert.Throws<ArgumentNullException>(() => new MonetizationConfig(new ModeCode[0], true, AdIds, null, true));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], true, new[] { "ballverse.unknown" }, modes, true));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], true, new string[] { null }, modes, true));
-            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], true, new[] { "BALLVERSE.BUNDLE.NO_ADS" }, modes, true));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new ModeCode[0], true, AdIds, new[] { (ModeCode)16 }, true));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new ModeCode[0], true, AdIds, new[] { (ModeCode)0 }, true));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new[] { (ModeCode)99 }, true, AdIds, modes, true));
+            Assert.Throws<ArgumentNullException>(() => new MonetizationConfig(null, AdIds, modes));
+            Assert.Throws<ArgumentNullException>(() => new MonetizationConfig(new ModeCode[0], null, modes));
+            Assert.Throws<ArgumentNullException>(() => new MonetizationConfig(new ModeCode[0], AdIds, null));
+            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { "ballverse.unknown" }, modes));
+            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new string[] { null }, modes));
+            Assert.Throws<ArgumentException>(() => new MonetizationConfig(new ModeCode[0], new[] { "BALLVERSE.BUNDLE.NO_ADS" }, modes));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new ModeCode[0], AdIds, new[] { (ModeCode)16 }));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new ModeCode[0], AdIds, new[] { (ModeCode)0 }));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new MonetizationConfig(new[] { (ModeCode)99 }, AdIds, modes));
         }
 
         [Fact]
@@ -155,15 +141,15 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void EmptySellableCatalogIsAllowed()
         {
-            var c = new MonetizationConfig(new ModeCode[0], true, new string[0], new[] { ModeCode.M01 }, false);
+            var c = new MonetizationConfig(new ModeCode[0], new string[0], new[] { ModeCode.M01 });
             Assert.Empty(c.SellableProductIds);
             Assert.Equal(EntitlementSet.Empty, c.SellableGrants);
-            var s = Storefront.Build(new string[0], c, null, false);
+            var s = Storefront.Build(new string[0], c, null);
             Assert.Empty(s.VisibleOffers);
             Assert.True(s.AllPurchased);
             Assert.All(s.Offers, o => Assert.Equal(OfferHiddenReason.NotSellable, o.HiddenReason));
-            Assert.Empty(Storefront.WatermarkOffers(new string[0], c, null, false));
-            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(3, null, new string[0], c, null, false));
+            Assert.Empty(Storefront.WatermarkOffers(new string[0], c, null));
+            Assert.Empty(SalePointPolicy.DoneScreenLineOffers(3, null, new string[0], c, null));
         }
     }
 }

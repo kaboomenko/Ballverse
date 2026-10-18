@@ -14,7 +14,6 @@ namespace Ballverse.Core.Tests.Monetization
         public void DefaultFreeModesAreM01ToM05()
         {
             Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 }, MonetizationConfig.FullCatalog.FreeModes.ToArray());
-            Assert.True(MonetizationConfig.FullCatalog.WatermarkByParts);
             for (int m = 1; m <= 15; m++)
             {
                 var access = ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, None, MonetizationConfig.FullCatalog);
@@ -25,7 +24,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void EntitlementUnlocksPaidMode()
         {
-            var e = Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog, false);
+            var e = Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog);
             Assert.Equal(ModeAccess.Entitled, ModeAvailability.GetAccess(ModeCode.M14, e, None, MonetizationConfig.FullCatalog));
             Assert.False(ModeAvailability.IsAvailable(ModeCode.M13, e, None, MonetizationConfig.FullCatalog));
             Assert.True(ModeAvailability.IsAvailable(ModeCode.M14, e, null, MonetizationConfig.FullCatalog));
@@ -110,7 +109,6 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(defaults, new MonetizationConfig(new[] { ModeCode.M02, ModeCode.M01 }).FreeModes.ToArray());
             Assert.Equal(defaults.Concat(new[] { ModeCode.M09 }).ToArray(),
                 new MonetizationConfig(new[] { ModeCode.M09, ModeCode.M03, ModeCode.M09 }).FreeModes.ToArray());
-            Assert.False(new MonetizationConfig(None, false).WatermarkByParts);
         }
 
         /// <summary>

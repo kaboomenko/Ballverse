@@ -4,9 +4,10 @@ using System.Collections.Generic;
 namespace Ballverse.Core.Monetization
 {
     /// <summary>
-    /// Smart storefront: protection from paying twice (spec §5.2 "Умная витрина", owner decisions Р6, Р13) restricted to the
-    /// products sold in this release (<see cref="MonetizationConfig.SellableProductIds"/>; release 1: only the three ad
-    /// products). Pure functions.
+    /// Smart storefront: protection from paying twice (spec §5.0.3, §5.2 "Умная витрина", owner decisions Р6, Р13, Р21)
+    /// restricted to the products sold in this release (<see cref="MonetizationConfig.SellableProductIds"/>; release 1: only
+    /// the three ad products). NO_WATERMARK follows the permanent rule of spec §5.0.2 (<see cref="Entitlements"/>). Pure
+    /// functions.
     /// <para>
     /// Paid modes the user can already play without an entitlement (free by config or grandfathered, and released;
     /// spec §5.1) are "available". An offer's <em>value</em> is its <see cref="StorefrontOffer.Gain"/> minus the entitlements
@@ -18,23 +19,17 @@ namespace Ballverse.Core.Monetization
     /// <item>Not sold in this release → hidden (<see cref="OfferHiddenReason.NotSellable"/>); never visible, never a cheaper
     /// alternative, never a watermark part.</item>
     /// <item>Gain (new entitlements incl. derived NO_WATERMARK) empty → hidden (<see cref="OfferHiddenReason.NothingNew"/>).</item>
-    /// <item>Value empty (only re-sells available modes and does not complete NO_WATERMARK) → hidden
-    /// (<see cref="OfferHiddenReason.AlreadyAvailable"/>). A single mode that would complete the Ultimate contents stays
-    /// visible as a last step, flagged <see cref="StorefrontOffer.AlreadyAvailable"/>.</item>
+    /// <item>Value empty (only re-sells available modes) → hidden (<see cref="OfferHiddenReason.AlreadyAvailable"/>). A single
+    /// mode never grants NO_WATERMARK (spec §5.0.2 needs both ad rights), so an available single mode is always hidden.</item>
     /// <item>A cheaper sellable product (base USD price; ties broken by display order) has exactly the same value → hidden
     /// (<see cref="OfferHiddenReason.CheaperEquivalent"/>). E.g. Ultimate after All Modes (No Ads gives the same),
     /// No Ads after Remove Export (Remove Interstitial gives the same), All Modes when only one mode is missing.</item>
-    /// <item>Ultimate when completing its contents from parts also grants NO_WATERMARK (by parts, the release-1 No Ads rule
-    /// or its grandfathering), the user owns at least one mode entitlement, and the cheapest set of other sellable products
-    /// completing the Ultimate contents (<see cref="CheapestPartsToComplete"/>) costs strictly less →
+    /// <item>Ultimate when the user owns at least one mode entitlement and the cheapest set of other sellable products
+    /// completing the Ultimate contents (<see cref="CheapestPartsToComplete"/>, which then also grant NO_WATERMARK through
+    /// both ad rights, spec §5.0.2) costs strictly less →
     /// hidden (<see cref="OfferHiddenReason.CheaperViaParts"/>): "Ultimate (он дороже, чем недостающая часть)". Without
     /// modes Ultimate stays visible, per the §5.2 Remove Export / Remove Interstitial rows ("Ultimate показывается только
     /// если нет режимов"). Covers e.g. a mode + an ad removal, and 9 single modes ($1.99 + No Ads $8.99 &lt; $11.99).</item>
-    /// <item>Exception to rule 4 (decision): when NO_WATERMARK by parts is on and not owned, no visible offer removes the
-    /// watermark, and the only missing Ultimate parts are two or more available modes (e.g. free by a widened
-    /// <c>free_modes</c> or grandfathered, with All Modes not sold and Ultimate not sold or hidden by rule 6), the cheapest
-    /// singles completing the contents stay visible, flagged <see cref="StorefrontOffer.AlreadyAvailable"/>; otherwise the
-    /// Shop would be empty without "Всё куплено" while the watermark can still be removed.</item>
     /// </list>
     /// Repeatedly buying every visible offer always ends with every entitlement the sellable products can give, except
     /// those of available modes, including NO_WATERMARK whenever a sellable path to it exists, so nothing becomes
@@ -56,11 +51,10 @@ namespace Ballverse.Core.Monetization
         /// Only <see cref="MonetizationConfig.SellableProductIds"/> can be visible; with <see cref="MonetizationConfig.Release1"/>
         /// at most No Ads, Remove Export Ads and Remove Interstitial Ads.
         /// </summary>
-        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        /// <param name="config">Release catalog (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
-        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static StorefrontState Build(IEnumerable<string> ownedProductIds, MonetizationConfig config,
-            IEnumerable<ModeCode> grandfathered, bool watermarkGrandfathered)
+            IEnumerable<ModeCode> grandfathered)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
             if (config == null) throw new ArgumentNullException(nameof(config));
@@ -72,7 +66,7 @@ namespace Ballverse.Core.Monetization
             }
 
             EntitlementSet direct = Entitlements.DirectGrants(owned);
-            EntitlementSet current = Entitlements.ApplyRules(direct, config, watermarkGrandfathered);
+            EntitlementSet current = Entitlements.ApplyRules(direct);
             EntitlementSet availableModes = AvailableModeEntitlements(config, grandfathered);
 
             int n = s_displayOrder.Length;
@@ -86,7 +80,7 @@ namespace Ballverse.Core.Monetization
             {
                 var p = s_displayOrder[i];
                 isOwned[i] = owned.Contains(p.Id);
-                gains[i] = Entitlements.ApplyRules(direct.Union(p.Grants), config, watermarkGrandfathered).Except(current);
+                gains[i] = Entitlements.ApplyRules(direct.Union(p.Grants)).Except(current);
                 values[i] = gains[i].Except(availableModes);
                 if (isOwned[i]) reasons[i] = OfferHiddenReason.Owned;
                 else if (!config.IsSellable(p.Id)) reasons[i] = OfferHiddenReason.NotSellable;
@@ -106,34 +100,11 @@ namespace Ballverse.Core.Monetization
             }
 
             int ultimate = s_ultimateIndex;
-            bool partsGiveWatermark = config.WatermarkByParts || config.WatermarkWithNoAds || watermarkGrandfathered;
-            if (reasons[ultimate] == OfferHiddenReason.None && partsGiveWatermark && current.ModeCount > 0
+            if (reasons[ultimate] == OfferHiddenReason.None && current.ModeCount > 0
                 && TryCover(current, Entitlements.FullUltimateContents, config, out _, out int partsCost)
                 && partsCost < s_displayOrder[ultimate].BasePriceUsdCents)
             {
                 reasons[ultimate] = OfferHiddenReason.CheaperViaParts;
-            }
-
-            // Rule 7: when the only missing Ultimate parts are modes the user already plays (two or more, so no single one
-            // completes the contents) and no visible offer removes the watermark, rule 4 would hide every path to
-            // NO_WATERMARK by parts. Show the cheapest parts instead.
-            if (config.WatermarkByParts && !current.Contains(Entitlement.NoWatermark))
-            {
-                var missing = Entitlements.FullUltimateContents.Except(current);
-                bool anyVisibleRemover = false;
-                for (int i = 0; i < n; i++)
-                {
-                    if (reasons[i] == OfferHiddenReason.None && gains[i].Contains(Entitlement.NoWatermark)) anyVisibleRemover = true;
-                }
-                if (!anyVisibleRemover && !missing.IsEmpty && missing.Except(availableModes).IsEmpty
-                    && TryCover(current, Entitlements.FullUltimateContents, config, out var parts, out _))
-                {
-                    for (int i = 0; i < n; i++)
-                    {
-                        if (reasons[i] == OfferHiddenReason.AlreadyAvailable && parts.Contains(s_displayOrder[i].Id))
-                            reasons[i] = OfferHiddenReason.None;
-                    }
-                }
             }
 
             int haveModes = current.Union(availableModes).ModeCount;
@@ -143,8 +114,7 @@ namespace Ballverse.Core.Monetization
                 var p = s_displayOrder[i];
                 bool allModes = p.Id == ProductIds.AllModes;
                 bool visible = reasons[i] == OfferHiddenReason.None;
-                bool lastStep = visible && i != ultimate && gains[i].Contains(Entitlement.NoWatermark)
-                    && CompletesStartedSet(direct, p, config, watermarkGrandfathered);
+                bool lastStep = visible && i != ultimate && CompletesStartedSet(direct, p);
                 bool alreadyAvailable = p.Kind == ProductKind.SingleMode && p.Mode.HasValue
                     && !current.ContainsMode(p.Mode.Value) && IsModeAvailable(p.Mode.Value, availableModes);
                 offers[i] = new StorefrontOffer(p, reasons[i], alternatives[i], isOwned[i], gains[i],
@@ -154,7 +124,7 @@ namespace Ballverse.Core.Monetization
             }
             // Available modes count as had, like in the offer values: otherwise an empty Shop could report "not all
             // purchased" when the only missing rights are modes the user already plays for free.
-            var obtainable = Entitlements.ApplyRules(direct.Union(config.SellableGrants), config, watermarkGrandfathered);
+            var obtainable = Entitlements.ApplyRules(direct.Union(config.SellableGrants));
             return new StorefrontState(offers, current, current.Union(availableModes).IsSupersetOf(obtainable));
         }
 
@@ -171,12 +141,11 @@ namespace Ballverse.Core.Monetization
         /// </para>
         /// </summary>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
-        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static IReadOnlyList<StorefrontOffer> ModeSheet(ModeCode mode, IEnumerable<string> ownedProductIds,
-            MonetizationConfig config, IEnumerable<ModeCode> grandfathered, bool watermarkGrandfathered)
+            MonetizationConfig config, IEnumerable<ModeCode> grandfathered)
         {
             var product = ProductCatalog.ForMode(mode);
-            var state = Build(ownedProductIds, config, grandfathered, watermarkGrandfathered);
+            var state = Build(ownedProductIds, config, grandfathered);
             var result = new List<StorefrontOffer>();
             if (product == null || state.Entitlements.ContainsMode(mode)) return result;
             if (ModeAvailability.GetAccess(mode, state.Entitlements, grandfathered, config) != ModeAccess.Locked) return result;
@@ -188,21 +157,18 @@ namespace Ballverse.Core.Monetization
         }
 
         /// <summary>
-        /// What the export sheet's locked "Водяной знак" row opens (spec §3.10, §5.2 "Лист Ultimate (или недостающая часть по
-        /// умной витрине)"), in display order. Empty if NO_WATERMARK is owned. Otherwise the visible offers that grant
-        /// NO_WATERMARK on their own (Ultimate, or a last step such as No Ads in release 1); when there are none (Ultimate
-        /// hidden because the parts are cheaper), the cheapest sellable products that together grant NO_WATERMARK by a rule
-        /// in force (the Ultimate contents by parts, or both ad rights under the release-1 No Ads rule).
-        /// Such a part may be hidden in the Shop (e.g. <see cref="OfferHiddenReason.AlreadyAvailable"/> for a mode playable
-        /// for free that is still needed for the contents); its <see cref="StorefrontOffer.HiddenReason"/> says so.
-        /// Never contains an unsellable product; empty when no sellable product can remove the watermark.
+        /// What the export sheet's locked "Водяной знак" row opens (spec §3.10, §5.0.3 "Лист No Ads Bundle …, а если одна
+        /// реклама уже куплена — недостающая покупка", §5.2), in display order. Empty if NO_WATERMARK is owned. Otherwise
+        /// the visible offers that grant NO_WATERMARK on their own (Ultimate, No Ads, or the missing ad removal as the last
+        /// step); when there are none, the cheapest sellable products that together grant both ad rights (spec §5.0.2), e.g.
+        /// both single ad removals in a catalog that sells them without No Ads. Never contains an unsellable product; empty
+        /// when no sellable product can remove the watermark.
         /// </summary>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
-        /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static IReadOnlyList<StorefrontOffer> WatermarkOffers(IEnumerable<string> ownedProductIds,
-            MonetizationConfig config, IEnumerable<ModeCode> grandfathered, bool watermarkGrandfathered)
+            MonetizationConfig config, IEnumerable<ModeCode> grandfathered)
         {
-            var state = Build(ownedProductIds, config, grandfathered, watermarkGrandfathered);
+            var state = Build(ownedProductIds, config, grandfathered);
             var result = new List<StorefrontOffer>();
             if (state.Entitlements.Contains(Entitlement.NoWatermark)) return result;
             foreach (var o in state.VisibleOffers)
@@ -211,22 +177,8 @@ namespace Ballverse.Core.Monetization
             }
             if (result.Count > 0) return result;
 
-            List<string> best = null;
-            int bestCost = int.MaxValue;
-            if ((config.WatermarkWithNoAds || watermarkGrandfathered)
-                && TryCover(state.Entitlements, EntitlementSet.AdFree, config, out var adIds, out int adCost))
-            {
-                best = adIds;
-                bestCost = adCost;
-            }
-            if (config.WatermarkByParts
-                && TryCover(state.Entitlements, Entitlements.FullUltimateContents, config, out var fullIds, out int fullCost)
-                && fullCost < bestCost)
-            {
-                best = fullIds;
-            }
-            if (best == null) return result;
-            var parts = new HashSet<string>(best, StringComparer.Ordinal);
+            if (!TryCover(state.Entitlements, EntitlementSet.AdFree, config, out var adIds, out _)) return result;
+            var parts = new HashSet<string>(adIds, StringComparer.Ordinal);
             foreach (var o in state.Offers)
             {
                 if (parts.Contains(o.ProductId)) result.Add(o);
@@ -236,11 +188,11 @@ namespace Ballverse.Core.Monetization
 
         /// <summary>
         /// The cheapest sellable products, other than Ultimate, that together complete <see cref="Entitlements.FullUltimateContents"/>
-        /// for a user with <paramref name="entitlements"/> (base USD prices; spec §5.1 NO_WATERMARK by parts, §5.2): All Modes
+        /// for a user with <paramref name="entitlements"/> (base USD prices; spec §5.1, §5.2 "Ultimate (он дороже, чем недостающая часть)"): All Modes
         /// or the missing single modes, whichever is cheaper, plus No Ads or the missing ad removal(s). Display order;
         /// empty when the contents are complete or the sellable products cannot complete them (release 1 sells no mode).
         /// </summary>
-        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        /// <param name="config">Release catalog (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         public static IReadOnlyList<string> CheapestPartsToComplete(EntitlementSet entitlements, MonetizationConfig config)
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
@@ -335,18 +287,21 @@ namespace Ballverse.Core.Monetization
         }
 
         /// <summary>
-        /// Whether buying <paramref name="p"/> completes a NO_WATERMARK set the user has already started: the Ultimate
-        /// contents by parts, or both ad rights under the No Ads rule (or its grandfathering). A first purchase that removes
-        /// the watermark on its own (e.g. No Ads with nothing owned) is not a "last step".
+        /// Whether buying <paramref name="p"/> completes a set the user has already started (spec §5.0.3, §5.2 "последний
+        /// шаг"): both ad rights (e.g. Remove Interstitial after Remove Export, which removes the watermark, §5.0.2), or the
+        /// full Ultimate contents (e.g. No Ads after All Modes). A first purchase that completes a set on its own (No Ads
+        /// with nothing owned) is not a "last step".
         /// </summary>
-        static bool CompletesStartedSet(EntitlementSet direct, ProductInfo p, MonetizationConfig config, bool watermarkGrandfathered)
+        static bool CompletesStartedSet(EntitlementSet direct, ProductInfo p)
         {
             var after = direct.Union(p.Grants);
-            if (config.WatermarkByParts && after.IsSupersetOf(Entitlements.FullUltimateContents)
-                && !direct.Intersect(Entitlements.FullUltimateContents).IsEmpty)
-                return true;
-            return (config.WatermarkWithNoAds || watermarkGrandfathered) && after.IsSupersetOf(EntitlementSet.AdFree)
-                && !direct.Intersect(EntitlementSet.AdFree).IsEmpty;
+            return CompletesStarted(direct, after, EntitlementSet.AdFree)
+                || CompletesStarted(direct, after, Entitlements.FullUltimateContents);
+        }
+
+        static bool CompletesStarted(EntitlementSet before, EntitlementSet after, EntitlementSet set)
+        {
+            return after.IsSupersetOf(set) && !before.IsSupersetOf(set) && !before.Intersect(set).IsEmpty;
         }
 
         static EntitlementSet AvailableModeEntitlements(MonetizationConfig config, IEnumerable<ModeCode> grandfathered)
