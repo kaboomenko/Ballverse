@@ -8,8 +8,8 @@ namespace Ballverse.Core.Timeline
     /// The trimmed video is the half-open source range [<see cref="TrimInUs"/>, <see cref="TrimOutUs"/>) in source
     /// presentation time (µs). <see cref="OffsetUs"/> is where the trimmed video starts relative to the start of the
     /// trimmed clip S on the shared timeline: positive = V starts later than S, negative = V starts earlier. The output
-    /// starts at the earlier of the two track starts, so neither track's head is ever dropped (see
-    /// <see cref="StudioTimeline"/>).
+    /// starts at the start of the track that defines the duration: V for <see cref="DurationMode.MatchVideo"/>, S
+    /// otherwise (see <see cref="StudioTimeline"/>).
     /// </para>
     /// <para>
     /// Sign convention (decision): V local time = timeline time − offset, i.e. at clip-relative time t the video shows
@@ -63,9 +63,11 @@ namespace Ballverse.Core.Timeline
 
         /// <summary>
         /// Moves an offset by whole output frames for the ±1 frame buttons (spec §3.4 "точная подстройка ±1 кадр").
-        /// The offset is first snapped to the nearest frame of the <paramref name="fps"/> grid, then moved by
-        /// <paramref name="frames"/>, and the result is that grid time rounded to the nearest µs (halves away from zero),
-        /// so repeated nudges never accumulate rounding (60 nudges at 60 fps = exactly 1 s). Clamped to ±<see cref="MaxAbsOffsetUs"/>.
+        /// The offset is first snapped to the nearest frame k of the <paramref name="fps"/> grid, then moved by
+        /// <paramref name="frames"/>; the result is ±(|k| / fps rounded up to whole µs), i.e. ±<see cref="StudioTimeline.FrameTimeUs"/>(|k|)
+        /// (magnitude rounded up for both signs). <see cref="StudioTimeline"/> reads such an offset as exactly |k| frames,
+        /// so a k-frame nudge shifts S against V by exactly k output frames, and repeated nudges never accumulate rounding
+        /// (60 nudges at 60 fps = exactly 1 s). Clamped to ±<see cref="MaxAbsOffsetUs"/>.
         /// </summary>
         public static long NudgeOffsetUs(long offsetUs, int frames, int fps)
         {
@@ -73,7 +75,8 @@ namespace Ballverse.Core.Timeline
             if (offsetUs < -MaxAbsOffsetUs || offsetUs > MaxAbsOffsetUs)
                 throw new ArgumentOutOfRangeException(nameof(offsetUs), offsetUs, "offsetUs out of range.");
             long k = RoundDiv(offsetUs * fps, StudioTimeline.MicrosPerSecond) + frames;
-            long result = RoundDiv(k * StudioTimeline.MicrosPerSecond, fps);
+            long magnitude = StudioTimeline.CeilDiv(Math.Abs(k) * StudioTimeline.MicrosPerSecond, fps);
+            long result = k >= 0 ? magnitude : -magnitude;
             if (result > MaxAbsOffsetUs) return MaxAbsOffsetUs;
             if (result < -MaxAbsOffsetUs) return -MaxAbsOffsetUs;
             return result;

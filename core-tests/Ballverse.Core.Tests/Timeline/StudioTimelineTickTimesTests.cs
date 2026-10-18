@@ -60,9 +60,21 @@ namespace Ballverse.Core.Tests.Timeline
         [Fact]
         public void PreRollAndCoverShiftTheTimes()
         {
-            var t = new StudioTimeline(new ClipTiming(0, 600, 600), new UserVideoTiming(0, 5000000, -1000000), DurationMode.Auto, 60, 0, 0);
+            var t = new StudioTimeline(new ClipTiming(0, 600, 600), new UserVideoTiming(0, 5000000, -1000000), DurationMode.MatchVideo, 60, 0, 0);
             Assert.Equal(new long[] { 1100000 }, Times(t, 0));
             Assert.Equal(new long[] { 1100000 + 1000000 }, Times(t, 60));
+        }
+
+        [Fact]
+        public void CutClipHeadHasNoTimes()
+        {
+            // MatchVideo with V starting 1 s after S: the first second of the clip is before the output start.
+            var t = new StudioTimeline(new ClipTiming(0, 600, 600, afterEnd: SimAfterEnd.Loop), new UserVideoTiming(0, 15000000, 1000000), DurationMode.MatchVideo, 60, 0, 0);
+            Assert.Equal(-900000, t.ClipStartUs);
+            Assert.Equal(-900000, t.ClipTickToOutputUs(0));
+            Assert.Equal(new long[] { 100000 + 9000000 }, Times(t, 0));          // only the loop repeat
+            Assert.Equal(new long[] { 100000 + 9000000 + 983334 }, Times(t, 59));
+            Assert.Equal(new long[] { 100000, 100000 + 10000000 }, Times(t, 60)); // plays at the content start
         }
 
         [Fact]

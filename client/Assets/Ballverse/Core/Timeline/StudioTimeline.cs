@@ -10,9 +10,17 @@ namespace Ballverse.Core.Timeline
     /// <b>Output layout.</b> The output is [cover lead-in][content]. The optional cover lead-in
     /// (<see cref="TimelineSpec.CoverTimeUs"/>, spec §3.4 "Поставить выбранный кадр первым на 0,1 с") is prepended:
     /// exactly 0.1 s = fps / 10 frames (3 at 30 fps, 6 at 60 fps) showing the chosen content frame as a still
-    /// (decision: prepend rather than overlay, so no content frame is hidden). The content starts at the earlier of the
-    /// clip start and the video start (decision): with video offset o (<see cref="UserVideoTiming.OffsetUs"/>) the clip
-    /// starts at content time max(0, −o) and the video at max(0, o), so neither track's head is ever dropped.
+    /// (decision: prepend rather than overlay, so no content frame is hidden).
+    /// </para>
+    /// <para>
+    /// <b>Content origin</b> (decision, spec §3.4 "Длительность ролика: Авто (= длина S после обрезки), = V"): the content
+    /// starts where the track that defines the duration starts, so the duration equals that track's length exactly and
+    /// the other track is cut at both ends alike. With video offset o (<see cref="UserVideoTiming.OffsetUs"/>):
+    /// <see cref="DurationMode.MatchVideo"/> with a video starts at the video (clip at content time −o; o &gt; 0 cuts the
+    /// clip's head, o &lt; 0 shows Frozen(trimIn) until the clip starts); Auto, Manual and MatchVideo without a video
+    /// start at the clip (video at content time o; o &lt; 0 cuts the video's head, o &gt; 0 shows its first frame frozen
+    /// until it starts). An offset equal to ±<see cref="FrameTimeUs"/>(k) (the values <see cref="UserVideoTiming.NudgeOffsetUs"/>
+    /// produces) places the clip exactly k frames from the origin; any other offset is taken as exact µs.
     /// </para>
     /// <para>
     /// <b>Exact time.</b> Frame i shows output time t = i / fps exactly (spec §7.5); all arithmetic is integer. Clip
@@ -27,11 +35,11 @@ namespace Ballverse.Core.Timeline
     /// consecutive ticks and 30 fps frames show every 2nd tick.
     /// </para>
     /// <para>
-    /// <b>Duration</b> (spec §3.4, §3.8), measured on the content: Auto = until the clip ends (equals the trimmed clip
-    /// length when the clip starts first, o ≥ 0); MatchVideo ("= V") = until the trimmed video ends (equals the trimmed
-    /// video length when the video starts first, o ≤ 0; falls back to Auto without a video); Manual = the given length.
-    /// Content frames = ⌈duration · fps⌉; the cover lead-in is added and the total is clamped to [fps, 180 · fps], i.e.
-    /// [1 s, 180 s], keeping the last partial frame.
+    /// <b>Duration</b> (spec §3.4, §3.8), measured on the content: Auto = the clip output length (every frame up to the
+    /// clip end, keeping the last partial frame: ⌈length · fps⌉); MatchVideo ("= V") = the trimmed video length, counted
+    /// as the frames whose start time <see cref="FrameTimeUs"/> lies before the video end, so the last frame is a real
+    /// video frame (falls back to Auto without a video); Manual = ⌈duration · fps⌉. The cover lead-in is added and the
+    /// total is clamped to [fps, 180 · fps], i.e. [1 s, 180 s].
     /// </para>
     /// </summary>
     public sealed class StudioTimeline
@@ -60,8 +68,10 @@ namespace Ballverse.Core.Timeline
         readonly long _unitsPerReplayTick;
         readonly int _coverFrames;
         readonly long _coverUs;
-        readonly long _leadUs;           // clip start on the content timeline
-        readonly long _videoStartUs;     // video start on the content timeline
+        readonly long _leadUs;           // clip start on the content timeline, µs (may be negative)
+        readonly long _leadX;            // the same as an exact time · 10⁶ · fps (snapped to the frame grid)
+        readonly long _videoStartUs;     // video start on the content timeline, µs (may be negative)
+        readonly long _videoStartX;      // the same as an exact time · 10⁶ · fps (snapped to the frame grid)
         readonly long _clipStartFrame;   // output frames
         readonly long _clipEndFrame;
         readonly int _frameCount;
@@ -83,16 +93,25 @@ namespace Ballverse.Core.Timeline
         /// <summary>Output time where the content starts (after the cover lead-in), µs: 0 or 100 000.</summary>
         public long ContentStartUs => _coverUs;
 
-        /// <summary>Output time where the trimmed clip starts, µs (cover lead-in + max(0, −offset)).</summary>
+        /// <summary>
+        /// Output time where the trimmed clip starts, µs: cover lead-in + (−offset for MatchVideo with a video, else 0).
+        /// Before <see cref="ContentStartUs"/> (possibly negative) when MatchVideo cuts the clip's head.
+        /// </summary>
         public long ClipStartUs => _coverUs + _leadUs;
 
-        /// <summary>Output time where the trimmed user video starts, µs (cover lead-in + max(0, offset)); <see cref="ContentStartUs"/> without a video.</summary>
+        /// <summary>
+        /// Output time where the trimmed user video starts, µs: cover lead-in + (0 for MatchVideo, else offset); before
+        /// <see cref="ContentStartUs"/> when its head is cut. <see cref="ContentStartUs"/> without a video.
+        /// </summary>
         public long VideoStartUs => _coverUs + _videoStartUs;
 
-        /// <summary>First output frame of the clip's first pass (frames before it show the clip's first tick frozen). Not clamped to <see cref="FrameCount"/>.</summary>
+        /// <summary>
+        /// First output frame of the clip's first pass (frames before it show the clip's first tick frozen); at least
+        /// <see cref="CoverFrameCount"/>. Not clamped to <see cref="FrameCount"/>.
+        /// </summary>
         public int ClipStartFrame => (int)_clipStartFrame;
 
-        /// <summary>First output frame after the clip's first pass, where the <see cref="SimAfterEnd"/> behaviour starts. Not clamped to <see cref="FrameCount"/>.</summary>
+        /// <summary>First output frame after the clip's first pass, where the <see cref="SimAfterEnd"/> behaviour starts; at least <see cref="CoverFrameCount"/>. Not clamped to <see cref="FrameCount"/>.</summary>
         public int ClipEndFrame => (int)_clipEndFrame;
 
         /// <summary>Exact clip output length (its first pass) rounded up to whole µs.</summary>
@@ -127,21 +146,24 @@ namespace Ballverse.Core.Timeline
             _coverFrames = spec.CoverTimeUs.HasValue ? _fps / 10 : 0;
             _coverUs = spec.CoverTimeUs.HasValue ? CoverLeadInUs : 0;
             long offset = _video != null ? _video.OffsetUs : 0;
-            _leadUs = Math.Max(0, -offset);
-            _videoStartUs = Math.Max(0, offset);
+            bool videoOrigin = _video != null && spec.DurationMode == DurationMode.MatchVideo;
+            _leadUs = videoOrigin ? -offset : 0;
+            _videoStartUs = videoOrigin ? 0 : offset;
+            _leadX = ExactTimeX(_leadUs);
+            _videoStartX = ExactTimeX(_videoStartUs);
 
-            // Content frame j shows clip time (j / fps − lead) s = (j·10⁶ − lead·fps) · U / (10⁶·fps) units.
-            _clipStartFrame = _coverFrames + CeilDiv(_leadUs * _fps, MicrosPerSecond);
-            _clipEndFrame = _coverFrames + CeilDiv(
-                _clipEndUnits * MicrosPerSecond * _fps + _leadUs * _fps * _unitsPerSecond,
-                _unitsPerSecond * MicrosPerSecond);
+            // Content frame j shows clip time (j·10⁶ − leadX) / (10⁶·fps) s = (j·10⁶ − leadX) · U / (10⁶·fps) units.
+            _clipStartFrame = _coverFrames + Math.Max(0, CeilDivSigned(_leadX, MicrosPerSecond));
+            _clipEndFrame = _coverFrames + Math.Max(0, CeilDivSigned(
+                _clipEndUnits * MicrosPerSecond * _fps + _leadX * _unitsPerSecond,
+                _unitsPerSecond * MicrosPerSecond));
             _frameCount = ComputeFrameCount();
 
             if (_coverFrames > 0)
             {
                 long coverFrame = Math.Min(spec.CoverTimeUs.Value * _fps / MicrosPerSecond, _frameCount - _coverFrames - 1);
                 _coverSim = Still(SampleSimAtX(coverFrame * MicrosPerSecond));
-                _coverVideo = Still(SampleVideoAtContentUs(FrameStartUs(coverFrame)));
+                _coverVideo = Still(SampleVideoAtX(coverFrame * MicrosPerSecond));
             }
         }
 
@@ -156,8 +178,10 @@ namespace Ballverse.Core.Timeline
             switch (Spec.DurationMode)
             {
                 case DurationMode.MatchVideo:
+                    // Frames j with FrameStartUs(j) < video end E: the first frame starting at or after E is
+                    // ⌊(E − 1) · fps / 10⁶⌋ + 1 (the video starts at content time 0 here, so E = length ≥ 1).
                     frames = _video != null
-                        ? CeilDiv((_videoStartUs + _video.LengthUs) * _fps, MicrosPerSecond)
+                        ? (_video.LengthUs - 1) * _fps / MicrosPerSecond + 1
                         : _clipEndFrame - _coverFrames;
                     break;
                 case DurationMode.Manual:
@@ -213,7 +237,7 @@ namespace Ballverse.Core.Timeline
         /// Simulation sample for output frame i (spec §3.4, §7.5 step a).
         /// <list type="bullet">
         /// <item><b>Cover lead-in</b> — the sample of the chosen cover frame, as a still (Frozen).</item>
-        /// <item><b>Before the clip starts</b> (video offset &lt; 0) — Frozen(trimIn): the starting position is shown, so
+        /// <item><b>Before the clip starts</b> (MatchVideo with video offset &lt; 0) — Frozen(trimIn): the starting position is shown, so
         /// the slot is never empty (decision, symmetric with the video rule).</item>
         /// <item><b>During the clip</b> — Playing(tick) with speed and finale slow-mo applied.</item>
         /// </list>
@@ -247,16 +271,21 @@ namespace Ballverse.Core.Timeline
         {
             CheckTimeUs(outputUs);
             if (outputUs < _coverUs) return _coverSim;
-            long contentUs = outputUs - _coverUs;
+            return SampleSimAtX(ContentX(outputUs - _coverUs));
+        }
+
+        /// <summary>Content time in µs as an exact time · 10⁶ · fps; frame start times map back to the exact frame time.</summary>
+        long ContentX(long contentUs)
+        {
             long j = contentUs * _fps / MicrosPerSecond;
-            // Frame start times are rounded up to whole µs; map them back to the exact frame time.
-            long x = FrameStartUs(j) == contentUs ? j * MicrosPerSecond : contentUs * _fps;
-            return SampleSimAtX(x);
+            return FrameStartUs(j) == contentUs ? j * MicrosPerSecond : contentUs * _fps;
         }
 
         /// <summary>
         /// Video sample for output frame i (spec §3.4, §7.5 step b). Cover lead-in frames show the chosen cover frame as a
-        /// still. Otherwise, with video local time v = t − <see cref="VideoStartUs"/> (t = <see cref="FrameTimeUs"/>):
+        /// still. Otherwise, with video local time v = t − <see cref="VideoStartUs"/> (t = exact frame time i / fps; v is
+        /// rounded up to whole µs, and a start of ±<see cref="FrameTimeUs"/>(k) counts as exactly k frames, so a video
+        /// k frames late shows v = FrameTimeUs(i − k)):
         /// v &lt; 0 (video not started yet) shows its first frame frozen (decision); 0 ≤ v &lt; length plays source pts
         /// trimIn + v; afterwards <see cref="UserVideoTiming.AfterEnd"/>: Freeze = Frozen(trimOut − 1), Loop = wraps to
         /// trimIn, Black, ExpandSim. NoVideo when the project has no video.
@@ -265,7 +294,7 @@ namespace Ballverse.Core.Timeline
         {
             CheckFrame(frameIndex);
             if (frameIndex < _coverFrames) return _coverVideo;
-            return SampleVideoAtContentUs(FrameStartUs(frameIndex - _coverFrames));
+            return SampleVideoAtX((long)(frameIndex - _coverFrames) * MicrosPerSecond);
         }
 
         /// <summary>Video sample at an arbitrary output time (preview, spec §3.7). Same rules as <see cref="SampleVideo"/>.</summary>
@@ -273,27 +302,29 @@ namespace Ballverse.Core.Timeline
         {
             CheckTimeUs(outputUs);
             if (outputUs < _coverUs) return _coverVideo;
-            return SampleVideoAtContentUs(outputUs - _coverUs);
+            return SampleVideoAtX(ContentX(outputUs - _coverUs));
         }
 
         /// <summary>
         /// Output time (µs, rounded up) at which clip tick <paramref name="tick"/> first appears during the first pass of
-        /// the clip (spec §3.6, §7.5 step 3). <c>tick == TrimOutTick</c> returns the clip end. For every appearance,
-        /// repeats and ContinueSim included, use <see cref="GetTickOutputTimesUs"/>.
+        /// the clip (spec §3.6, §7.5 step 3). <c>tick == TrimOutTick</c> returns the clip end. When MatchVideo cuts the
+        /// clip's head, ticks of the cut part return times before <see cref="ContentStartUs"/> (possibly negative). For
+        /// every appearance within the output, repeats and ContinueSim included, use <see cref="GetTickOutputTimesUs"/>.
         /// </summary>
         public long ClipTickToOutputUs(int tick)
         {
             if (tick < _clip.TrimInTick || tick > _clip.TrimOutTick)
                 throw new ArgumentOutOfRangeException(nameof(tick), tick, "Tick must be in [trimIn, trimOut].");
-            return ClipStartUs + CeilDiv(ClipUnitsOfTick(tick - _clip.TrimInTick) * MicrosPerSecond, _unitsPerSecond);
+            return CeilDivSigned(OutputNumerator(ClipUnitsOfTick(tick - _clip.TrimInTick)), _fps * _unitsPerSecond);
         }
 
         /// <summary>
         /// Appends to <paramref name="results"/>, in ascending order, every output time (µs, rounded up from the exact
-        /// rational time) at which render-stream tick <paramref name="tick"/> starts playing within [0, FrameCount / fps):
-        /// the first pass, every <see cref="SimAfterEnd.Loop"/> and <see cref="SimAfterEnd.SlowMoReplay"/> repeat, and
+        /// rational time) at which render-stream tick <paramref name="tick"/> starts playing within
+        /// [<see cref="ContentStartUs"/>, FrameCount / fps): the first pass, every <see cref="SimAfterEnd.Loop"/> and <see cref="SimAfterEnd.SlowMoReplay"/> repeat, and
         /// <see cref="SimAfterEnd.ContinueSim"/> ticks. Frozen frames (pre-roll, cover, Freeze, end of the stream) start
-        /// no tick. The offline sound mixer places each simulation event at these times, so export audio and frames share
+        /// no tick, and neither does the part of the clip cut off before the content start (MatchVideo, offset &gt; 0).
+        /// The offline sound mixer places each simulation event at these times, so export audio and frames share
         /// one clock (spec §3.7 "в экспорте — 0", §7.8). Ticks that never play add nothing. Returns the number added.
         /// Times are independent of whether a frame happens to show the tick (at 2x and 30 fps most ticks fall between frames).
         /// </summary>
@@ -306,9 +337,9 @@ namespace Ballverse.Core.Timeline
                 long u0 = ClipUnitsOfTick(tick - _clip.TrimInTick);
                 if (_clip.AfterEnd == SimAfterEnd.Loop)
                 {
-                    for (long u = u0; TryAddTickTime(u, results); u += _clipEndUnits) count++;
+                    for (long u = FirstVisible(u0, _clipEndUnits); TryAddTickTime(u, results); u += _clipEndUnits) count++;
                 }
-                else if (TryAddTickTime(u0, results))
+                else if (IsVisible(u0) && TryAddTickTime(u0, results))
                 {
                     count++;
                 }
@@ -319,23 +350,46 @@ namespace Ballverse.Core.Timeline
                 long first = _clip.TrimOutTick - _replayTicks;
                 if (tick >= first && tick < _clip.TrimOutTick)
                 {
-                    for (long u = _clipEndUnits + (tick - first) * _unitsPerReplayTick; TryAddTickTime(u, results); u += _replayPeriodUnits) count++;
+                    long u0 = _clipEndUnits + (tick - first) * _unitsPerReplayTick;
+                    for (long u = FirstVisible(u0, _replayPeriodUnits); TryAddTickTime(u, results); u += _replayPeriodUnits) count++;
                 }
             }
             else if (_clip.AfterEnd == SimAfterEnd.ContinueSim && tick >= _clip.TrimOutTick && tick < _clip.AvailableTicks)
             {
-                if (TryAddTickTime(_clipEndUnits + (long)(tick - _clip.TrimOutTick) * _unitsPerNormalTick, results)) count++;
+                long u = _clipEndUnits + (long)(tick - _clip.TrimOutTick) * _unitsPerNormalTick;
+                if (IsVisible(u) && TryAddTickTime(u, results)) count++;
             }
             return count;
         }
 
+        /// <summary>Exact output time of clip time <paramref name="clipUnits"/>, as time · 10⁶ · fps · U.</summary>
+        long OutputNumerator(long clipUnits)
+        {
+            return ((long)_coverFrames * MicrosPerSecond + _leadX) * _unitsPerSecond + clipUnits * MicrosPerSecond * _fps;
+        }
+
+        /// <summary>True when clip time <paramref name="clipUnits"/> lies at or after the content start.</summary>
+        bool IsVisible(long clipUnits)
+        {
+            return OutputNumerator(clipUnits) >= (long)_coverFrames * MicrosPerSecond * _unitsPerSecond;
+        }
+
+        /// <summary>Smallest u0 + n · period (n ≥ 0) at or after the content start.</summary>
+        long FirstVisible(long u0, long period)
+        {
+            // Clip time ≥ −leadX · U / (10⁶ · fps) units.
+            long minUnits = CeilDivSigned(-_leadX * _unitsPerSecond, MicrosPerSecond * _fps);
+            if (u0 >= minUnits) return u0;
+            return u0 + CeilDivSigned(minUnits - u0, period) * period;
+        }
+
         bool TryAddTickTime(long clipUnits, IList<long> results)
         {
-            // Exact output time: ClipStartUs + clipUnits / U s; keep it if < FrameCount / fps.
-            long clipStartUs = ClipStartUs;
-            if ((clipStartUs * _unitsPerSecond + clipUnits * MicrosPerSecond) * _fps >= _frameCount * MicrosPerSecond * _unitsPerSecond)
+            // Keep the time if it is < FrameCount / fps.
+            long n = OutputNumerator(clipUnits);
+            if (n >= _frameCount * MicrosPerSecond * _unitsPerSecond)
                 return false;
-            results.Add(clipStartUs + CeilDiv(clipUnits * MicrosPerSecond, _unitsPerSecond));
+            results.Add(CeilDivSigned(n, _fps * _unitsPerSecond));
             return true;
         }
 
@@ -349,7 +403,7 @@ namespace Ballverse.Core.Timeline
         /// <summary>Sim sample at content time x / (10⁶ · fps) s.</summary>
         SimSample SampleSimAtX(long x)
         {
-            long num = x - _leadUs * _fps;
+            long num = x - _leadX;
             if (num < 0) return SimSample.Frozen(_clip.TrimInTick);
             return SampleSimUnits(num * _unitsPerSecond / (MicrosPerSecond * _fps));
         }
@@ -391,12 +445,15 @@ namespace Ballverse.Core.Timeline
             return (int)(_clip.TrimInTick + c);
         }
 
-        VideoSample SampleVideoAtContentUs(long contentUs)
+        /// <summary>Video sample at content time x / (10⁶ · fps) s.</summary>
+        VideoSample SampleVideoAtX(long x)
         {
             if (_video == null) return VideoSample.NoVideo;
-            // v ≤ 180 s, so v / len fits in an int for any accepted length.
-            long v = contentUs - _videoStartUs;
-            if (v < 0) return VideoSample.Frozen(_video.TrimInUs);
+            long dx = x - _videoStartX;
+            if (dx < 0) return VideoSample.Frozen(_video.TrimInUs);
+            // Video local time rounded up to whole µs (equals contentUs − start for an off-grid start). v ≤ 780 s, so
+            // v / len fits in an int for any accepted length.
+            long v = CeilDiv(dx, _fps);
             long len = _video.LengthUs;
             if (v < len) return VideoSample.Frame(_video.TrimInUs + v, 0);
             switch (_video.AfterEnd)
@@ -439,9 +496,28 @@ namespace Ballverse.Core.Timeline
                 throw new ArgumentOutOfRangeException(nameof(outputUs), outputUs, "Output time must be in [0, 180 s].");
         }
 
+        /// <summary>
+        /// A content time of <paramref name="us"/> µs as an exact time · 10⁶ · fps. µs times on the frame grid are frame
+        /// times rounded up (<see cref="FrameTimeUs"/>), so ±FrameTimeUs(k) means exactly ±k frames; other values are exact µs.
+        /// </summary>
+        long ExactTimeX(long us)
+        {
+            long a = Math.Abs(us);
+            if (a == 0) return 0;
+            long k = (a - 1) * _fps / MicrosPerSecond + 1; // first frame whose start time is ≥ a
+            long x = FrameStartUs(k) == a ? k * MicrosPerSecond : a * _fps;
+            return us < 0 ? -x : x;
+        }
+
         internal static long CeilDiv(long a, long b)
         {
             return (a + b - 1) / b;
+        }
+
+        /// <summary>⌈a / b⌉ for any sign of a (b &gt; 0).</summary>
+        static long CeilDivSigned(long a, long b)
+        {
+            return a >= 0 ? (a + b - 1) / b : -(-a / b);
         }
     }
 }

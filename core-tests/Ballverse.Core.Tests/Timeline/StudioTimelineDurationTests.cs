@@ -134,21 +134,26 @@ namespace Ballverse.Core.Tests.Timeline
         }
 
         [Theory]
-        [InlineData(0L, 2000000L, 500000L, 30, 75)]       // ends at 2.5 s
-        [InlineData(0L, 2000000L, 500000L, 60, 150)]
-        [InlineData(0L, 2500001L, 0L, 30, 76)]            // partial frame kept
+        [InlineData(0L, 2000000L, 500000L, 30, 60)]       // clip starts first: output still = video length
+        [InlineData(0L, 2000000L, 500000L, 60, 120)]
+        [InlineData(0L, 2500001L, 0L, 30, 76)]            // partial frame kept (frame 75 starts before the video end)
+        [InlineData(0L, 2016667L, 0L, 60, 121)]           // frame 121 would start exactly at the end: not added
+        [InlineData(0L, 2016668L, 0L, 60, 122)]
+        [InlineData(0L, 10016667L, 16667L, 60, 601)]      // after a +1 frame nudge: no extra frozen frame
         [InlineData(1000000L, 6000000L, 0L, 60, 300)]     // trimmed length 5 s
         [InlineData(0L, 2000000L, -1500000L, 60, 120)]    // video starts first: output = video length
         [InlineData(0L, 2000000L, -5000000L, 60, 120)]    // video ends before the clip starts: still the video length
         [InlineData(0L, 500000L, -5000000L, 30, 30)]      // 0.5 s video → 1 s minimum
         [InlineData(0L, 200000000L, 0L, 60, 10800)]       // 200 s → 180 s
         [InlineData(0L, 180000000L, 0L, 30, 5400)]        // exactly 180 s
-        [InlineData(0L, 179000000L, 1000000L, 30, 5400)]  // ends exactly at 180 s
+        [InlineData(0L, 179000000L, 1000000L, 30, 5370)]  // 179 s regardless of the offset
         [InlineData(0L, 1000000L, 0L, 30, 30)]            // exactly 1 s
         public void MatchVideo_EndsWhereTheVideoEnds(long trimIn, long trimOut, long offset, int fps, int expectedFrames)
         {
             var t = new StudioTimeline(new ClipTiming(0, 600, 600), new UserVideoTiming(trimIn, trimOut, offset), DurationMode.MatchVideo, fps);
             Assert.Equal(expectedFrames, t.FrameCount);
+            // The last frame is a real video frame, never a repeat after the end.
+            if (expectedFrames < 10800 && trimOut - trimIn >= 1000000) Assert.Equal(VideoSampleKind.Frame, t.SampleVideo(t.FrameCount - 1).Kind);
         }
 
         [Fact]

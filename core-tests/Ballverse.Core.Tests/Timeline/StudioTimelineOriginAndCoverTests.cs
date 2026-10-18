@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Ballverse.Core.Tests.Timeline
 {
-    /// <summary>Output origin (earlier track start) and the cover lead-in (spec §3.4).</summary>
+    /// <summary>Output origin (start of the duration's reference track) and the cover lead-in (spec §3.4).</summary>
     public class StudioTimelineOriginAndCoverTests
     {
         static readonly ClipTiming TenSecondClip = new ClipTiming(0, 600, 600);
@@ -27,36 +27,61 @@ namespace Ballverse.Core.Tests.Timeline
         }
 
         [Fact]
-        public void MatchVideo_PositiveOffset_RunsUntilTheVideoEnds()
+        public void MatchVideo_PositiveOffset_DurationEqualsVideoLengthAndCutsTheClipHead()
         {
-            // The clip starts first, so "= V" covers the offset plus the whole video (no video tail is cut).
+            // "= V" (spec §3.4): the output is exactly the video; the clip, which started 5 s earlier, is already playing.
             var t = new StudioTimeline(TenSecondClip, new UserVideoTiming(0, 10000000, 5000000), DurationMode.MatchVideo, 60);
-            Assert.Equal(900, t.FrameCount);
-            Assert.Equal(5000000, t.VideoStartUs);
-            Assert.Equal(VideoSample.Frozen(0), t.SampleVideo(299));
-            Assert.Equal(VideoSample.Frame(0), t.SampleVideo(300));
-            Assert.Equal(VideoSample.Frame(9983334), t.SampleVideo(899));
-            Assert.Equal(SimSample.Playing(0), t.SampleSim(0));
+            Assert.Equal(600, t.FrameCount);
+            Assert.Equal(10000000, t.DurationUs);
+            Assert.Equal(0, t.VideoStartUs);
+            Assert.Equal(-5000000, t.ClipStartUs);
+            Assert.Equal(0, t.ClipStartFrame);
+            Assert.Equal(300, t.ClipEndFrame);
+            Assert.Equal(VideoSample.Frame(0), t.SampleVideo(0));
+            Assert.Equal(VideoSample.Frame(9983334), t.SampleVideo(599));
+            Assert.Equal(SimSample.Playing(300), t.SampleSim(0));
+            Assert.Equal(SimSample.Playing(599), t.SampleSim(299));
+            Assert.Equal(SimSample.Frozen(599), t.SampleSim(300));
         }
 
         [Fact]
-        public void Auto_NegativeOffset_RunsUntilTheClipEnds()
+        public void Auto_NegativeOffset_DurationEqualsClipLengthAndCutsTheVideoHead()
         {
+            // "Авто (= длина S после обрезки)" (spec §3.4, Foundation DurationMode.Auto): exactly the clip, even when V starts first.
             var t = new StudioTimeline(TenSecondClip, new UserVideoTiming(0, 20000000, -3000000), DurationMode.Auto, 60);
-            Assert.Equal(780, t.FrameCount);
-            Assert.Equal(780, t.ClipEndFrame);
-            Assert.Equal(SimSample.Playing(599), t.SampleSim(779));
-            Assert.Equal(VideoSample.Frame(0), t.SampleVideo(0));
+            Assert.Equal(600, t.FrameCount);
+            Assert.Equal(10000000, t.DurationUs);
+            Assert.Equal(600, t.ClipEndFrame);
+            Assert.Equal(0, t.ClipStartUs);
+            Assert.Equal(-3000000, t.VideoStartUs);
+            Assert.Equal(SimSample.Playing(0), t.SampleSim(0));
+            Assert.Equal(SimSample.Playing(599), t.SampleSim(599));
+            Assert.Equal(VideoSample.Frame(3000000), t.SampleVideo(0));
+            Assert.Equal(VideoSample.Frame(12983334), t.SampleVideo(599));
+        }
+
+        [Fact]
+        public void Manual_StartsAtTheClipLikeAuto()
+        {
+            var t = new StudioTimeline(TenSecondClip, new UserVideoTiming(0, 20000000, -3000000), DurationMode.Manual, 60, 12000000);
+            Assert.Equal(720, t.FrameCount);
+            Assert.Equal(SimSample.Playing(0), t.SampleSim(0));
+            Assert.Equal(VideoSample.Frame(3000000), t.SampleVideo(0));
+            Assert.Equal(SimSample.Frozen(599), t.SampleSim(600));
         }
 
         [Theory]
         [InlineData(10000L, 1)]
-        [InlineData(16667L, 2)]   // lead just over one frame: still no drops or duplicates
+        [InlineData(16667L, 1)]   // = FrameTimeUs(1): exactly one frame (the −1 frame nudge)
         [InlineData(16666L, 1)]
+        [InlineData(16668L, 2)]
+        [InlineData(33333L, 2)]
+        [InlineData(33334L, 2)]   // = FrameTimeUs(2)
+        [InlineData(50000L, 3)]   // = FrameTimeUs(3), exact
         [InlineData(1000000L, 60)]
         public void FractionalLead_At60Fps_ConsecutiveFramesStillShowConsecutiveTicks(long leadUs, int clipStartFrame)
         {
-            var t = new StudioTimeline(TenSecondClip, new UserVideoTiming(0, 1000000, -leadUs), DurationMode.Auto, 60);
+            var t = new StudioTimeline(TenSecondClip, new UserVideoTiming(0, 3000000, -leadUs), DurationMode.MatchVideo, 60);
             Assert.Equal(clipStartFrame, t.ClipStartFrame);
             for (int i = 0; i < clipStartFrame; i++) Assert.Equal(SimSample.Frozen(0), t.SampleSim(i));
             for (int i = clipStartFrame; i < t.FrameCount; i++) Assert.Equal(SimSample.Playing(i - clipStartFrame), t.SampleSim(i));
@@ -117,6 +142,22 @@ namespace Ballverse.Core.Tests.Timeline
         {
             var t = new StudioTimeline(TenSecondClip, null, DurationMode.Auto, 60, 0, 150000000);
             Assert.Equal(SimSample.Frozen(599), t.SampleSim(0));
+        }
+
+        [Theory]
+        [InlineData(SimAfterEnd.Loop)]
+        [InlineData(SimAfterEnd.SlowMoReplay)]
+        [InlineData(SimAfterEnd.ContinueSim)]
+        public void Cover_TimeBeyondContent_UsesTheLastContentFrameNotTheAfterEndFrame(SimAfterEnd afterEnd)
+        {
+            // After the content each behaviour shows a different tick (Loop: trimIn, replay: tick 480, continue: 600).
+            var clip = new ClipTiming(0, 600, 1200, afterEnd: afterEnd);
+            var video = new UserVideoTiming(0, 5000000, 0, VideoAfterEnd.Loop);
+            var t = new StudioTimeline(clip, video, DurationMode.Auto, 60, 0, 150000000);
+            Assert.Equal(606, t.FrameCount);
+            Assert.Equal(SimSample.Frozen(599), t.SampleSim(0));
+            Assert.Equal(VideoSample.Frozen(4983334), t.SampleVideo(0)); // frame 599 = 9.98 s → loop 1 at 4.98 s
+            Assert.Equal(SimSample.Playing(599), t.SampleSim(605));
         }
 
         [Fact]

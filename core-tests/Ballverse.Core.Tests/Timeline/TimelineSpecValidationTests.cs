@@ -161,13 +161,16 @@ namespace Ballverse.Core.Tests.Timeline
 
         [Theory]
         [InlineData(0L, 1, 60, 16667L)]
-        [InlineData(0L, 2, 60, 33333L)]
+        [InlineData(0L, 2, 60, 33334L)]       // ±FrameTimeUs(k): magnitude rounded up
+        [InlineData(0L, -2, 60, -33334L)]
+        [InlineData(0L, -2, 30, -66667L)]
         [InlineData(0L, 60, 60, 1000000L)]
         [InlineData(0L, -60, 60, -1000000L)]
         [InlineData(0L, -1, 60, -16667L)]
-        [InlineData(0L, 1, 30, 33333L)]
-        [InlineData(10000L, 1, 60, 33333L)]       // snaps to the grid first (10 ms → frame 1)
-        [InlineData(-10000L, -1, 60, -33333L)]
+        [InlineData(0L, 1, 30, 33334L)]
+        [InlineData(10000L, 1, 60, 33334L)]       // snaps to the grid first (10 ms → frame 1)
+        [InlineData(-10000L, -1, 60, -33334L)]
+        [InlineData(-16666L, 0, 60, -16667L)]
         [InlineData(1000000L, 0, 60, 1000000L)]
         [InlineData(599999000L, 60, 60, 600000000L)] // clamped
         [InlineData(-599999000L, -60, 60, -600000000L)]

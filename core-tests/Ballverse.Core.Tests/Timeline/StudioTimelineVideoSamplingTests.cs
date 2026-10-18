@@ -45,35 +45,56 @@ namespace Ballverse.Core.Tests.Timeline
         }
 
         [Fact]
-        public void NegativeOffset_OutputStartsWithTheVideoAndKeepsItsHead()
+        public void NegativeOffset_MatchVideo_OutputStartsWithTheVideoAndKeepsItsHead()
         {
-            var t = WithVideo(new UserVideoTiming(1000000, 3000000, -1500000, VideoAfterEnd.Black), 30, 4000000);
+            var t = new StudioTimeline(Clip, new UserVideoTiming(1000000, 3000000, -1500000, VideoAfterEnd.Black), DurationMode.MatchVideo, 30);
+            Assert.Equal(60, t.FrameCount);
             Assert.Equal(0, t.VideoStartUs);
             Assert.Equal(1500000, t.ClipStartUs);
             Assert.Equal(VideoSample.Frame(1000000), t.SampleVideo(0));
             Assert.Equal(VideoSample.Frame(1466667), t.SampleVideo(14));
             Assert.Equal(VideoSample.Frame(2966667), t.SampleVideo(59));
-            Assert.Equal(VideoSample.Black, t.SampleVideo(60));
+            Assert.Equal(SimSample.Frozen(0), t.SampleSim(44));
+            Assert.Equal(SimSample.Playing(0), t.SampleSim(45));
+        }
+
+        [Fact]
+        public void NegativeOffset_ClipOrigin_CutsTheVideoHead()
+        {
+            // Manual (like Auto) starts at the clip: the 1.5 s of V before S are not in the output.
+            var t = WithVideo(new UserVideoTiming(1000000, 3000000, -1500000, VideoAfterEnd.Black), 30, 4000000);
+            Assert.Equal(-1500000, t.VideoStartUs);
+            Assert.Equal(0, t.ClipStartUs);
+            Assert.Equal(VideoSample.Frame(2500000), t.SampleVideo(0));
+            Assert.Equal(VideoSample.Frame(2966667), t.SampleVideo(14));
+            Assert.Equal(VideoSample.Black, t.SampleVideo(15));
             Assert.Equal(VideoSample.Black, t.SampleVideo(119));
         }
 
         [Fact]
-        public void NegativeOffset_VideoEntirelyBeforeClipPlaysThenFollowsAfterEnd()
+        public void NegativeOffset_VideoEntirelyBeforeTheClip()
         {
-            var t = WithVideo(new UserVideoTiming(0, 1000000, -2000000, VideoAfterEnd.Freeze), 60, 3000000);
-            for (int i = 0; i < 60; i++) Assert.Equal(VideoSample.Frame(t.FrameTimeUs(i)), t.SampleVideo(i));
-            for (int i = 60; i < t.FrameCount; i++) Assert.Equal(VideoSample.Frozen(999999), t.SampleVideo(i));
+            var manual = WithVideo(new UserVideoTiming(0, 1000000, -2000000, VideoAfterEnd.Freeze), 60, 3000000);
+            for (int i = 0; i < manual.FrameCount; i++) Assert.Equal(VideoSample.Frozen(999999), manual.SampleVideo(i));
+
+            // "= V": the video plays; the clip would start only after it ends, so the sim shows its first tick.
+            var match = new StudioTimeline(Clip, new UserVideoTiming(0, 1000000, -2000000, VideoAfterEnd.Freeze), DurationMode.MatchVideo, 60);
+            Assert.Equal(60, match.FrameCount);
+            for (int i = 0; i < 60; i++)
+            {
+                Assert.Equal(VideoSample.Frame(match.FrameTimeUs(i)), match.SampleVideo(i));
+                Assert.Equal(SimSample.Frozen(0), match.SampleSim(i));
+            }
         }
 
         [Fact]
-        public void Loop_NegativeOffset_StartsAtTheFirstIteration()
+        public void Loop_NegativeOffset_CutHeadKeepsTheLoopPhase()
         {
             var t = WithVideo(new UserVideoTiming(0, 2000000, -2500000, VideoAfterEnd.Loop), 60, 5000000);
-            Assert.Equal(VideoSample.Frame(0, 0), t.SampleVideo(0));
-            Assert.Equal(VideoSample.Frame(1983334, 0), t.SampleVideo(119));
-            Assert.Equal(VideoSample.Frame(0, 1), t.SampleVideo(120));
-            Assert.Equal(VideoSample.Frame(500000, 1), t.SampleVideo(150));
-            Assert.Equal(VideoSample.Frame(0, 2), t.SampleVideo(240));
+            Assert.Equal(VideoSample.Frame(500000, 1), t.SampleVideo(0));
+            Assert.Equal(VideoSample.Frame(1983334, 1), t.SampleVideo(89));
+            Assert.Equal(VideoSample.Frame(0, 2), t.SampleVideo(90));
+            Assert.Equal(VideoSample.Frame(0, 3), t.SampleVideo(210));
         }
 
         [Theory]
@@ -91,7 +112,7 @@ namespace Ballverse.Core.Tests.Timeline
                 Assert.InRange(v.SourcePtsUs, 0, length - 1);
             }
             var last = t.SampleVideo(t.FrameCount - 1);
-            if (offset <= 0) Assert.Equal((int)(t.FrameTimeUs(t.FrameCount - 1) / length), last.Iteration);
+            if (offset <= 0) Assert.Equal((int)((t.FrameTimeUs(t.FrameCount - 1) - offset) / length), last.Iteration);
         }
 
         [Fact]

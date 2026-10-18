@@ -115,7 +115,7 @@ namespace Ballverse.Core.Tests.Timeline
                         Assert.Equal(SimSampleKind.Playing, sim.Kind);
                         Assert.Equal(0, sim.Iteration);
                         Assert.InRange(sim.Tick, clip.TrimInTick, clip.TrimOutTick - 1);
-                        if (i == t.ClipStartFrame) Assert.InRange(sim.Tick, clip.TrimInTick, clip.TrimInTick + maxStep - 1);
+                        if (i == t.ClipStartFrame && t.ClipStartUs >= t.ContentStartUs) Assert.InRange(sim.Tick, clip.TrimInTick, clip.TrimInTick + maxStep - 1);
                     }
                     else
                     {
@@ -125,7 +125,7 @@ namespace Ballverse.Core.Tests.Timeline
                         if (simEnded) Assert.Equal(SimSampleKind.Frozen, sim.Kind);
                         if (sim.Kind == SimSampleKind.Frozen) simEnded = true;
                     }
-                    if (i == 0) Assert.Equal(clip.TrimInTick, sim.Tick);
+                    if (i == 0 && t.ClipStartUs >= t.ContentStartUs) Assert.Equal(clip.TrimInTick, sim.Tick);
 
                     if (sim.Iteration == lastSimIteration) Assert.True(sim.Tick >= lastTick, "tick decreased within an iteration");
                     lastTick = sim.Tick;
@@ -140,7 +140,7 @@ namespace Ballverse.Core.Tests.Timeline
                         Assert.InRange(video.SourcePtsUs, spec.Video.TrimInUs, spec.Video.TrimOutUs - 1);
                         Assert.True(video.Iteration >= lastVideoIteration, "video iteration decreased");
                         if (video.Iteration == lastVideoIteration) Assert.True(video.SourcePtsUs >= lastPts, "pts decreased within an iteration");
-                        if (i == t.CoverFrameCount && spec.Video.OffsetUs <= 0) Assert.Equal(VideoSample.Frame(spec.Video.TrimInUs), video);
+                        if (i == t.CoverFrameCount && t.VideoStartUs == t.ContentStartUs) Assert.Equal(VideoSample.Frame(spec.Video.TrimInUs), video);
                         lastPts = video.SourcePtsUs;
                         lastVideoIteration = video.Iteration;
                     }
@@ -189,17 +189,32 @@ namespace Ballverse.Core.Tests.Timeline
                 var c = spec.Clip;
                 long p = c.SpeedPercent, f = c.SlowMoFactorPercent;
                 long slow = c.EffectiveSlowMoTicks, normal = c.LengthTicks - slow;
-                long startUs = (spec.CoverTimeUs.HasValue ? 100000 : 0) + Math.Max(0, -(spec.Video?.OffsetUs ?? 0));
-                Assert.Equal(startUs, t.ClipStartUs);
-                // Clip end (output s) = startUs / 10⁶ + (100·N·f + 10000·S) / (60·p·f); frames = ⌈end · fps⌉.
-                var num = (BigInteger)startUs * spec.Fps * 60 * p * f + (BigInteger)(100 * normal * f + 10000 * slow) * spec.Fps * 1000000;
+                bool videoOrigin = spec.Video != null && spec.DurationMode == DurationMode.MatchVideo;
+                long coverUs = spec.CoverTimeUs.HasValue ? 100000 : 0;
+                long leadUs = videoOrigin ? -spec.Video.OffsetUs : 0;
+                Assert.Equal(coverUs + leadUs, t.ClipStartUs);
+                Assert.Equal(coverUs + (spec.Video == null ? 0 : videoOrigin ? 0 : spec.Video.OffsetUs), t.VideoStartUs);
+                // Exact lead (s · 10⁶ · fps): ±FrameTimeUs(k) means exactly ±k frames, anything else exact µs.
+                long absLead = Math.Abs(leadUs);
+                long k = (long)Math.Ceiling(absLead * (double)spec.Fps / 1000000);
+                long leadX = absLead * spec.Fps;
+                for (long kk = Math.Max(0, k - 1); kk <= k + 1; kk++)
+                {
+                    if (kk > 0 && (kk * 1000000 + spec.Fps - 1) / spec.Fps == absLead) leadX = kk * 1000000;
+                }
+                if (leadUs < 0) leadX = -leadX;
+                long coverFrames = t.CoverFrameCount;
+                // Clip end (content s) = leadX / (10⁶·fps) + (100·N·f + 10000·S) / (60·p·f); frames = max(0, ⌈end · fps⌉).
+                var num = (BigInteger)leadX * 60 * p * f + (BigInteger)(100 * normal * f + 10000 * slow) * spec.Fps * 1000000;
                 var den = (BigInteger)60 * p * f * 1000000;
-                long frames = t.ClipEndFrame;
+                long frames = t.ClipEndFrame - coverFrames;
+                Assert.True(frames >= 0);
+                if (frames > 0) Assert.True((frames - 1) * den < num);
                 Assert.True(frames * den >= num);
-                Assert.True((frames - 1) * den < num);
-                long startFrames = t.ClipStartFrame;
-                Assert.True(startFrames * 1000000 >= startUs * spec.Fps);
-                Assert.True((startFrames - 1) * 1000000 < startUs * spec.Fps);
+                long startFrames = t.ClipStartFrame - coverFrames;
+                Assert.True(startFrames >= 0);
+                Assert.True(startFrames * 1000000 >= leadX);
+                if (startFrames > 0) Assert.True((startFrames - 1) * 1000000 < leadX);
 
                 double seconds = normal / (0.6 * p) + slow / (0.006 * p * f);
                 Assert.InRange(t.ClipOutputDurationUs - seconds * 1e6, -1e-3, 1.0 + 1e-3);
@@ -215,16 +230,17 @@ namespace Ballverse.Core.Tests.Timeline
                 var spec = RandomSpec(ref rng);
                 var t = new StudioTimeline(spec);
                 var c = spec.Clip;
-                long previous = -1;
+                long previous = long.MinValue;
                 for (int tick = c.TrimInTick; tick < c.TrimOutTick; tick++)
                 {
                     long us = t.ClipTickToOutputUs(tick);
                     Assert.True(us > previous);
                     previous = us;
                     if (us + 1 > StudioTimeline.MaxSampleTimeUs) break;
+                    if (us < t.ContentStartUs) continue; // clip head cut by MatchVideo
                     // us is the exact time rounded up: just after it the tick plays, just before it it does not yet.
                     Assert.Equal(SimSample.Playing(tick), t.SampleSimAtTimeUs(us + 1));
-                    if (us == 0) continue;
+                    if (us - 1 < t.ContentStartUs) continue;
                     var before = t.SampleSimAtTimeUs(us - 1);
                     if (tick > c.TrimInTick) Assert.Equal(SimSample.Playing(tick - 1), before);
                     else Assert.NotEqual(SimSampleKind.Playing, before.Kind);
@@ -254,6 +270,7 @@ namespace Ballverse.Core.Tests.Timeline
                         long us = times[k];
                         if (k > 0) Assert.True(us > times[k - 1], "times not ascending");
                         Assert.True(us >= t.ClipStartUs);
+                        Assert.True(us >= t.ContentStartUs);
                         Assert.True(us - 1 < t.FrameCount * 1000000L / spec.Fps + 1);
                         if (us + 1 <= StudioTimeline.MaxSampleTimeUs)
                         {
@@ -283,7 +300,9 @@ namespace Ballverse.Core.Tests.Timeline
                         {
                             if (us <= frameUs + 1 && t.SampleSimAtTimeUs(Math.Min(us + 1, StudioTimeline.MaxSampleTimeUs)).Iteration == sim.Iteration) found = true;
                         }
-                        Assert.True(found, "frame " + i + " shows " + sim + " with no start time");
+                        // The tick in progress when MatchVideo cuts the clip's head started before the output.
+                        bool cutHead = t.ClipStartUs < t.ContentStartUs && sim == t.SampleSimAtTimeUs(t.ContentStartUs);
+                        Assert.True(found || cutHead, "frame " + i + " shows " + sim + " with no start time");
                     }
                     previous = sim;
                 }
