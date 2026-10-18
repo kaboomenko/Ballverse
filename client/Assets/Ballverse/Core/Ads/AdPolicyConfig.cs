@@ -6,11 +6,25 @@ namespace Ballverse.Core.Ads
 {
     /// <summary>
     /// Remote-configurable ad rules (spec §5.3, §9.3). Defaults are the build-time values, so the policies work without
-    /// network or a fetched config. Mapping from Remote Config keys (<c>interstitial_every_n_games</c>…) is done by the
-    /// services layer; this class only holds, validates and clamps the values.
+    /// network or a fetched config. <see cref="FromRemoteValues"/> maps the §9.3 Remote Config keys
+    /// (<c>interstitial_every_n_games</c>…); <see cref="FromJson"/> reads the CoreJson file format (camelCase keys) and
+    /// also accepts the §9.3 keys. Every entry point clamps the values.
     /// </summary>
     public sealed class AdPolicyConfig
     {
+        /// <summary>Remote Config key of <see cref="InterstitialEveryNGames"/> (spec §9.3).</summary>
+        public const string RemoteKeyInterstitialEveryNGames = "interstitial_every_n_games";
+        /// <summary>Remote Config key of <see cref="InterstitialMinIntervalSec"/> (spec §9.3).</summary>
+        public const string RemoteKeyInterstitialMinIntervalSec = "interstitial_min_interval_sec";
+        /// <summary>Remote Config key of <see cref="InterstitialGraceGames"/> (spec §9.3).</summary>
+        public const string RemoteKeyInterstitialGraceGames = "interstitial_grace_games";
+        /// <summary>Remote Config key of <see cref="RewardedExportEnabled"/>, the RW7 kill switch (spec §9.3).</summary>
+        public const string RemoteKeyRewardedExportEnabled = "rewarded_export_enabled";
+        /// <summary>Remote Config key of <see cref="RewardedWaitTimeoutSec"/> (spec §9.3).</summary>
+        public const string RemoteKeyRewardedWaitTimeoutSec = "rewarded_wait_timeout_sec";
+        /// <summary>Remote Config key of <see cref="RewardedRetryWindowMin"/> (spec §9.3).</summary>
+        public const string RemoteKeyRewardedRetryWindowMin = "rewarded_retry_window_min";
+
         /// <summary>N in "interstitial after every N completed games" (spec §5.3.2 IN1, Р7).</summary>
         public const int DefaultInterstitialEveryNGames = 3;
         public const int MinInterstitialEveryNGames = 1;
@@ -128,12 +142,65 @@ namespace Ballverse.Core.Ads
             return CoreJson.Serialize(this, indented);
         }
 
-        /// <summary>Parses with <see cref="CoreJson"/>; missing keys keep their defaults, values are clamped (<see cref="Validated"/>).</summary>
+        /// <summary>
+        /// Parses the CoreJson format (camelCase keys, as written by <see cref="ToJson"/>); each value may instead use its
+        /// §9.3 Remote Config key (the camelCase key wins when both are present). Missing keys and values of the wrong type
+        /// keep their defaults; numbers may be JSON numbers or numeric strings, fractions are truncated toward zero, and
+        /// every value is clamped (<see cref="Validated"/>), including values beyond the <see cref="int"/> range.
+        /// The JSON literal <c>null</c> yields the defaults.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
+        /// <exception cref="System.IO.InvalidDataException">The text is not JSON, or its root is not an object.</exception>
         public static AdPolicyConfig FromJson(string json)
         {
-            if (json == null) throw new ArgumentNullException(nameof(json));
-            var parsed = CoreJson.Deserialize<AdPolicyConfig>(json) ?? new AdPolicyConfig();
-            return parsed.Validated();
+            var obj = AdJson.ParseObject(json, "ad policy config");
+            var c = new AdPolicyConfig();
+            if (obj == null) return c;
+            c.InterstitialEveryNGames = ReadInt(obj, "interstitialEveryNGames", RemoteKeyInterstitialEveryNGames, c.InterstitialEveryNGames);
+            c.InterstitialMinIntervalSec = ReadInt(obj, "interstitialMinIntervalSec", RemoteKeyInterstitialMinIntervalSec, c.InterstitialMinIntervalSec);
+            c.InterstitialGraceGames = ReadInt(obj, "interstitialGraceGames", RemoteKeyInterstitialGraceGames, c.InterstitialGraceGames);
+            c.InterstitialQuietAfterRewardedSec = ReadInt(obj, "interstitialQuietAfterRewardedSec", null, c.InterstitialQuietAfterRewardedSec);
+            c.RewardedWaitTimeoutSec = ReadInt(obj, "rewardedWaitTimeoutSec", RemoteKeyRewardedWaitTimeoutSec, c.RewardedWaitTimeoutSec);
+            c.RewardedRetryWindowMin = ReadInt(obj, "rewardedRetryWindowMin", RemoteKeyRewardedRetryWindowMin, c.RewardedRetryWindowMin);
+            if (AdJson.TryGetBool(AdJson.Get(obj, "rewardedExportEnabled"), out bool enabled)
+                || AdJson.TryGetBool(AdJson.Get(obj, RemoteKeyRewardedExportEnabled), out enabled))
+            {
+                c.RewardedExportEnabled = enabled;
+            }
+            return c.Validated();
+        }
+
+        /// <summary>
+        /// Builds a config from Remote Config string values keyed by the §9.3 names (the <c>RemoteKey…</c> constants,
+        /// exact ordinal match). Numbers parse with the invariant culture (fractions truncate toward zero); booleans
+        /// accept true/false/1/0. Missing, null or unparsable values keep the build defaults; every value is clamped.
+        /// The IN3 quiet period has no remote key and stays at its default.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="values"/> is null.</exception>
+        public static AdPolicyConfig FromRemoteValues(IReadOnlyDictionary<string, string> values)
+        {
+            if (values == null) throw new ArgumentNullException(nameof(values));
+            var c = new AdPolicyConfig();
+            c.InterstitialEveryNGames = ReadRemoteInt(values, RemoteKeyInterstitialEveryNGames, c.InterstitialEveryNGames);
+            c.InterstitialMinIntervalSec = ReadRemoteInt(values, RemoteKeyInterstitialMinIntervalSec, c.InterstitialMinIntervalSec);
+            c.InterstitialGraceGames = ReadRemoteInt(values, RemoteKeyInterstitialGraceGames, c.InterstitialGraceGames);
+            c.RewardedWaitTimeoutSec = ReadRemoteInt(values, RemoteKeyRewardedWaitTimeoutSec, c.RewardedWaitTimeoutSec);
+            c.RewardedRetryWindowMin = ReadRemoteInt(values, RemoteKeyRewardedRetryWindowMin, c.RewardedRetryWindowMin);
+            if (values.TryGetValue(RemoteKeyRewardedExportEnabled, out string s) && AdJson.TryParseBool(s, out bool enabled))
+                c.RewardedExportEnabled = enabled;
+            return c.Validated();
+        }
+
+        static int ReadInt(Newtonsoft.Json.Linq.JObject obj, string key, string remoteKey, int fallback)
+        {
+            if (AdJson.TryGetInt(AdJson.Get(obj, key), out int v)) return v;
+            if (remoteKey != null && AdJson.TryGetInt(AdJson.Get(obj, remoteKey), out v)) return v;
+            return fallback;
+        }
+
+        static int ReadRemoteInt(IReadOnlyDictionary<string, string> values, string key, int fallback)
+        {
+            return values.TryGetValue(key, out string s) && AdJson.TryParseLong(s, out long v) ? AdJson.SaturateToInt(v) : fallback;
         }
 
         static void Check(List<string> problems, string name, int value, int min, int max)

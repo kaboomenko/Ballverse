@@ -51,7 +51,12 @@ namespace Ballverse.Core.Tests.Ads
         [Fact]
         public void InterstitialStateRejectsMalformedJson()
         {
-            Assert.ThrowsAny<Newtonsoft.Json.JsonException>(() => InterstitialState.FromJson("{not json"));
+            Assert.Throws<InvalidDataException>(() => InterstitialState.FromJson("{not json"));
+            Assert.Throws<InvalidDataException>(() => InterstitialState.FromJson("[1,2]"));
+            Assert.Throws<InvalidDataException>(() => InterstitialState.FromJson("{} {}"));
+            Assert.Throws<InvalidDataException>(() => RewardedGateState.FromJson("{\"credits\":["));
+            Assert.Throws<InvalidDataException>(() => RewardedGateState.FromJson("42"));
+            Assert.Throws<InvalidDataException>(() => AdPolicyConfig.FromJson("tru"));
         }
 
         [Fact]

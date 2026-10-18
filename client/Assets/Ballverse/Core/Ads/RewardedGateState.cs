@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 
 namespace Ballverse.Core.Ads
 {
@@ -42,16 +43,48 @@ namespace Ballverse.Core.Ads
         }
 
         /// <summary>
-        /// Parses with <see cref="CoreJson"/> and normalizes: drops credits without a project id or with a negative expiry,
-        /// keeps the most generous credit per project (held beats timed, later expiry beats earlier), sorts by project id.
-        /// The JSON literal <c>null</c> yields a fresh state.
+        /// Parses and normalizes: drops credits without a project id, with a negative expiry, with an unknown source or
+        /// with a field of the wrong type; keeps the most generous credit per project (held beats timed, later expiry beats
+        /// earlier); sorts by project id. A timed credit is never claimed. The JSON literal <c>null</c> yields a fresh state.
+        /// Runs in O(n log n) for n stored credits.
         /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
+        /// <exception cref="System.IO.InvalidDataException">The text is not JSON, or its root is not an object.</exception>
         public static RewardedGateState FromJson(string json)
         {
-            if (json == null) throw new ArgumentNullException(nameof(json));
-            var state = CoreJson.Deserialize<RewardedGateState>(json) ?? new RewardedGateState();
+            var obj = AdJson.ParseObject(json, "rewarded gate state");
+            var state = new RewardedGateState();
+            if (obj == null) return state;
+            if (AdJson.TryGetInt(AdJson.Get(obj, "version"), out int version)) state.Version = version;
+            if (AdJson.TryGetString(AdJson.Get(obj, "openOfferProjectId"), out string open)) state.OpenOfferProjectId = open;
+            if (AdJson.Get(obj, "credits") is JArray credits)
+            {
+                foreach (var item in credits)
+                {
+                    var credit = ReadCredit(item as JObject);
+                    if (credit != null) state.Credits.Add(credit);
+                }
+            }
             state.Normalize();
             return state;
+        }
+
+        static RewardedExportCredit ReadCredit(JObject o)
+        {
+            if (o == null) return null;
+            if (!AdJson.TryGetString(AdJson.Get(o, "projectId"), out string projectId)) return null;
+            if (!AdJson.TryGetEnum(AdJson.Get(o, "source"), out RewardedCreditSource source)) return null;
+            long? expires = null;
+            var expiresToken = AdJson.Get(o, "expiresAtMs");
+            if (expiresToken != null)
+            {
+                if (!AdJson.TryGetLong(expiresToken, out long e)) return null;
+                expires = e;
+            }
+            bool claimed = false;
+            var claimedToken = AdJson.Get(o, "claimed");
+            if (claimedToken != null && !AdJson.TryGetBool(claimedToken, out claimed)) claimed = false;
+            return new RewardedExportCredit(projectId, source, expires, claimed);
         }
 
         internal void Normalize()
@@ -59,40 +92,60 @@ namespace Ballverse.Core.Ads
             if (Version < CurrentVersion) Version = CurrentVersion;
             if (string.IsNullOrEmpty(OpenOfferProjectId)) OpenOfferProjectId = null;
             var source = Credits ?? new List<RewardedExportCredit>();
-            var result = new List<RewardedExportCredit>(source.Count);
+            var valid = new List<RewardedExportCredit>(source.Count);
             foreach (var c in source)
             {
                 if (c == null || string.IsNullOrEmpty(c.ProjectId)) continue;
                 if (c.ExpiresAtMs.HasValue && c.ExpiresAtMs.Value < 0) continue;
                 if (!Enum.IsDefined(typeof(RewardedCreditSource), c.Source)) continue;
-                int i = IndexOf(result, c.ProjectId);
-                if (i < 0)
-                {
-                    result.Add(c.Clone());
-                }
-                else if (IsMoreGenerous(c, result[i]))
-                {
-                    result[i] = c.Clone();
-                }
+                var copy = c.Clone();
+                if (copy.ExpiresAtMs.HasValue) copy.Claimed = false;
+                valid.Add(copy);
             }
-            result.Sort((a, b) => string.CompareOrdinal(a.ProjectId, b.ProjectId));
+            // Most generous first within each project, then keep the first of each project: one linear pass.
+            valid.Sort(CompareForDedupe);
+            var result = new List<RewardedExportCredit>(valid.Count);
+            foreach (var c in valid)
+            {
+                if (result.Count > 0 && string.Equals(result[result.Count - 1].ProjectId, c.ProjectId, StringComparison.Ordinal)) continue;
+                result.Add(c);
+            }
             Credits = result;
         }
 
+        /// <summary>Index of the credit of <paramref name="projectId"/> in a list sorted by project id (ordinal), or -1.</summary>
         internal static int IndexOf(List<RewardedExportCredit> credits, string projectId)
         {
-            for (int i = 0; i < credits.Count; i++)
-            {
-                if (string.Equals(credits[i].ProjectId, projectId, StringComparison.Ordinal)) return i;
-            }
-            return -1;
+            int i = LowerBound(credits, projectId);
+            return i < credits.Count && string.Equals(credits[i].ProjectId, projectId, StringComparison.Ordinal) ? i : -1;
         }
 
-        static bool IsMoreGenerous(RewardedExportCredit a, RewardedExportCredit b)
+        /// <summary>First index whose project id is ordinal-greater than or equal to <paramref name="projectId"/>.</summary>
+        internal static int LowerBound(List<RewardedExportCredit> credits, string projectId)
         {
-            if (!b.ExpiresAtMs.HasValue) return false;
-            if (!a.ExpiresAtMs.HasValue) return true;
-            return a.ExpiresAtMs.Value > b.ExpiresAtMs.Value;
+            int lo = 0, hi = credits.Count;
+            while (lo < hi)
+            {
+                int mid = lo + ((hi - lo) >> 1);
+                if (string.CompareOrdinal(credits[mid].ProjectId, projectId) < 0) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo;
+        }
+
+        /// <summary>
+        /// Project id (ordinal), then most generous first: held before timed, later expiry first; ties prefer a claimed
+        /// credit, then <see cref="RewardedCreditSource.Reward"/>. Total over distinct contents, so the result never
+        /// depends on file order.
+        /// </summary>
+        static int CompareForDedupe(RewardedExportCredit a, RewardedExportCredit b)
+        {
+            int c = string.CompareOrdinal(a.ProjectId, b.ProjectId);
+            if (c != 0) return c;
+            if (a.ExpiresAtMs.HasValue != b.ExpiresAtMs.HasValue) return a.ExpiresAtMs.HasValue ? 1 : -1;
+            if (a.ExpiresAtMs.HasValue && a.ExpiresAtMs.Value != b.ExpiresAtMs.Value) return b.ExpiresAtMs.Value.CompareTo(a.ExpiresAtMs.Value);
+            if (a.Claimed != b.Claimed) return a.Claimed ? -1 : 1;
+            return ((int)a.Source).CompareTo((int)b.Source);
         }
     }
 }

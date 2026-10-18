@@ -40,13 +40,25 @@ namespace Ballverse.Core.Ads
         }
 
         /// <summary>
-        /// Parses with <see cref="CoreJson"/> and normalizes: negative counters become 0, negative timestamps become null,
-        /// a missing or older version becomes <see cref="CurrentVersion"/>. The JSON literal <c>null</c> yields a fresh state.
+        /// Parses and normalizes: negative counters become 0, a counter above <see cref="int.MaxValue"/> saturates, the
+        /// lifetime total is raised to at least the counter, negative timestamps become null, a missing or older version
+        /// becomes <see cref="CurrentVersion"/>. A field of the wrong type keeps its default. The JSON literal <c>null</c>
+        /// yields a fresh state.
         /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
+        /// <exception cref="System.IO.InvalidDataException">The text is not JSON, or its root is not an object.</exception>
         public static InterstitialState FromJson(string json)
         {
-            if (json == null) throw new ArgumentNullException(nameof(json));
-            var state = CoreJson.Deserialize<InterstitialState>(json) ?? new InterstitialState();
+            var obj = AdJson.ParseObject(json, "interstitial state");
+            var state = new InterstitialState();
+            if (obj != null)
+            {
+                if (AdJson.TryGetInt(AdJson.Get(obj, "version"), out int version)) state.Version = version;
+                if (AdJson.TryGetInt(AdJson.Get(obj, "completedGames"), out int completed)) state.CompletedGames = completed;
+                if (AdJson.TryGetLong(AdJson.Get(obj, "totalCompletedGames"), out long total)) state.TotalCompletedGames = total;
+                if (AdJson.TryGetLong(AdJson.Get(obj, "lastInterstitialShownMs"), out long shown)) state.LastInterstitialShownMs = shown;
+                if (AdJson.TryGetLong(AdJson.Get(obj, "lastRewardedShownMs"), out long rewarded)) state.LastRewardedShownMs = rewarded;
+            }
             state.Normalize();
             return state;
         }
@@ -56,6 +68,8 @@ namespace Ballverse.Core.Ads
             if (Version < CurrentVersion) Version = CurrentVersion;
             if (CompletedGames < 0) CompletedGames = 0;
             if (TotalCompletedGames < 0) TotalCompletedGames = 0;
+            // Every game in the counter is also a lifetime game; a partial state must not look like a grace period (IN6).
+            if (TotalCompletedGames < CompletedGames) TotalCompletedGames = CompletedGames;
             if (LastInterstitialShownMs.HasValue && LastInterstitialShownMs.Value < 0) LastInterstitialShownMs = null;
             if (LastRewardedShownMs.HasValue && LastRewardedShownMs.Value < 0) LastRewardedShownMs = null;
         }

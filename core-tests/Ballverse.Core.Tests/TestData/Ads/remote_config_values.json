@@ -1,0 +1,9 @@
+{
+  "interstitial_every_n_games": "5",
+  "interstitial_min_interval_sec": "90",
+  "interstitial_grace_games": "3",
+  "rewarded_export_enabled": "false",
+  "rewarded_wait_timeout_sec": "7",
+  "rewarded_retry_window_min": "15",
+  "unrelated_flag": "on"
+}

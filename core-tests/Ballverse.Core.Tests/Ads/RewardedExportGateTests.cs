@@ -138,7 +138,7 @@ namespace Ballverse.Core.Tests.Ads
             Assert.False(g.HasWaitTimedOut(T0, T0 + 5 * Sec - 1));
             Assert.True(g.HasWaitTimedOut(T0, T0 + 5 * Sec));
             Assert.True(g.HasWaitTimedOut(T0, T0 + 6 * Sec));
-            Assert.False(g.HasWaitTimedOut(T0, T0 - 1)); // clock went back: keep waiting until the caller's own timeout
+            Assert.True(g.HasWaitTimedOut(T0, T0 - 1)); // clock went back: elapsed time unknown, fail open (Р14)
         }
 
         [Fact]

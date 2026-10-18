@@ -45,7 +45,10 @@ namespace Ballverse.Core.Ads
             return new InterstitialPolicy(config, InterstitialState.FromJson(stateJson));
         }
 
-        /// <summary>Current config (a clamped copy). Setting it applies a fresh Remote Config without losing state.</summary>
+        /// <summary>
+        /// Current config (a clamped copy). Setting it applies a fresh Remote Config without losing state; the new values
+        /// are clamped too (<see cref="AdPolicyConfig.Validated"/>), so a remote N = 0 behaves as N = 1.
+        /// </summary>
         public AdPolicyConfig Config
         {
             get { return _config.Clone(); }
@@ -65,8 +68,11 @@ namespace Ballverse.Core.Ads
         public long? LastInterstitialShownMs => _state.LastInterstitialShownMs;
         public long? LastRewardedShownMs => _state.LastRewardedShownMs;
 
-        /// <summary>True while the grace period of IN6 lasts (<c>totalCompletedGames ≤ graceGames</c>).</summary>
-        public bool InGracePeriod => _state.TotalCompletedGames <= _config.InterstitialGraceGames;
+        /// <summary>
+        /// True while the grace period of IN6 lasts: <c>graceGames &gt; 0</c> and <c>totalCompletedGames ≤ graceGames</c>.
+        /// Always false with the default grace 0, so a new user is not reported as being in a grace period.
+        /// </summary>
+        public bool InGracePeriod => _config.InterstitialGraceGames > 0 && _state.TotalCompletedGames <= _config.InterstitialGraceGames;
 
         /// <summary>IN1: an interstitial is waiting for the next natural break (counter ≥ N and the grace period is over).</summary>
         public bool IsPending => !InGracePeriod && _state.CompletedGames >= _config.InterstitialEveryNGames;
