@@ -133,6 +133,11 @@ namespace Ballverse.Services
             _tracking.Ensure(AttPrePrompt, done);
         }
 
+        public void AbandonTrackingDecision()
+        {
+            _tracking.Abandon("abandoned by the caller");
+        }
+
         void OnInfoUpdated(int attempt, FormError error)
         {
             if (attempt != _attempt || !_awaitingUpdate) return; // timed out earlier; ignore the late answer

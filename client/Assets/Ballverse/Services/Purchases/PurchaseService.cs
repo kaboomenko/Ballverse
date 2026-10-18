@@ -17,12 +17,25 @@ namespace Ballverse.Services
     /// so a crash in between re-delivers it at the next start); an unverified one is neither granted nor confirmed;</item>
     /// <item>rights are Core <c>Entitlements.From(owned, config, watermarkGrandfathered)</c>; the Core
     /// <see cref="WatermarkGrandfathering"/> flag is updated and persisted on every recompute;</item>
-    /// <item>deferred purchases grant nothing and are listed in <see cref="PendingProductIds"/>.</item>
+    /// <item>deferred purchases grant nothing and are listed in <see cref="PendingProductIds"/>;</item>
+    /// <item>a purchases read that gets no answer within <see cref="FetchTimeoutMs"/> counts as failed, so later reads are not
+    /// blocked, and an automatic one is retried once (Unity IAP on Google Play can hand the answer of an app read to its own
+    /// read on focus gain, which never reports back).</item>
     /// </list>
     /// </summary>
     public sealed class PurchaseService : IPurchaseService, IStoreBackendListener, ITickable
     {
         public const long ConnectTimeoutMs = 15_000;
+
+        /// <summary>A purchases read without an answer after this long is treated as failed.</summary>
+        public const long FetchTimeoutMs = 20_000;
+
+        /// <summary>
+        /// Safety bound on reads issued back to back by the stale-read protection (each one answered without a kept grant).
+        /// Reads that timed out stay counted as unanswered, so later answers count as older reads than they are — safe (grants
+        /// settle later, never earlier) but a refund of a recent grant may then need a few cheap re-reads to be applied.
+        /// </summary>
+        const int MaxConsecutiveRereads = 20;
 
         const string Tag = "Purchases";
 
@@ -48,6 +61,7 @@ namespace Ballverse.Services
         readonly Dictionary<string, int> _grantedAtFetch = new Dictionary<string, int>(StringComparer.Ordinal);
         int _fetchesIssued;
         int _fetchesAnswered;
+        int _consecutiveRereads;
         bool _watermarkGrandfathered;
         List<StoreProduct> _products = new List<StoreProduct>();
         string[] _ownedView = Array.Empty<string>();
@@ -56,11 +70,14 @@ namespace Ballverse.Services
         Action<RestoreOutcome> _restoreWaiters;
         bool _restoring;
         string _restoreError;
-        bool _fetchInFlight;
+        // Reads requested and not answered yet, minus those written off by a timeout; > 0 means a read is in flight.
+        int _liveReads;
+        bool _fetchIsRetry;
+        long _fetchDeadlineMs;
         long _connectStartedMs;
 
         /// <param name="config">Release catalog and rules; null means <see cref="MonetizationConfig.Release1"/> (what release
-        /// builds ship), unlike Core where null means the full catalog.</param>
+        /// builds ship).</param>
         public PurchaseService(IStoreBackend backend, EntitlementStore cache, IReceiptValidator validator, MonetizationConfig config,
             IClock clock, IAnalyticsService analytics, IServiceLog log)
         {
@@ -147,7 +164,11 @@ namespace Ballverse.Services
                 _log.Warning(Tag, "Store did not connect in time; using cached rights.");
                 SetState(PurchaseServiceState.Unavailable);
             }
+            if (_liveReads > 0 && _clock.MonotonicMs >= _fetchDeadlineMs) OnFetchTimedOut();
         }
+
+        /// <summary>True while a purchases read is waiting for its answer.</summary>
+        public bool IsFetchingPurchases => _liveReads > 0;
 
         public void Purchase(string productId, string source, Action<PurchaseOutcome> done)
         {
@@ -249,7 +270,7 @@ namespace Ballverse.Services
             SetState(PurchaseServiceState.Unavailable);
             if (_active != null) CompleteActive(_active.ProductId, PurchaseResultKind.Failed, "store_disconnected");
             if (_restoring) CompleteRestore(false, "store_disconnected");
-            _fetchInFlight = false;
+            _liveReads = 0;
             _fetchesAnswered = _fetchesIssued; // outstanding reads are not answered after a disconnect
         }
 
@@ -280,7 +301,7 @@ namespace Ballverse.Services
 
         public void OnPurchasesFetched(IReadOnlyList<StorePurchase> purchases)
         {
-            _fetchInFlight = false;
+            if (_liveReads > 0) _liveReads--;
             // Reads are answered in request order; this answer belongs to read number `answered`.
             int answered = _fetchesAnswered < _fetchesIssued ? ++_fetchesAnswered : _fetchesIssued;
             _confirming.Clear();
@@ -320,7 +341,19 @@ namespace Ballverse.Services
             ReplaceOwned(owned);
             foreach (var p in toConfirm) Confirm(p);
             if (_restoring) CompleteRestore(_restoreError == null, _restoreError);
-            if (reread) FetchPurchasesNow(force: false);
+            if (!reread)
+            {
+                _consecutiveRereads = 0;
+            }
+            else if (_consecutiveRereads < MaxConsecutiveRereads)
+            {
+                _consecutiveRereads++;
+                FetchPurchasesNow(force: false);
+            }
+            else
+            {
+                _log.Warning(Tag, "Purchases re-read limit reached; recent purchases stay granted until the next read.");
+            }
         }
 
         /// <summary>
@@ -354,7 +387,7 @@ namespace Ballverse.Services
 
         public void OnPurchasesFetchFailed(string reason)
         {
-            _fetchInFlight = false;
+            if (_liveReads > 0) _liveReads--;
             if (_fetchesAnswered < _fetchesIssued) _fetchesAnswered++;
             _log.Warning(Tag, "Purchases fetch failed (" + reason + "); keeping cached rights.");
             if (_restoring) CompleteRestore(false, "fetch_failed");
@@ -440,10 +473,12 @@ namespace Ballverse.Services
 
         // ---- internals ----
 
-        void FetchPurchasesNow(bool force)
+        void FetchPurchasesNow(bool force, bool isRetry = false)
         {
-            if (_fetchInFlight && !force) return;
-            _fetchInFlight = true;
+            if (_liveReads > 0 && !force) return;
+            _liveReads++;
+            _fetchIsRetry = isRetry;
+            _fetchDeadlineMs = _clock.MonotonicMs + FetchTimeoutMs;
             _fetchesIssued++;
             try
             {
@@ -454,6 +489,26 @@ namespace Ballverse.Services
                 _log.Error(Tag, "Store purchases fetch threw.", e);
                 OnPurchasesFetchFailed("exception");
             }
+        }
+
+        void OnFetchTimedOut()
+        {
+            _liveReads = 0;
+            // _fetchesAnswered is not advanced: a late answer then counts as this read; if none ever comes, later answers count
+            // as older reads than they are, which only delays settling grants (KeepGrantsNewerThan stays conservative).
+            if (_restoring)
+            {
+                _log.Warning(Tag, "Purchases read for restore got no answer in time.");
+                CompleteRestore(false, "fetch_timeout");
+                return;
+            }
+            if (_fetchIsRetry || State != PurchaseServiceState.Ready)
+            {
+                _log.Warning(Tag, "Purchases read got no answer in time again; keeping current rights until the next read.");
+                return;
+            }
+            _log.Warning(Tag, "Purchases read got no answer in time; reading again.");
+            FetchPurchasesNow(force: false, isRetry: true);
         }
 
         void Confirm(StorePurchase purchase)

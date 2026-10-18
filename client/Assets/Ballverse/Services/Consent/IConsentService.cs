@@ -66,6 +66,12 @@ namespace Ballverse.Services
     {
         /// <summary>Shows the screen; call <paramref name="onContinue"/> with true to proceed to the system dialog.</summary>
         void Show(Action<bool> onContinue);
+
+        /// <summary>
+        /// Closes the screen without an answer: the flow was given up (no answer in time, so the ad or export went ahead
+        /// without it). A later <c>onContinue</c> from that screen is ignored.
+        /// </summary>
+        void Dismiss();
     }
 
     /// <summary>
@@ -114,5 +120,11 @@ namespace Ballverse.Services
         /// once. Called by the ads service right before the first ad is shown (spec §5.6). A refusal never limits the app.
         /// </summary>
         void EnsureTrackingDecision(Action done);
+
+        /// <summary>
+        /// Gives up a running <see cref="EnsureTrackingDecision"/> flow (the ads service stopped waiting for it): waiters
+        /// continue, the pre-prompt is dismissed, and a late answer no longer opens the system dialog. No-op when idle.
+        /// </summary>
+        void AbandonTrackingDecision();
     }
 }

@@ -26,10 +26,24 @@ namespace Ballverse.Services.Editor
         {
             if (value == null) throw new ArgumentNullException(nameof(value));
             if (HasKey(plist, key)) return plist;
+            return InsertBeforeRootDictEnd(plist, "\t<key>" + key + "</key>\n\t<string>" + SecurityElement.Escape(value) + "</string>\n");
+        }
+
+        /// <summary>
+        /// Adds <c>&lt;key&gt;key&lt;/key&gt;&lt;true/&gt;</c> (or <c>&lt;false/&gt;</c>) before the closing &lt;/dict&gt; of the root
+        /// dictionary when the key is absent; an existing key is left unchanged.
+        /// </summary>
+        public static string EnsureBool(string plist, string key, bool value)
+        {
+            if (HasKey(plist, key)) return plist;
+            return InsertBeforeRootDictEnd(plist, "\t<key>" + key + "</key>\n\t" + (value ? "<true/>" : "<false/>") + "\n");
+        }
+
+        static string InsertBeforeRootDictEnd(string plist, string insert)
+        {
             int plistEnd = plist.LastIndexOf("</plist>", StringComparison.Ordinal);
             int dictEnd = plistEnd < 0 ? -1 : plist.LastIndexOf("</dict>", plistEnd, StringComparison.Ordinal);
             if (dictEnd < 0) throw new FormatException("Not an XML property list with a root <dict>.");
-            string insert = "\t<key>" + key + "</key>\n\t<string>" + SecurityElement.Escape(value) + "</string>\n";
             return plist.Substring(0, dictEnd) + insert + plist.Substring(dictEnd);
         }
     }

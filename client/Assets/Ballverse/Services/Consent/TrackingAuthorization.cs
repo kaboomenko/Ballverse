@@ -22,6 +22,7 @@ namespace Ballverse.Services
         }
     }
 
+#if !BALLVERSE_STORE // fakes are not compiled into Store builds (spec §8.9)
     /// <summary>Scriptable ATT for tests and the editor.</summary>
     public sealed class FakeTrackingAuthorization : ITrackingAuthorization
     {
@@ -39,6 +40,7 @@ namespace Ballverse.Services
             done?.Invoke(Status);
         }
     }
+#endif
 
     /// <summary>
     /// The ATT sequence of spec §5.6, shared by the consent implementations: own explanation screen → system dialog, only
@@ -47,8 +49,9 @@ namespace Ballverse.Services
     /// Failure handling (Р14, IN4: an ad never holds the user up): a pre-prompt or platform call that throws ends the flow at
     /// once; a flow that has not finished after <see cref="FlowTimeoutMs"/> (pre-prompt closed by navigation without an
     /// answer, native callback lost) is abandoned by the next <see cref="Ensure"/> call, which then continues immediately.
-    /// Answers that arrive after the flow ended are ignored. The ads service has its own watchdog for the caller that started
-    /// the stuck flow (<see cref="AdsService.BeforeShowTimeoutMs"/>).
+    /// The ads service's watchdog (<see cref="AdsService.BeforeShowTimeoutMs"/>) abandons it through <see cref="Abandon"/>
+    /// as soon as it stops waiting. Abandoning dismisses the pre-prompt (<see cref="IAttPrePrompt.Dismiss"/>), and answers
+    /// that arrive after the flow ended are ignored, so the system dialog never appears after the ad was skipped.
     /// </para>
     /// </summary>
     public sealed class TrackingDecisionFlow
@@ -67,6 +70,7 @@ namespace Ballverse.Services
         int _generation;
         int _systemRequested;
         long _startedMs;
+        IAttPrePrompt _prePrompt;
 
         public TrackingDecisionFlow(ITrackingAuthorization platform, IClock clock = null, IServiceLog log = null)
         {
@@ -82,11 +86,7 @@ namespace Ballverse.Services
 
         public void Ensure(IAttPrePrompt prePrompt, Action done)
         {
-            if (_running && _clock.MonotonicMs - _startedMs >= FlowTimeoutMs)
-            {
-                _log.Warning(Tag, "ATT flow did not finish in time; abandoned for this session.");
-                Finish(_generation);
-            }
+            if (_running && _clock.MonotonicMs - _startedMs >= FlowTimeoutMs) Abandon("did not finish in time");
             if (_doneThisSession || !IsUndetermined())
             {
                 done?.Invoke();
@@ -97,6 +97,7 @@ namespace Ballverse.Services
             _running = true;
             _startedMs = _clock.MonotonicMs;
             int generation = ++_generation;
+            _prePrompt = prePrompt;
 
             if (prePrompt == null)
             {
@@ -116,6 +117,27 @@ namespace Ballverse.Services
             {
                 _log.Error(Tag, "ATT pre-prompt threw; continuing without the system dialog.", e);
                 Finish(generation);
+            }
+        }
+
+        /// <summary>
+        /// Ends a running flow now: waiters continue, the pre-prompt is dismissed, later answers are ignored, and ATT is not
+        /// asked again this session. No-op when no flow is running.
+        /// </summary>
+        public void Abandon(string reason)
+        {
+            if (!_running) return;
+            _log.Warning(Tag, "ATT flow " + reason + "; abandoned for this session.");
+            var prePrompt = _prePrompt;
+            Finish(_generation);
+            if (prePrompt == null) return;
+            try
+            {
+                prePrompt.Dismiss();
+            }
+            catch (Exception e)
+            {
+                _log.Error(Tag, "ATT pre-prompt dismiss threw.", e);
             }
         }
 
@@ -153,6 +175,7 @@ namespace Ballverse.Services
             if (generation != _generation || !_running) return;
             _running = false;
             _doneThisSession = true;
+            _prePrompt = null;
             _generation++; // late answers of this flow are ignored
             var w = _waiters;
             _waiters = null;

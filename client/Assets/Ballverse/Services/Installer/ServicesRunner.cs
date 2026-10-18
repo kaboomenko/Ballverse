@@ -4,7 +4,7 @@ namespace Ballverse.Services
 {
     /// <summary>
     /// Drives <see cref="BallverseServices"/> from the Unity player loop: drains SDK callbacks and ticks the services every
-    /// frame, re-reads purchases when the app returns to the foreground, and pauses app audio while a full-screen ad is on
+    /// frame, re-reads purchases when the app returns to the foreground or regains focus, and pauses app audio while a full-screen ad is on
     /// screen (RW6). Lives on a hidden DontDestroyOnLoad object.
     /// </summary>
     public sealed class ServicesRunner : MonoBehaviour
@@ -44,6 +44,11 @@ namespace Ballverse.Services
         void OnApplicationPause(bool paused)
         {
             if (!paused && _services != null) _services.OnApplicationResumed();
+        }
+
+        void OnApplicationFocus(bool hasFocus)
+        {
+            if (_services != null) _services.OnApplicationFocusChanged(hasFocus);
         }
 
         void OnFullScreenChanged(bool showing)

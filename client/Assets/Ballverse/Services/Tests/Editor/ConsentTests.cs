@@ -10,6 +10,7 @@ namespace Ballverse.Services.Tests
         {
             public Action<bool> Pending;
             public int Calls;
+            public int Dismissals;
             public bool Throw;
 
             public void Show(Action<bool> onContinue)
@@ -17,6 +18,11 @@ namespace Ballverse.Services.Tests
                 Calls++;
                 if (Throw) throw new InvalidOperationException("screen failed");
                 Pending = onContinue;
+            }
+
+            public void Dismiss()
+            {
+                Dismissals++;
             }
         }
 
@@ -85,6 +91,7 @@ namespace Ballverse.Services.Tests
             Assert.AreEqual(1, first);
             Assert.AreEqual(1, second);
             Assert.IsFalse(flow.IsRunning);
+            Assert.AreEqual(1, prePrompt.Dismissals, "the stale screen is closed");
 
             // The screen answering much later does not open the system dialog or call anyone again.
             prePrompt.Pending(true);
@@ -92,6 +99,30 @@ namespace Ballverse.Services.Tests
             Assert.AreEqual(1, first);
             Assert.AreEqual(1, second);
             Assert.AreEqual(1, third);
+        }
+
+        [Test]
+        public void AbandonEndsTheFlowDismissesThePrePromptAndIgnoresALateAnswer()
+        {
+            var tracking = new FakeTrackingAuthorization();
+            var flow = new TrackingDecisionFlow(tracking, new ManualClock(), new MemoryServiceLog());
+            var prePrompt = new ScriptedPrePrompt();
+            int done = 0;
+            flow.Ensure(prePrompt, () => done++);
+
+            flow.Abandon("test");
+            Assert.IsFalse(flow.IsRunning);
+            Assert.AreEqual(1, done);
+            Assert.AreEqual(1, prePrompt.Dismissals);
+
+            prePrompt.Pending(true);
+            Assert.AreEqual(0, tracking.RequestCount, "a late continue does not show the system dialog");
+            flow.Abandon("again");
+            Assert.AreEqual(1, prePrompt.Dismissals, "no-op when idle");
+            int later = 0;
+            flow.Ensure(prePrompt, () => later++);
+            Assert.AreEqual(1, later, "not asked again this session");
+            Assert.AreEqual(1, prePrompt.Calls);
         }
 
         [Test]

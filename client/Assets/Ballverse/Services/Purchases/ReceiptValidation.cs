@@ -23,6 +23,7 @@ namespace Ballverse.Services
         }
     }
 
+#if !BALLVERSE_STORE // fakes are not compiled into Store builds (spec §8.9)
     /// <summary>Scriptable validator for tests.</summary>
     public sealed class FakeReceiptValidator : IReceiptValidator
     {
@@ -37,4 +38,5 @@ namespace Ballverse.Services
             return Accept;
         }
     }
+#endif
 }

@@ -1,7 +1,7 @@
 # Ballverse.Services
 
 Ads, purchases, consent, analytics, Remote Config and crash reporting behind interfaces (spec §5, §7.3, §7.9, §9), each with a
-fake for the editor and tests. Release-1 scope: three free modes, store sells only Remove Export Ads, Remove Interstitial Ads
+fake for the editor, tests and test builds (none of the fakes is compiled into a Store build). Release-1 scope: three free modes, store sells only Remove Export Ads, Remove Interstitial Ads
 and No Ads Bundle.
 
 ## Wiring (App)
@@ -9,8 +9,9 @@ and No Ads Bundle.
 The App (unity/bootstrap `Ballverse.App.IAppModule`) wraps the services in a `ServicesModule` under
 `Assets/Ballverse/App/Modules/`: `Register` → `ServicesInstaller.Create(options)` and publish the facades; `Start` →
 `ServicesRunner.Attach(services)`; `Shutdown` → `runner.Detach()`. The services phase their own frame-1+ work
-(`ServicesStartup`), so exactly one owner ticks them: the runner, or the App's loop calling `services.Tick()` and
-`services.OnApplicationResumed()` (from `IAppLifecycle.Resumed`) — not both. See the `ServicesInstaller` docs.
+(`ServicesStartup`), so exactly one owner ticks them: the runner, or the App's loop calling `services.Tick()`,
+`services.OnApplicationResumed()` (from `IAppLifecycle.Resumed`) and `services.OnApplicationFocusChanged(hasFocus)` (from
+`IAppLifecycle.FocusChanged`) — not both. See the `ServicesInstaller` docs.
 
 ```csharp
 var services = ServicesInstaller.CreateAndRun();   // without the App: frame 0; everything else starts on the next frames
@@ -23,7 +24,7 @@ var d = services.Interstitials.EvaluateNaturalBreak(kind, inStudio, exporting, i
 // d.IsShow → 0.5 s «Реклама» label → services.Interstitials.ShowInterstitial(shown => continue)
 services.Purchases.Purchase(ProductIds.NoAds, "shop", outcome => ...);
 services.Purchases.Restore(outcome => ...);
-services.Consent.AttPrePrompt = myExplanationScreen;  // iOS pre-prompt before the system ATT dialog
+services.Consent.AttPrePrompt = myExplanationScreen;  // iOS pre-prompt before the system ATT dialog (Show / Dismiss)
 ```
 
 `services.Entitlements` holds the rights: Core `Entitlements.From(owned, MonetizationConfig.Release1, grandfathered)` (No Ads
@@ -32,12 +33,37 @@ Bundle, or both ad removals, also give `NO_WATERMARK`). The catalog and rules co
 later release that drops the No Ads rule never takes the right away. `services.Purchases.Config` and
 `.WatermarkGrandfathered` are what the UI passes to Core `Storefront` functions.
 
+## Build variants (spec §7.9, §8.9)
+
+The bootstrap build script compiles one symbol into the player; `ServicesPolicy` turns it into what gets wired:
+
+| Variant (symbol) | Ads | Consent | Purchases | Fakes / test ids in the binary |
+|---|---|---|---|---|
+| `Dev` (`BALLVERSE_DEV`, or no symbol: editor, players built without the script) | Google Mobile Ads with Google's **test** units | UMP; EEA test geography / test devices from `ServicesConfig` allowed | fake store; `ServicesConfig.testBuildStore = Sandbox` → Unity IAP sandbox | yes |
+| `OwnerTest` (`BALLVERSE_OWNERTEST`, release IL2CPP) | same as Dev | same as Dev | same as Dev | yes |
+| `Store` (`BALLVERSE_STORE`) | real AdMob units from `ServicesConfig`; missing, malformed or test units → ads off (exports without ads, Р14), never test ads | UMP, no debug settings | Unity IAP (StoreKit 2 / Play Billing) | no: `FakeStoreBackend`, `FakeAdNetwork`, `FakeConsentService`, the other `Fake*` helpers and the Google test unit / app id constants are under `#if !BALLVERSE_STORE`; a requested `ServicesMode.Fake` is ignored with an error |
+
+`ServicesMode.Fake` (all fakes) and `Real` (real store too) override the defaults in Dev and OwnerTest; the editor follows
+`ServicesConfig.editorMode` (fakes). Dev and OwnerTest ignore configured real ad units. Store builds keep only the Google test
+publisher prefix, to refuse test units (`AdUnitIds.AnyTestId`). The log-based analytics / crash reporter and the build-default
+Remote Config are the release-1 production path while Firebase is off, not test fakes.
+
+`Editor/StoreBuildCheck.cs` fails a Store build whose `ServicesConfig` lacks real units when the variant is on the command line
+(`-ballverseVariant Store`, CI). Menu builds and the App Bundle default pass the variant only inside the bootstrap build script:
+it should call `StoreBuildCheck.StoreAdUnitsProblem(...)` next to its AdMob app id check (open issue below).
+
 ## Initialization order (spec §7.9)
 
 Frame 0: crash reporter → cached rights (signed cache) and ad policy state → UI. Frame 1+: Remote Config (cached values, 3 s
 background fetch), IAP connect and purchases read, UMP consent. Ads SDK starts once consent allows ads and ≥ 3 s after the first
 frame. ATT is asked right before the first ad is shown; a pre-prompt that throws ends the ATT flow, and one that never answers is
-abandoned after 60 s (the export runs without the ad, the interstitial is skipped: Р14, IN4).
+abandoned after 60 s (the export runs without the ad, the interstitial is skipped: Р14, IN4): the pre-prompt gets
+`IAttPrePrompt.Dismiss()` and a late "continue" no longer opens the system dialog.
+
+Purchases are re-read 2 s after every return to the app and every focus gain (pending approvals, refunds; spec §5.4). The delay
+matters on Google Play: Unity IAP 5 reads purchases itself on each focus gain and keeps a single fetch callback, so an app read
+issued before that would be answered into Unity IAP's cache only. A read without an answer after 20 s counts as failed (it never
+blocks later reads) and an automatic one is retried once; a restore whose read times out fails with `fetch_timeout`.
 
 ## Consent and analytics (spec §9.1)
 
@@ -46,6 +72,14 @@ outside consent regions everything is granted; after an answer `analytics_storag
 (`IABTCF_PurposeConsents`: purposes 1, 8 and 9 all consented, or GDPR not applying), the ad signals are left to the TCF string.
 Changes from the privacy options form are applied the same way. Without a decision (offline first launch, form failed) consent is
 gathered again with backoff (30 s doubling to 5 min) and on every return to the app.
+
+The native Firebase SDK starts before any C# and by default collects automatic events (`first_open`, `session_start`) with every
+consent type granted. `Editor/FirebaseConsentDefaults.cs` therefore writes Firebase's documented defaults into every build —
+Android `<meta-data>` `firebase_analytics_collection_enabled=false` and `google_analytics_default_allow_analytics_storage`,
+`_ad_storage`, `_ad_user_data`, `_ad_personalization_signals` = `false` (unityLibrary manifest); iOS Info.plist
+`FIREBASE_ANALYTICS_COLLECTION_ENABLED` and `GOOGLE_ANALYTICS_DEFAULT_ALLOW_ANALYTICS_STORAGE` / `_AD_STORAGE` / `_AD_USER_DATA` /
+`_AD_PERSONALIZATION_SIGNALS` = `NO` — and the services enable collection and Consent Mode after the decision. Values already
+set by the owner or a plugin are kept; the keys are inert while Firebase is not in the build.
 
 ## What switches the real SDKs on
 
@@ -62,7 +96,9 @@ If the ads plugin is imported as a `.unitypackage` instead of the UPM package, a
 ## Owner setup before store release
 
 - `ServicesConfig` asset (Create → Ballverse → Services Config) at `Resources/BallverseServicesConfig.asset`: real AdMob ad unit
-  ids (Google test ids are used until then) and the Google Play licensing public key (on-device signature check, spec §5.5).
+  ids (used only by Store builds; Dev and OwnerTest always use Google's test units) and the Google Play licensing public key
+  (on-device signature check, spec §5.5). Once the store apps exist, `testBuildStore = Sandbox` lets OwnerTest builds buy with
+  license testers / sandbox accounts.
 - Google Mobile Ads settings asset: AdMob app ids (test app ids: Android `ca-app-pub-3940256099942544~3347511713`,
   iOS `ca-app-pub-3940256099942544~1458002511`). The ATT usage description (NSUserTrackingUsageDescription) is added to the
   Xcode project's Info.plist by `Editor/IosTrackingUsageDescription.cs` when the plugin settings leave it empty (English text;
@@ -75,8 +111,11 @@ If the ads plugin is imported as a `.unitypackage` instead of the UPM package, a
 
 - Core Monetization (`MonetizationConfig.Release1`, `WatermarkGrandfathering`) is still on the core/monetization branch; this
   assembly compiles in Unity only once it is merged.
-- Release-1 build variants (docs-release1 §7.9 / §8.9, not merged yet): fakes and test ids are compiled into every build today;
-  release builds refuse fake services unless the App passes `DeveloperBuild = true`. Gate them behind the build-variant symbol
-  (OwnerTest = IL2CPP release build with the fake store; Store = no fakes) once that spec lands.
+- Bootstrap `BuildScript.CheckAdIds` should also fail Store builds on `StoreBuildCheck.StoreAdUnitsProblem(...)` (menu builds and
+  the App Bundle default do not put the variant on the command line). Until then a misconfigured Store build runs with ads off.
+- Compilation under `BALLVERSE_STORE` / `BALLVERSE_OWNERTEST` is checked here with stand-in SDK references only; CI builds only
+  OwnerTest on push.
+- Merged spec §5.0.2 makes the No Ads watermark rule permanent; when Core drops `WatermarkWithNoAds` / `WatermarkGrandfathering`,
+  `PurchaseService` drops its use of them.
 - The TCF purpose set for `analytics_storage` (1 + 8 + 9) is a product/legal decision to confirm with the owner.
 - Not verifiable in this container: Unity/GameCI compilation, the `.mm` bridge, behaviour on devices.

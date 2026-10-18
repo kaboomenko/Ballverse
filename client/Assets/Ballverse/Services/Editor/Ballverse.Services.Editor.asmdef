@@ -1,7 +1,9 @@
 {
     "name": "Ballverse.Services.Editor",
     "rootNamespace": "Ballverse.Services.Editor",
-    "references": [],
+    "references": [
+        "Ballverse.Services"
+    ],
     "includePlatforms": [
         "Editor"
     ],

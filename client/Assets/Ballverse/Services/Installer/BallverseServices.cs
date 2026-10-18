@@ -26,9 +26,11 @@ namespace Ballverse.Services
             InterstitialCoordinator interstitials,
             RewardedExportCoordinator rewardedExport,
             ServicesStartup startup,
-            ServicesMode resolvedMode,
+            ServicesPlan plan,
+#if !BALLVERSE_STORE
             FakeAdNetwork fakeAds,
             FakeStoreBackend fakeStore,
+#endif
             List<ITickable> tickables)
         {
             Queue = queue;
@@ -43,9 +45,11 @@ namespace Ballverse.Services
             Interstitials = interstitials;
             RewardedExport = rewardedExport;
             Startup = startup;
-            Mode = resolvedMode;
+            Plan = plan;
+#if !BALLVERSE_STORE
             FakeAds = fakeAds;
             FakeStore = fakeStore;
+#endif
             _tickables = tickables ?? new List<ITickable>();
         }
 
@@ -67,14 +71,21 @@ namespace Ballverse.Services
 
         public ServicesStartup Startup { get; }
 
-        /// <summary>Which implementations were wired.</summary>
-        public ServicesMode Mode { get; }
+        /// <summary>Which implementations were wired, for which build variant.</summary>
+        public ServicesPlan Plan { get; }
 
-        /// <summary>The fake ad network when fakes are used (developer menu / tests), else null.</summary>
+        /// <summary><see cref="ServicesMode.Fake"/> when every service is a fake, else <see cref="ServicesMode.Real"/>.</summary>
+        public ServicesMode Mode => Plan.Mode;
+
+#if !BALLVERSE_STORE
+        /// <summary>The fake ad network when fakes are used (developer menu / tests), else null. Not in Store builds.</summary>
         public FakeAdNetwork FakeAds { get; }
 
-        /// <summary>The fake store when fakes are used (developer menu "сброс покупок" / tests), else null.</summary>
+        /// <summary>
+        /// The fake store when it is used (developer menu "имитация покупок и возвратов", tests), else null. Not in Store builds.
+        /// </summary>
         public FakeStoreBackend FakeStore { get; }
+#endif
 
         /// <summary>Current rights (release-1 rules).</summary>
         public EntitlementSet Entitlements => Purchases.Entitlements;
@@ -97,13 +108,19 @@ namespace Ballverse.Services
         }
 
         /// <summary>
-        /// The app returned to the foreground: re-read purchases (pending approvals, refunds; spec §5.4) and retry a consent
-        /// gather that has not produced a decision yet (offline first launch).
+        /// The app returned to the foreground: re-read purchases shortly (pending approvals, refunds; spec §5.4,
+        /// <see cref="ServicesStartup.ResumePurchasesReadDelayMs"/>) and retry a consent gather that has not produced a decision
+        /// yet (offline first launch).
         /// </summary>
         public void OnApplicationResumed()
         {
-            Purchases.RefreshPurchases();
             Startup.OnApplicationResumed();
+        }
+
+        /// <summary>Focus changed (Unity <c>OnApplicationFocus</c>): a gain moves the purchases re-read after it.</summary>
+        public void OnApplicationFocusChanged(bool hasFocus)
+        {
+            Startup.OnApplicationFocusChanged(hasFocus);
         }
     }
 }

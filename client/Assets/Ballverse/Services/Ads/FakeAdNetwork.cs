@@ -1,3 +1,4 @@
+#if !BALLVERSE_STORE // fakes are not compiled into Store builds (spec §8.9)
 using System;
 
 namespace Ballverse.Services
@@ -151,3 +152,4 @@ namespace Ballverse.Services
         }
     }
 }
+#endif

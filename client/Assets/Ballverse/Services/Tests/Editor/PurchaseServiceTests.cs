@@ -274,6 +274,96 @@ namespace Ballverse.Services.Tests
         }
 
         [Test]
+        public void UnansweredReadTimesOutIsRetriedOnceAndNeverBlocksLaterReads()
+        {
+            // Unity IAP on Google Play can hand the answer of an app read to its own focus read (single fetch callback).
+            var backend = new ScriptedStoreBackend();
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            service.RefreshPurchases();
+            Assert.AreEqual(2, backend.FetchRequests);
+            Assert.IsTrue(service.IsFetchingPurchases);
+
+            service.RefreshPurchases(); // still in flight: coalesced
+            Assert.AreEqual(2, backend.FetchRequests);
+            _clock.Advance(PurchaseService.FetchTimeoutMs - 1);
+            service.Tick();
+            Assert.AreEqual(2, backend.FetchRequests);
+
+            _clock.Advance(1);
+            service.Tick();
+            Assert.AreEqual(3, backend.FetchRequests, "retried once");
+            _clock.Advance(PurchaseService.FetchTimeoutMs);
+            service.Tick();
+            Assert.AreEqual(3, backend.FetchRequests, "only one retry");
+            Assert.IsFalse(service.IsFetchingPurchases);
+            Assert.AreEqual(PurchaseServiceState.Ready, service.State);
+
+            // The next resume reads again and its answer is applied (approved cash / parental purchase).
+            for (int i = 0; i < 5; i++)
+            {
+                service.RefreshPurchases();
+                service.Tick();
+            }
+            Assert.AreEqual(4, backend.FetchRequests);
+            backend.Answer(new StorePurchase(ProductIds.NoAds, "tx-1", StorePurchaseState.AwaitingConfirmation, "{}", null));
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoExportAds));
+            Assert.AreEqual(1, backend.ConfirmCalls, "acknowledged (spec §5.5: within 3 days)");
+            service.RefreshPurchases();
+            Assert.AreEqual(5, backend.FetchRequests);
+        }
+
+        [Test]
+        public void RestoreWhoseReadIsNeverAnsweredFails()
+        {
+            var backend = new ScriptedStoreBackend();
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);
+            Assert.IsNull(outcome);
+            _clock.Advance(PurchaseService.FetchTimeoutMs);
+            service.Tick();
+            Assert.IsFalse(outcome.Value.Success);
+            Assert.AreEqual("fetch_timeout", outcome.Value.ErrorCode);
+            Assert.AreEqual(2, backend.FetchRequests, "no automatic retry of a restore");
+            service.Restore(o => outcome = o);
+            Assert.AreEqual(3, backend.FetchRequests, "the user can restore again");
+        }
+
+        [Test]
+        public void LateAnswerOfATimedOutReadDoesNotDropANewerPurchase()
+        {
+            var backend = new ScriptedStoreBackend();
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            service.RefreshPurchases();                 // read 2
+            _clock.Advance(PurchaseService.FetchTimeoutMs);
+            service.Tick();                             // read 2 timed out, read 3 issued
+            Assert.AreEqual(3, backend.FetchRequests);
+            backend.DeliverPending(ProductIds.NoAds);   // paid after reads 2 and 3 were requested
+
+            backend.Answer();                           // read 2 answers late, without it
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoExportAds), "kept after the late answer");
+            backend.Answer();                           // read 3, also older than the purchase
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoExportAds), "kept after the older read");
+            Assert.GreaterOrEqual(backend.FetchRequests, 4, "read again");
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds));
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoExportAds));
+
+            // Settled once a read newer than the grant answered: a later refund (read without it) removes the right.
+            for (int i = 0; i < 4 && !service.Entitlements.IsEmpty; i++)
+            {
+                service.RefreshPurchases();
+                backend.Answer();
+            }
+            Assert.IsTrue(service.Entitlements.IsEmpty);
+        }
+
+        [Test]
         public void FreshReadAfterAPurchaseIsAuthoritative()
         {
             var backend = new ScriptedStoreBackend();

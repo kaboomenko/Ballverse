@@ -5,11 +5,15 @@ namespace Ballverse.Services
 {
     public enum ServicesMode
     {
-        /// <summary>Editor: fakes. Device builds: the real SDKs compiled into the build; missing ones are "unavailable" (never fake purchases).</summary>
+        /// <summary>
+        /// By build variant (<see cref="ServicesPolicy"/>). Editor: <see cref="ServicesConfig.editorMode"/> (fakes). Dev /
+        /// OwnerTest device: real ads SDK with test units and UMP, fake store or sandbox. Store: the real SDKs compiled into
+        /// the build; missing ones are "unavailable" (never fake purchases).
+        /// </summary>
         Auto = 0,
-        /// <summary>Fakes everywhere (editor, tests, development builds only).</summary>
+        /// <summary>Fakes everywhere (editor, tests, Dev and OwnerTest builds; ignored in Store builds).</summary>
         Fake = 1,
-        /// <summary>The real SDKs that are compiled in, also in the editor (their own editor placeholders).</summary>
+        /// <summary>The real SDKs that are compiled in, also in the editor (their own editor placeholders) and the store sandbox.</summary>
         Real = 2,
     }
 
@@ -17,6 +21,12 @@ namespace Ballverse.Services
     public sealed class ServicesOptions
     {
         public ServicesMode Mode { get; set; } = ServicesMode.Auto;
+
+        /// <summary>Build variant (default: the one compiled in, <see cref="ServicesPolicy.CurrentVariant"/>). Tests only.</summary>
+        public ServicesBuildVariant? Variant { get; set; }
+
+        /// <summary>Purchases of Dev / OwnerTest device builds in Auto mode (default: <see cref="ServicesConfig.testBuildStore"/>).</summary>
+        public TestBuildStore? TestBuildStore { get; set; }
 
         public IClock Clock { get; set; }
 
@@ -27,13 +37,16 @@ namespace Ballverse.Services
 
         public IConnectivity Connectivity { get; set; }
 
-        /// <summary>Ad unit ids (default: from <see cref="ServicesConfig"/>, i.e. Google test ids until real ones are set).</summary>
+        /// <summary>
+        /// Real ad unit ids for Store builds (default: from <see cref="ServicesConfig"/>). Dev and OwnerTest always use
+        /// Google's test units (<see cref="ServicesPolicy.SelectAdUnits"/>).
+        /// </summary>
         public AdUnitIds AdUnits { get; set; }
 
         /// <summary>AdMob test device ids (development).</summary>
         public List<string> AdTestDeviceIds { get; } = new List<string>();
 
-        /// <summary>UMP debug: force the EEA geography (development builds only).</summary>
+        /// <summary>UMP debug: force the EEA geography (Dev and OwnerTest builds only).</summary>
         public bool UmpForceEeaGeography { get; set; }
 
         public List<string> UmpTestDeviceHashedIds { get; } = new List<string>();
@@ -44,7 +57,10 @@ namespace Ballverse.Services
         /// <summary>Application id / bundle id (default: <c>Application.identifier</c>).</summary>
         public string ApplicationId { get; set; }
 
-        /// <summary>Development build behaviour (verbose logs, Remote Config without fetch cache). Default: <c>Debug.isDebugBuild</c>.</summary>
+        /// <summary>
+        /// Development build behaviour (verbose logs, Remote Config without fetch cache). Default: <c>Debug.isDebugBuild</c>.
+        /// Which services are fake is decided by the build variant, not by this flag.
+        /// </summary>
         public bool? DeveloperBuild { get; set; }
 
         /// <summary>
@@ -54,10 +70,15 @@ namespace Ballverse.Services
         /// </summary>
         public MonetizationConfig Monetization { get; set; }
 
+#if !BALLVERSE_STORE
         /// <summary>Fake store setup when fakes are used.</summary>
         public FakeStoreConfig FakeStore { get; set; }
+#endif
 
-        /// <summary>Raw Remote Config delivered by the fake service when fakes are used.</summary>
+        /// <summary>Overrides the store backend (tests).</summary>
+        public IStoreBackend StoreBackend { get; set; }
+
+        /// <summary>Raw Remote Config delivered by the build-default service (no Firebase); tests.</summary>
         public IReadOnlyDictionary<string, string> FakeRemoteConfig { get; set; }
 
         /// <summary>Overrides the platform ATT access (tests).</summary>

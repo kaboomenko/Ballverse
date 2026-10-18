@@ -52,6 +52,7 @@ namespace Ballverse.Services
         }
     }
 
+#if !BALLVERSE_STORE // fakes are not compiled into Store builds (spec §8.9)
     /// <summary>Scriptable TCF values for tests.</summary>
     public sealed class FakeTcfStorage : ITcfStorage
     {
@@ -62,6 +63,7 @@ namespace Ballverse.Services
             return Signals;
         }
     }
+#endif
 
     /// <summary>Outcome of <see cref="ConsentModeRules.Decide"/>.</summary>
     public readonly struct AnalyticsConsentDecision

@@ -87,9 +87,16 @@ namespace Ballverse.Services
         public int Precision { get; }
     }
 
-    /// <summary>Ad unit ids of one platform. Google's official test ids until the owner provides real ones.</summary>
+    /// <summary>
+    /// Ad unit ids of one platform. Dev and OwnerTest builds use Google's official test units; Store builds use the real ids
+    /// from <see cref="ServicesConfig"/>, and the test constants are not compiled into them (spec §8.9).
+    /// </summary>
     public sealed class AdUnitIds
     {
+        /// <summary>Publisher part of every Google sample ad unit; used to refuse test units in Store builds.</summary>
+        const string GoogleTestPublisher = "ca-app-pub-3940256099942544";
+
+#if !BALLVERSE_STORE
         // Google sample ad units that always serve test ads:
         // https://developers.google.com/admob/android/test-ads , https://developers.google.com/admob/ios/test-ads
         public const string TestAndroidRewarded = "ca-app-pub-3940256099942544/5224354917";
@@ -100,6 +107,23 @@ namespace Ballverse.Services
         /// <summary>Google sample AdMob app ids; they go into the Google Mobile Ads settings asset, not into code paths.</summary>
         public const string TestAndroidAppId = "ca-app-pub-3940256099942544~3347511713";
         public const string TestIosAppId = "ca-app-pub-3940256099942544~1458002511";
+
+        public static AdUnitIds AndroidTest => new AdUnitIds(TestAndroidRewarded, TestAndroidInterstitial);
+        public static AdUnitIds IosTest => new AdUnitIds(TestIosRewarded, TestIosInterstitial);
+
+        /// <summary>Google's test units of the platform being built (Android ones in the editor).</summary>
+        public static AdUnitIds CurrentPlatformTest
+        {
+            get
+            {
+#if UNITY_IOS
+                return IosTest;
+#else
+                return AndroidTest;
+#endif
+            }
+        }
+#endif
 
         public AdUnitIds(string rewarded, string interstitial)
         {
@@ -112,16 +136,30 @@ namespace Ballverse.Services
         public string Rewarded { get; }
         public string Interstitial { get; }
 
-        public static AdUnitIds AndroidTest => new AdUnitIds(TestAndroidRewarded, TestAndroidInterstitial);
-        public static AdUnitIds IosTest => new AdUnitIds(TestIosRewarded, TestIosInterstitial);
-
         public string For(AdFormat format)
         {
             return format == AdFormat.Rewarded ? Rewarded : Interstitial;
         }
 
-        /// <summary>True when both ids are Google's test units (a release build should not ship them).</summary>
-        public bool AreTestIds => Rewarded.StartsWith("ca-app-pub-3940256099942544/", StringComparison.Ordinal)
-                                  && Interstitial.StartsWith("ca-app-pub-3940256099942544/", StringComparison.Ordinal);
+        /// <summary>True when both ids are Google's test units.</summary>
+        public bool AreTestIds => IsTestId(Rewarded) && IsTestId(Interstitial);
+
+        /// <summary>True when at least one id is a Google test unit (never allowed in a Store build).</summary>
+        public bool AnyTestId => IsTestId(Rewarded) || IsTestId(Interstitial);
+
+        /// <summary>Both ids look like AdMob ad unit ids (<c>ca-app-pub-&lt;publisher&gt;/&lt;unit&gt;</c>).</summary>
+        public bool AreWellFormed => IsWellFormed(Rewarded) && IsWellFormed(Interstitial);
+
+        static bool IsTestId(string id)
+        {
+            return id.StartsWith(GoogleTestPublisher + "/", StringComparison.Ordinal);
+        }
+
+        static bool IsWellFormed(string id)
+        {
+            int slash = id.IndexOf('/');
+            return id.StartsWith("ca-app-pub-", StringComparison.Ordinal) && slash > "ca-app-pub-".Length && slash < id.Length - 1
+                   && id.IndexOf(' ') < 0;
+        }
     }
 }

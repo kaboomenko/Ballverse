@@ -6,9 +6,11 @@ namespace Ballverse.Services
         bool IsOffline { get; }
     }
 
+#if !BALLVERSE_STORE // fakes are not compiled into Store builds (spec §8.9)
     /// <summary>Settable connectivity (tests, editor).</summary>
     public sealed class FakeConnectivity : IConnectivity
     {
         public bool IsOffline { get; set; }
     }
+#endif
 }

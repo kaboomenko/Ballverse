@@ -378,6 +378,186 @@ namespace Ballverse.Services.Tests
         }
 
         [Test]
+        public void LateAttPrePromptAnswerAfterTheWatchdogIsIgnoredAndTheScreenIsDismissed()
+        {
+            var tracking = new FakeTrackingAuthorization();
+            _consent = new FakeConsentService(tracking, _clock);
+            System.Action<bool> answer = null;
+            var prePrompt = new CallbackPrePrompt(next => answer = next);
+            _consent.AttPrePrompt = prePrompt;
+            var s = Create();
+            s.Tick();
+            _clock.Advance(3000);
+            s.Tick();
+            s.RewardedExport.SetInStudio(true);
+            Assert.IsTrue(s.RewardedExport.RequestExport("p").IsShowOffer);
+            Ballverse.Core.Ads.RewardedGateStep? step = null;
+            s.RewardedExport.WatchAd("p", st => step = st);
+            s.Tick();
+            Assert.IsNotNull(answer);
+
+            _clock.Advance(AdsService.BeforeShowTimeoutMs + 1000);
+            s.Tick();
+            Assert.AreEqual(Ballverse.Core.Ads.ExportFunding.AdUnavailable, step.Value.Funding);
+            Assert.AreEqual(1, prePrompt.Dismissals, "the UI is told to close the stale screen");
+
+            answer(true); // the user taps "continue" on the stale screen during the export
+            Assert.AreEqual(0, tracking.RequestCount, "no system ATT dialog during the export");
+            Assert.AreEqual(TrackingAuthorizationStatus.NotDetermined, s.Consent.TrackingStatus);
+
+            // Later ad shows are not held up again this session.
+            s.RewardedExport.OnExportFinished("p", Ballverse.Core.Ads.ExportResult.Succeeded);
+            Assert.IsTrue(s.RewardedExport.RequestExport("q").IsShowOffer);
+            Ballverse.Core.Ads.RewardedGateStep? second = null;
+            s.RewardedExport.WatchAd("q", st => second = st);
+            s.Tick();
+            Assert.IsTrue(second.HasValue);
+            Assert.AreEqual(1, s.FakeAds.ShowCalls);
+            Assert.AreEqual(0, tracking.RequestCount);
+        }
+
+        /// <summary>
+        /// Unity IAP 5.4 on Google Play: one fetch callback, the last caller's; on every focus gain it reads purchases itself
+        /// and that answer only fills its own cache (StoreController.OnPurchasesFetched is not raised).
+        /// </summary>
+        sealed class IapFocusModelBackend : IStoreBackend
+        {
+            IStoreBackendListener _listener;
+            bool _appCallback;
+            int _outstanding;
+
+            public readonly List<StorePurchase> Orders = new List<StorePurchase>();
+            public int AppReads;
+            public int AppAnswers;
+            public int ConfirmCalls;
+
+            public bool IsAvailable => true;
+
+            public IStoreBackendListener Listener { set => _listener = value; }
+
+            public void Connect(IReadOnlyList<string> productIds)
+            {
+                _listener.OnConnected();
+                var products = new List<StoreProduct>();
+                foreach (string id in productIds) products.Add(new StoreProduct(id, "$1", id, id, "USD", 1m, true));
+                _listener.OnProductsFetched(products);
+            }
+
+            public void FetchPurchases()
+            {
+                AppReads++;
+                _appCallback = true;
+                _outstanding++;
+            }
+
+            public void FocusGained()
+            {
+                _appCallback = false;
+                _outstanding++;
+            }
+
+            public void AnswerAll()
+            {
+                int n = _outstanding;
+                _outstanding = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    if (!_appCallback) continue;
+                    AppAnswers++;
+                    _listener.OnPurchasesFetched(Orders.ToArray());
+                }
+            }
+
+            public void Purchase(string productId)
+            {
+            }
+
+            public void Confirm(StorePurchase purchase)
+            {
+                ConfirmCalls++;
+                Orders.Remove(purchase);
+                Orders.Add(new StorePurchase(purchase.ProductId, purchase.TransactionId, StorePurchaseState.Confirmed, purchase.Receipt, null));
+            }
+
+            public void Restore(System.Action<bool, string> done)
+            {
+                done?.Invoke(true, null);
+            }
+        }
+
+        BallverseServices CreateWithBackend(IStoreBackend backend)
+        {
+            return ServicesInstaller.Create(new ServicesOptions
+            {
+                Mode = ServicesMode.Fake,
+                Clock = _clock,
+                Store = _store,
+                Log = new MemoryServiceLog(),
+                Connectivity = new FakeConnectivity(),
+                Consent = _consent,
+                StoreBackend = backend,
+            });
+        }
+
+        [Test]
+        public void ResumeReadComesAfterTheIapFocusReadSoAnApprovedPurchaseIsGranted()
+        {
+            var backend = new IapFocusModelBackend();
+            var s = CreateWithBackend(backend);
+            s.Tick();
+            backend.AnswerAll();
+            Assert.AreEqual(1, backend.AppAnswers);
+            Assert.IsTrue(s.Entitlements.IsEmpty);
+
+            for (int round = 0; round < 3; round++)
+            {
+                // A cash / parental-approval purchase completes while the app is in the background.
+                if (round == 0) backend.Orders.Add(new StorePurchase(ProductIds.NoAds, "tx-1", StorePurchaseState.AwaitingConfirmation, "{}", null));
+                s.OnApplicationResumed();                 // Android: onResume first …
+                s.Tick();
+                backend.FocusGained();                    // … then window focus: Unity IAP reads into its cache
+                s.OnApplicationFocusChanged(true);
+                s.Tick();
+                backend.AnswerAll();
+                Assert.IsTrue(s.Startup.PurchasesReadScheduled);
+
+                _clock.Advance(ServicesStartup.ResumePurchasesReadDelayMs);
+                s.Tick();
+                backend.AnswerAll();
+                Assert.IsFalse(s.Startup.PurchasesReadScheduled);
+                Assert.IsTrue(s.Entitlements.Contains(Entitlement.NoExportAds), "round " + round);
+            }
+            Assert.AreEqual(4, backend.AppReads);
+            Assert.AreEqual(4, backend.AppAnswers);
+            Assert.AreEqual(1, backend.ConfirmCalls, "acknowledged once");
+        }
+
+        [Test]
+        public void ResumeReadSwallowedByALateFocusReadIsRecoveredByTheTimeout()
+        {
+            var backend = new IapFocusModelBackend();
+            var s = CreateWithBackend(backend);
+            s.Tick();
+            backend.AnswerAll();
+            backend.Orders.Add(new StorePurchase(ProductIds.RemoveInterstitialAds, "tx-2", StorePurchaseState.AwaitingConfirmation, "{}", null));
+
+            s.OnApplicationResumed();
+            _clock.Advance(ServicesStartup.ResumePurchasesReadDelayMs);
+            s.Tick();
+            Assert.AreEqual(2, backend.AppReads);
+            backend.FocusGained(); // focus arrives late (shade, dialog): the app read's answer goes to Unity IAP's cache
+            s.OnApplicationFocusChanged(true);
+            backend.AnswerAll();
+            Assert.IsTrue(s.Entitlements.IsEmpty);
+
+            _clock.Advance(PurchaseService.FetchTimeoutMs);
+            s.Tick();
+            backend.AnswerAll();
+            Assert.IsTrue(s.Entitlements.Contains(Entitlement.NoInterstitials));
+            Assert.AreEqual(1, backend.ConfirmCalls);
+        }
+
+        [Test]
         public void RemoteConfigIssuesAreReportedNotThrown()
         {
             var remote = new FakeRemoteConfigService(new MemoryServiceLog());
@@ -399,9 +579,16 @@ namespace Ballverse.Services.Tests
                 _show = show;
             }
 
+            public int Dismissals { get; private set; }
+
             public void Show(System.Action<bool> onContinue)
             {
                 _show(onContinue);
+            }
+
+            public void Dismiss()
+            {
+                Dismissals++;
             }
         }
     }

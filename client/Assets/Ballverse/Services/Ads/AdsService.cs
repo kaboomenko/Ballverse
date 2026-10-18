@@ -86,6 +86,8 @@ namespace Ballverse.Services
 
         public event Action<bool> FullScreenChanged;
 
+        public event Action BeforeShowAbandoned;
+
         public event Action<AdRevenue> Paid;
 
         public event Action<AdFormat, bool> LoadFinished;
@@ -234,14 +236,34 @@ namespace Ballverse.Services
         {
             if (_pendingHooks.Count == 0) return;
             long now = _clock.MonotonicMs;
-            for (int i = _pendingHooks.Count - 1; i >= 0; i--)
+            List<PendingHook> expired = null;
+            for (int i = 0; i < _pendingHooks.Count; i++)
             {
                 var pending = _pendingHooks[i];
-                if (pending.Settled || now < pending.DeadlineMs) continue;
+                if (!pending.Settled && now >= pending.DeadlineMs) (expired ?? (expired = new List<PendingHook>(1))).Add(pending);
+            }
+            if (expired == null) return;
+            // Abandoning the hook lets other presentations waiting on it continue, which edits _pendingHooks.
+            foreach (var pending in expired)
+            {
+                if (pending.Settled) continue;
                 pending.Settled = true;
-                _pendingHooks.RemoveAt(i);
+                _pendingHooks.Remove(pending);
                 _log.Warning(Tag, "BeforeShow (ATT) did not continue in time; the ad is skipped.");
+                RaiseBeforeShowAbandoned();
                 pending.Abandon?.Invoke();
+            }
+        }
+
+        void RaiseBeforeShowAbandoned()
+        {
+            try
+            {
+                BeforeShowAbandoned?.Invoke();
+            }
+            catch (Exception e)
+            {
+                _log.Error(Tag, "BeforeShowAbandoned handler threw.", e);
             }
         }
 

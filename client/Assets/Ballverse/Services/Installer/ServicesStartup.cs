@@ -26,6 +26,14 @@ namespace Ballverse.Services
 
         public const long ConsentRetryMaxDelayMs = 300_000;
 
+        /// <summary>
+        /// Purchases are re-read this long after the app returns to the foreground or regains focus (spec §5.4: pending
+        /// approvals, refunds), the last of those events counting. On Google Play, Unity IAP 5 reads purchases itself on every
+        /// focus gain and its single fetch callback goes to the most recent caller; a read issued before that focus read
+        /// would be answered into Unity IAP's own cache and never reach the app.
+        /// </summary>
+        public const long ResumePurchasesReadDelayMs = 2000;
+
         const string Tag = "Startup";
 
         readonly ICrashReporter _crash;
@@ -44,6 +52,7 @@ namespace Ballverse.Services
         long _firstTickMs;
         int _consentFailures;
         long _nextConsentRetryMs = -1;
+        long _purchasesReadDueMs = -1;
 
         public ServicesStartup(ICrashReporter crash, IRemoteConfigService remoteConfig, IPurchaseService purchases,
             IConsentService consent, IAdsService ads, IAnalyticsService analytics, AdPolicyStore adPolicy,
@@ -91,6 +100,7 @@ namespace Ballverse.Services
                 PublishEntitlementProperties(entitlements);
             };
             _ads.BeforeShow = _consent.EnsureTrackingDecision;
+            _ads.BeforeShowAbandoned += _consent.AbandonTrackingDecision;
             _consent.ConsentChanged += ApplyConsentMode;
             PublishEntitlementProperties(_purchases.Entitlements);
         }
@@ -108,6 +118,11 @@ namespace Ballverse.Services
                 _consent.Gather(OnConsentGathered);
             }
             if (_nextConsentRetryMs >= 0 && now >= _nextConsentRetryMs) RetryConsent("backoff");
+            if (_purchasesReadDueMs >= 0 && now >= _purchasesReadDueMs)
+            {
+                _purchasesReadDueMs = -1;
+                _purchases.RefreshPurchases();
+            }
             if (!AdsStarted && _consent.CanRequestAds && now - _firstTickMs >= AdsStartDelayMs)
             {
                 AdsStarted = true;
@@ -117,10 +132,29 @@ namespace Ballverse.Services
             }
         }
 
-        /// <summary>The app returned to the foreground: retry a consent gather that has not produced a decision yet.</summary>
+        /// <summary>A purchases re-read is scheduled (<see cref="ResumePurchasesReadDelayMs"/>).</summary>
+        public bool PurchasesReadScheduled => _purchasesReadDueMs >= 0;
+
+        /// <summary>
+        /// The app returned to the foreground: re-read purchases shortly (<see cref="ResumePurchasesReadDelayMs"/>) and retry a
+        /// consent gather that has not produced a decision yet.
+        /// </summary>
         public void OnApplicationResumed()
         {
-            if (_started && NeedsConsentRetry()) RetryConsent("resume");
+            if (!_started) return;
+            SchedulePurchasesRead();
+            if (NeedsConsentRetry()) RetryConsent("resume");
+        }
+
+        /// <summary>The app gained (true) or lost focus: a gain re-schedules the purchases re-read after it.</summary>
+        public void OnApplicationFocusChanged(bool hasFocus)
+        {
+            if (_started && hasFocus) SchedulePurchasesRead();
+        }
+
+        void SchedulePurchasesRead()
+        {
+            _purchasesReadDueMs = _clock.MonotonicMs + ResumePurchasesReadDelayMs;
         }
 
         void OnConsentGathered(ConsentGatherResult result)

@@ -44,6 +44,12 @@ namespace Ballverse.Services
         /// <summary>Runs before every presentation (the ATT decision, spec §5.6); call the argument to continue.</summary>
         Action<Action> BeforeShow { get; set; }
 
+        /// <summary>
+        /// <see cref="BeforeShow"/> did not continue in time and the presentation was given up (Р14): whoever runs the hook
+        /// should end it, so its screens close and a late answer does nothing.
+        /// </summary>
+        event Action BeforeShowAbandoned;
+
         /// <summary>A full-screen ad opened (true) or closed (false): mute app audio (RW6).</summary>
         event Action<bool> FullScreenChanged;
 

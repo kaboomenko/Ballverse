@@ -5,6 +5,7 @@ using Ballverse.Core.Monetization;
 
 namespace Ballverse.Services
 {
+#if !BALLVERSE_STORE // fakes are not compiled into Store builds (spec §8.9)
     public enum FakePurchaseBehaviour
     {
         Succeed = 0,
@@ -171,6 +172,7 @@ namespace Ballverse.Services
             return new StorePurchase(productId, tx, StorePurchaseState.AwaitingConfirmation, "{\"Store\":\"fake\"}", null);
         }
     }
+#endif
 
     /// <summary>Player builds without Unity IAP: never grants anything; rights come only from the cache.</summary>
     public sealed class UnavailableStoreBackend : IStoreBackend
