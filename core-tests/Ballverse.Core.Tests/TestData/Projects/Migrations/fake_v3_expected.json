@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 3,
+  "id": "legacy-0001",
+  "name": "Old project",
+  "durationUs": 12000000,
+  "audio": { "sim": 0.8 },
+  "tags": []
+}
