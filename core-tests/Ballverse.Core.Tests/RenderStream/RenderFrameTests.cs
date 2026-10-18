@@ -10,7 +10,7 @@ namespace Ballverse.Core.Tests.RenderStream
         public void AddGrowsAndClearKeepsCapacity()
         {
             var f = new RenderFrame(0, 0);
-            for (int i = 0; i < 100; i++) f.AddBody(new BodyState(i, BodyKind.Circle, 0, 0, 0, 0, 0, BodyFlags.None));
+            for (int i = 0; i < 100; i++) f.AddBody(new BodyState(i, 0, 0, 0, 0, 0, 0, BodyFlags.None));
             for (int i = 0; i < 10; i++) f.AddHud(i, i);
             Assert.Equal(100, f.BodyCount);
             Assert.Equal(10, f.HudCount);
@@ -25,8 +25,8 @@ namespace Ballverse.Core.Tests.RenderStream
         public void SortAndLookup()
         {
             var f = new RenderFrame();
-            f.AddBody(new BodyState(5, BodyKind.Circle, 1, 0, 0, 0, 0, BodyFlags.None));
-            f.AddBody(new BodyState(-3, BodyKind.Polygon, 2, 0, 0, 0, 0, BodyFlags.None));
+            f.AddBody(new BodyState(5, 0, 1, 0, 0, 0, 0, BodyFlags.None));
+            f.AddBody(new BodyState(-3, 1, 2, 0, 0, 0, 0, BodyFlags.None));
             f.AddHud(9, 90);
             f.AddHud(1, 10);
             f.Sort();
@@ -46,7 +46,7 @@ namespace Ballverse.Core.Tests.RenderStream
         public void CopyFromAndContentEquals()
         {
             var a = new RenderFrame();
-            a.AddBody(new BodyState(1, BodyKind.Segment, 1, 2, 3, 4, 5, BodyFlags.Visible));
+            a.AddBody(new BodyState(1, 9, 1, 2, 3, 4, 5, BodyFlags.Visible));
             a.AddHud(0, 7);
             var b = new RenderFrame(0, 0);
             b.CopyFrom(a);
@@ -63,12 +63,22 @@ namespace Ballverse.Core.Tests.RenderStream
         [Fact]
         public void BodyStateEquality()
         {
-            var a = new BodyState(1, BodyKind.Circle, 1, 2, 3, 4, 5, BodyFlags.Visible);
+            var a = new BodyState(1, 0, 1, 2, 3, 4, 5, BodyFlags.Visible);
             var b = a;
             Assert.True(a == b);
             Assert.Equal(a.GetHashCode(), b.GetHashCode());
             b.Flags = BodyFlags.None;
             Assert.True(a != b);
+            var c = a;
+            c.ShapeId = 2;
+            Assert.NotEqual(a, c);
+            c = a;
+            c.LabelId = 3;
+            Assert.NotEqual(a, c);
+            Assert.NotEqual(a.GetHashCode(), c.GetHashCode());
+            Assert.Equal(BodyState.NoLabel, a.LabelId);
+            Assert.Contains("label 3", c.ToString());
+            Assert.DoesNotContain("label", a.ToString());
             Assert.False(a.Equals((object)"x"));
             Assert.Equal(new HudEntry(1, 2), new HudEntry(1, 2));
             Assert.True(new HudEntry(1, 2) != new HudEntry(1, 3));

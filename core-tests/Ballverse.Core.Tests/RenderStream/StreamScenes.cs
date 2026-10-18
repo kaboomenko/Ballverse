@@ -9,6 +9,49 @@ namespace Ballverse.Core.Tests.RenderStream
     /// <summary>Deterministic frame generators for render stream tests.</summary>
     internal static class StreamScenes
     {
+        /// <summary>One shape of every kind and variant (shape ids 0..n-1 in this order; 0 is the unit circle).</summary>
+        public static readonly ShapeDefinition[] StandardShapes =
+        {
+            ShapeDefinition.Circle,
+            ShapeDefinition.Polygon(new[] { new ShapePoint(-500, -500), new ShapePoint(500, -500), new ShapePoint(500, 500), new ShapePoint(-500, 500) }),
+            ShapeDefinition.Polygon(Star(5, 900, 350)),
+            ShapeDefinition.Polygon(new[] { new ShapePoint(short.MinValue, short.MinValue), new ShapePoint(short.MaxValue, short.MinValue), new ShapePoint(0, short.MaxValue) }),
+            ShapeDefinition.Polyline(new[] { new ShapePoint(-3000, 0), new ShapePoint(-1000, 800), new ShapePoint(1000, -800), new ShapePoint(3000, 0) }, false, 40),
+            ShapeDefinition.Polyline(Star(8, 2000, 1500), true, 120, fixedThickness: true),
+            ShapeDefinition.Ring(16000, 300, new[] { new RingGap(1000, 6000) }),
+            ShapeDefinition.Ring(24000, 250, new[] { new RingGap(100, 200), new RingGap(30000, 34000), new RingGap(60000, 50) }, fixedThickness: true),
+            ShapeDefinition.Ring(8000, 500, new RingGap[0]),
+            ShapeDefinition.Capsule(6000, 400),
+            ShapeDefinition.Capsule(65535, 65535, fixedThickness: true),
+        };
+
+        /// <summary>Label strings (label ids 1..n in this order).</summary>
+        public static readonly string[] StandardLabels = { "Анна", "Bob", "#12", "×2", "+10", "Zoë 🙂", new string('W', RenderStreamLimits.MaxLabelLength) };
+
+        public static ShapePoint[] Star(int arms, short outer, short inner)
+        {
+            var points = new ShapePoint[arms * 2];
+            for (int i = 0; i < points.Length; i++)
+            {
+                double a = Math.PI * i / arms;
+                double r = i % 2 == 0 ? outer : inner;
+                points[i] = new ShapePoint((short)Math.Round(r * Math.Cos(a)), (short)Math.Round(r * Math.Sin(a)));
+            }
+            return points;
+        }
+
+        /// <summary>Defines <see cref="StandardShapes"/> and <see cref="StandardLabels"/>, checking the assigned ids.</summary>
+        public static void DefineStandardTables(RenderStreamWriter writer)
+        {
+            for (int i = 0; i < StandardShapes.Length; i++)
+            {
+                if (writer.DefineShape(StandardShapes[i]) != i) throw new InvalidOperationException("unexpected shape id");
+            }
+            for (int i = 0; i < StandardLabels.Length; i++)
+            {
+                if (writer.DefineLabel(StandardLabels[i]) != i + 1) throw new InvalidOperationException("unexpected label id");
+            }
+        }
         /// <summary>
         /// Bodies moving smoothly on Lissajous paths with constant spin (deterministic Rng parameters), plus a HUD timer
         /// and score. Represents the spec's "300 bodies" budget case.
@@ -40,7 +83,7 @@ namespace Ballverse.Core.Tests.RenderStream
                     float x = (float)(p[i, 0] + p[i, 2] * Math.Cos(p[i, 4] * time + p[i, 6]));
                     float y = (float)(p[i, 1] + p[i, 3] * Math.Sin(p[i, 5] * time + p[i, 6]));
                     float angle = (float)(p[i, 6] + p[i, 7] * time);
-                    f.AddBody(q.QuantizeBody(i, BodyKind.Circle, x, y, angle, 0.15f, (byte)(i % 12), BodyFlags.Visible));
+                    f.AddBody(q.QuantizeBody(i, 0, x, y, angle, 0.15f, (byte)(i % 12), BodyFlags.Visible));
                 }
                 f.AddHud(0, t);
                 f.AddHud(1, t / 90);
@@ -50,8 +93,9 @@ namespace Ballverse.Core.Tests.RenderStream
         }
 
         /// <summary>
-        /// Heavy churn: spawns/despawns every tick, id reuse (including in the same tick with a kind change), extreme
-        /// ids and values, teleports, colour/flag/scale changes and HUD add/remove/change. Bodies are added in shuffled
+        /// Heavy churn: spawns/despawns every tick, id reuse (including in the same tick with a shape or label change),
+        /// extreme ids and values, teleports, colour/flag/scale changes and HUD add/remove/change. Bodies use all
+        /// <see cref="StandardShapes"/> and <see cref="StandardLabels"/>. Bodies are added in shuffled
         /// order so the writer has to canonicalize; use <see cref="Canonical"/> for the expected frames.
         /// </summary>
         public static List<RenderFrame> Churn(int ticks, ulong seed)
@@ -99,7 +143,11 @@ namespace Ballverse.Core.Tests.RenderStream
                     if (r >= 9 && r < 12) b.Flags = (BodyFlags)(byte)rng.NextUInt();
                     if (r == 12)
                     {
-                        b.Kind = (BodyKind)rng.NextInt(0, 4); // possible kind change -> despawn + spawn in the stream
+                        b.ShapeId = rng.NextInt(0, StandardShapes.Length); // possible shape change -> despawn + spawn in the stream
+                    }
+                    if (r == 13)
+                    {
+                        b.LabelId = rng.NextInt(0, StandardLabels.Length + 1); // possible label change -> despawn + spawn
                     }
                     live[i] = b;
                 }
@@ -128,13 +176,14 @@ namespace Ballverse.Core.Tests.RenderStream
                     if (live.Exists(b => b.Id == id)) continue;
                     live.Add(new BodyState(
                         id,
-                        (BodyKind)rng.NextInt(0, 4),
+                        rng.NextInt(0, StandardShapes.Length),
                         (short)rng.NextInt(short.MinValue, short.MaxValue + 1),
                         (short)rng.NextInt(short.MinValue, short.MaxValue + 1),
                         (ushort)rng.NextInt(0, 65536),
                         (ushort)rng.NextInt(0, 65536),
                         (byte)rng.NextUInt(),
-                        (BodyFlags)(byte)rng.NextUInt()));
+                        (BodyFlags)(byte)rng.NextUInt(),
+                        rng.NextBool() ? BodyState.NoLabel : rng.NextInt(1, StandardLabels.Length + 1)));
                     velocity[id] = rng.NextInt(-400, 401);
                 }
 
@@ -180,11 +229,68 @@ namespace Ballverse.Core.Tests.RenderStream
             return result;
         }
 
-        public static byte[] Write(List<RenderFrame> frames, RenderStreamHeader header = null)
+        /// <summary>
+        /// Gives every frame a <paramref name="width"/> × <paramref name="height"/> grid painted by a few random walkers
+        /// (small per-tick changes), with occasional whole-region fills and a full reset (large changes) so both grid
+        /// delta encodings are exercised. Returns the same list.
+        /// </summary>
+        public static List<RenderFrame> AddGrid(List<RenderFrame> frames, int width, int height, ulong seed)
+        {
+            var rng = Rng.FromSeed(seed, 30);
+            var cells = new byte[width * height];
+            var walkers = new int[6];
+            for (int i = 0; i < walkers.Length; i++) walkers[i] = rng.NextInt(0, cells.Length);
+            for (int t = 0; t < frames.Count; t++)
+            {
+                if (t % 41 == 40)
+                {
+                    int x0 = rng.NextInt(0, width), y0 = rng.NextInt(0, height);
+                    int x1 = rng.NextInt(x0, width), y1 = rng.NextInt(y0, height);
+                    byte v = (byte)rng.NextUInt();
+                    for (int y = y0; y <= y1; y++)
+                    {
+                        for (int x = x0; x <= x1; x++) cells[y * width + x] = v;
+                    }
+                }
+                else if (t % 97 == 96)
+                {
+                    for (int i = 0; i < cells.Length; i++) cells[i] = (byte)rng.NextUInt(4);
+                }
+                for (int i = 0; i < walkers.Length; i++)
+                {
+                    int step = rng.NextInt(0, 4);
+                    int p = walkers[i];
+                    int x = p % width, y = p / width;
+                    if (step == 0 && x > 0) x--;
+                    if (step == 1 && x < width - 1) x++;
+                    if (step == 2 && y > 0) y--;
+                    if (step == 3 && y < height - 1) y++;
+                    walkers[i] = y * width + x;
+                    cells[walkers[i]] = (byte)(i + 1);
+                }
+                frames[t].SetGridSize(width, height);
+                cells.CopyTo(frames[t].Grid);
+            }
+            return frames;
+        }
+
+        /// <summary>A header declaring a <paramref name="width"/> × <paramref name="height"/> grid over the 9 × 16 m arena.</summary>
+        public static RenderStreamHeader GridHeader(string modeId, int width, int height, int blockTicks = 60)
+        {
+            var q = RenderQuantization.Default;
+            return new RenderStreamHeader(modeId, 60, blockTicks, q, RenderGridSpec.FromWorld(q, width, height, GridTopology.Square, -4.5f, -8f, 4.5f, 8f));
+        }
+
+        /// <summary>
+        /// Writes the frames; <paramref name="define"/> registers shapes and labels first (default:
+        /// <see cref="DefineStandardTables"/>).
+        /// </summary>
+        public static byte[] Write(List<RenderFrame> frames, RenderStreamHeader header = null, Action<RenderStreamWriter> define = null)
         {
             var ms = new MemoryStream();
             using (var w = new RenderStreamWriter(ms, header ?? new RenderStreamHeader("test_mode"), leaveOpen: true))
             {
+                (define ?? DefineStandardTables)(w);
                 for (int t = 0; t < frames.Count; t++) w.AppendFrame(t, frames[t]);
                 w.Finish();
             }
@@ -203,7 +309,8 @@ namespace Ballverse.Core.Tests.RenderStream
             {
                 if (expected.GetBody(i) != actual.GetBody(i)) return "body " + i + ": " + expected.GetBody(i) + " != " + actual.GetBody(i);
             }
-            return "hud differs";
+            if (!expected.Hud.SequenceEqual(actual.Hud)) return "hud differs";
+            return "grid differs";
         }
     }
 }

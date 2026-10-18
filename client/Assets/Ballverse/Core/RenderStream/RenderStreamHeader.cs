@@ -5,7 +5,7 @@ namespace Ballverse.Core.RenderStream
 {
     /// <summary>
     /// Header of a .bvs render stream (spec §7.4 "Поток рендера: формат"): tick rate, keyframe interval,
-    /// quantization parameters and the mode that produced the stream. Immutable.
+    /// quantization parameters, the optional grid layer (§2.9 M08) and the mode that produced the stream. Immutable.
     /// </summary>
     public sealed class RenderStreamHeader
     {
@@ -25,6 +25,8 @@ namespace Ballverse.Core.RenderStream
         public RenderQuantization Quantization { get; }
         /// <summary>Stable mode string id (e.g. "ring_escape", see <see cref="ModeInfo.Id"/>); may be empty.</summary>
         public string ModeId { get; }
+        /// <summary>The grid layer (fixed dimensions for the whole stream), or null when frames carry no grid.</summary>
+        public RenderGridSpec Grid { get; }
 
         public RenderStreamHeader(string modeId)
             : this(modeId, SimConstants.TickRate, DefaultBlockTicks, RenderQuantization.Default)
@@ -32,6 +34,12 @@ namespace Ballverse.Core.RenderStream
         }
 
         public RenderStreamHeader(string modeId, int tickRate, int blockTicks, RenderQuantization quantization)
+            : this(modeId, tickRate, blockTicks, quantization, null)
+        {
+        }
+
+        /// <param name="grid">The grid layer declaration, or null for a stream without a grid.</param>
+        public RenderStreamHeader(string modeId, int tickRate, int blockTicks, RenderQuantization quantization, RenderGridSpec grid)
         {
             if (modeId == null) throw new ArgumentNullException(nameof(modeId));
             if (Encoding.UTF8.GetByteCount(modeId) > MaxModeIdBytes) throw new ArgumentException("modeId longer than " + MaxModeIdBytes + " UTF-8 bytes", nameof(modeId));
@@ -41,6 +49,7 @@ namespace Ballverse.Core.RenderStream
             TickRate = tickRate;
             BlockTicks = blockTicks;
             Quantization = quantization ?? throw new ArgumentNullException(nameof(quantization));
+            Grid = grid;
         }
     }
 }

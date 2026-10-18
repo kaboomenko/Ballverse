@@ -17,13 +17,21 @@ namespace Ballverse.Core.RenderStream
     /// decodes each frame exactly once and seeking backwards within the cached block skips decompression.
     /// </para>
     /// <para>
-    /// The whole file is validated on open (header fields, footer, index contiguity, XXH64 of header + index);
+    /// The shape table and label table (spec §7.7, static geometry and labels) are loaded and validated on open and exposed
+    /// through <see cref="Shapes"/> and <see cref="GetLabel"/>; frames reference them by <see cref="BodyState.ShapeId"/> and
+    /// <see cref="BodyState.LabelId"/>. Grid streams (<see cref="RenderStreamHeader.Grid"/>) fill the destination's grid
+    /// on every read; random access works from each block's keyframe, which holds the full grid.
+    /// </para>
+    /// <para>
+    /// The whole file is validated on open (header fields, footer, section contiguity, XXH64 of header + tables + index,
+    /// table contents);
     /// each block is verified against its XXH64 when loaded. Corrupt or truncated data throws
     /// <see cref="InvalidDataException"/> — from the constructor or from the read that touches the bad block.
     /// </para>
     /// <para>
-    /// Memory profile: the index (≈ 40 bytes per second of stream), one compressed and one raw buffer of the largest
-    /// block read so far, decoder state for the bodies of one frame, and the output frame. No per-frame allocations
+    /// Memory profile: the index (≈ 40 bytes per second of stream), the decoded shape and label tables, one compressed
+    /// and one raw buffer of the largest block read so far, decoder state for the bodies and grid of one frame, and the
+    /// output frame. No per-frame allocations
     /// once buffers reached their peak size.
     /// </para>
     /// </summary>
@@ -36,7 +44,11 @@ namespace Ballverse.Core.RenderStream
         readonly RenderStreamBlockInfo[] _blocks;
         readonly ReadOnlyCollection<RenderStreamBlockInfo> _blocksView;
         readonly int _tickCount;
-        readonly FrameCodec _codec = new FrameCodec();
+        readonly ShapeDefinition[] _shapes;
+        readonly ReadOnlyCollection<ShapeDefinition> _shapesView;
+        readonly string[] _labels;
+        readonly ReadOnlyCollection<string> _labelsView;
+        readonly FrameCodec _codec;
         readonly XxHash64 _blockHash = new XxHash64();
         byte[] _compressed = new byte[1024];
         byte[] _raw = new byte[1024];
@@ -47,7 +59,8 @@ namespace Ballverse.Core.RenderStream
 
         /// <summary>
         /// Opens a finished render stream occupying <paramref name="stream"/> from its current position to its end.
-        /// The stream must be readable and seekable.
+        /// The stream must be readable and seekable. If opening fails (<see cref="InvalidDataException"/> or an I/O error),
+        /// the stream is disposed unless <paramref name="leaveOpen"/>.
         /// </summary>
         public RenderStreamReader(Stream stream, bool leaveOpen = false)
         {
@@ -55,74 +68,103 @@ namespace Ballverse.Core.RenderStream
             if (!stream.CanRead || !stream.CanSeek) throw new ArgumentException("Stream must be readable and seekable", nameof(stream));
             _stream = stream;
             _leaveOpen = leaveOpen;
-            _base = stream.Position;
-            long length = stream.Length - _base;
-            if (length < RenderStreamFormat.MinHeaderSize + RenderStreamFormat.FooterSize) throw new InvalidDataException("Render stream too short");
-
-            // Header.
-            int headerProbe = (int)Math.Min(RenderStreamFormat.MaxHeaderSize, length - RenderStreamFormat.FooterSize);
-            var headerBytes = new byte[headerProbe];
-            RenderStreamFormat.ReadExactly(stream, headerBytes, 0, headerProbe);
-            _header = RenderStreamFormat.ReadHeader(headerBytes, headerProbe, out int headerLength);
-
-            // Footer.
-            var footer = new byte[RenderStreamFormat.FooterSize];
-            stream.Position = _base + length - RenderStreamFormat.FooterSize;
-            RenderStreamFormat.ReadExactly(stream, footer, 0, footer.Length);
-            var fr = new ByteReader(footer, 0, footer.Length);
-            ulong indexOffset = fr.ReadUInt64();
-            uint blockCount = fr.ReadUInt32();
-            uint tickCount = fr.ReadUInt32();
-            ulong metaHash = fr.ReadUInt64();
-            if (!fr.ReadBytes(4).SequenceEqual(RenderStreamFormat.FooterMagic)) throw new InvalidDataException("Bad .bvs footer magic (file truncated or not finished?)");
-            if (tickCount > int.MaxValue) throw new InvalidDataException("Invalid tick count");
-            long expectedBlocks = ((long)tickCount + _header.BlockTicks - 1) / _header.BlockTicks;
-            if (blockCount != expectedBlocks) throw new InvalidDataException("Block count does not match tick count");
-            long indexLength = (long)blockCount * RenderStreamFormat.IndexEntrySize;
-            if (indexOffset < (ulong)headerLength || indexOffset > (ulong)length || indexOffset + (ulong)indexLength + RenderStreamFormat.FooterSize != (ulong)length)
+            try
             {
-                throw new InvalidDataException("Invalid index offset");
-            }
+                _base = stream.Position;
+                long length = stream.Length - _base;
+                if (length < RenderStreamFormat.MinHeaderSize + RenderStreamFormat.FooterSize) throw new InvalidDataException("Render stream too short");
 
-            // Index.
-            var index = new byte[indexLength];
-            stream.Position = _base + (long)indexOffset;
-            RenderStreamFormat.ReadExactly(stream, index, 0, index.Length);
-            var hash = new XxHash64();
-            hash.Append(new ReadOnlySpan<byte>(headerBytes, 0, headerLength));
-            hash.Append(index);
-            hash.Append(new ReadOnlySpan<byte>(footer, 0, 16));
-            if (hash.Digest() != metaHash) throw new InvalidDataException("Render stream header/index checksum mismatch");
+                // Header.
+                int headerProbe = (int)Math.Min(RenderStreamFormat.MaxHeaderSize, length - RenderStreamFormat.FooterSize);
+                var headerBytes = new byte[headerProbe];
+                RenderStreamFormat.ReadExactly(stream, headerBytes, 0, headerProbe);
+                _header = RenderStreamFormat.ReadHeader(headerBytes, headerProbe, out int headerLength);
 
-            _tickCount = (int)tickCount;
-            _blocks = new RenderStreamBlockInfo[blockCount];
-            var ir = new ByteReader(index, 0, index.Length);
-            long expectedOffset = headerLength;
-            for (int i = 0; i < _blocks.Length; i++)
-            {
-                uint firstTick = ir.ReadUInt32();
-                ulong offset = ir.ReadUInt64();
-                uint compressedLength = ir.ReadUInt32();
-                uint rawLength = ir.ReadUInt32();
-                ulong rawHash = ir.ReadUInt64();
-                long expectedFirst = (long)i * _header.BlockTicks;
-                if (firstTick != expectedFirst) throw new InvalidDataException("Block " + i + " has wrong first tick");
-                if (offset != (ulong)expectedOffset) throw new InvalidDataException("Block " + i + " has wrong offset");
-                if (compressedLength == 0 || compressedLength > indexOffset - (ulong)expectedOffset) throw new InvalidDataException("Block " + i + " has invalid compressed length");
-                if (rawLength > RenderStreamFormat.MaxRawBlockBytes || rawLength > (ulong)compressedLength * 256UL) throw new InvalidDataException("Block " + i + " has invalid raw length");
-                _blocks[i] = new RenderStreamBlockInfo
+                // Footer.
+                var footer = new byte[RenderStreamFormat.FooterSize];
+                stream.Position = _base + length - RenderStreamFormat.FooterSize;
+                RenderStreamFormat.ReadExactly(stream, footer, 0, footer.Length);
+                var fr = new ByteReader(footer, 0, footer.Length);
+                ulong tablesOffset = fr.ReadUInt64();
+                uint shapeTableLength = fr.ReadUInt32();
+                uint labelTableLength = fr.ReadUInt32();
+                ulong indexOffset = fr.ReadUInt64();
+                uint blockCount = fr.ReadUInt32();
+                uint tickCount = fr.ReadUInt32();
+                ulong metaHash = fr.ReadUInt64();
+                if (!fr.ReadBytes(4).SequenceEqual(RenderStreamFormat.FooterMagic)) throw new InvalidDataException("Bad .bvs footer magic (file truncated or not finished?)");
+                if (tickCount > int.MaxValue) throw new InvalidDataException("Invalid tick count");
+                long expectedBlocks = ((long)tickCount + _header.BlockTicks - 1) / _header.BlockTicks;
+                if (blockCount != expectedBlocks) throw new InvalidDataException("Block count does not match tick count");
+                if (shapeTableLength == 0 || shapeTableLength > RenderStreamLimits.MaxShapeTableBytes) throw new InvalidDataException("Invalid shape table length");
+                if (labelTableLength == 0 || labelTableLength > TableCodec.MaxLabelTableBytes) throw new InvalidDataException("Invalid label table length");
+                long indexLength = (long)blockCount * RenderStreamFormat.IndexEntrySize;
+                if (indexOffset < (ulong)headerLength || indexOffset > (ulong)length || indexOffset + (ulong)indexLength + RenderStreamFormat.FooterSize != (ulong)length)
                 {
-                    FirstTick = (int)firstTick,
-                    FrameCount = (int)Math.Min(_header.BlockTicks, tickCount - firstTick),
-                    Offset = (long)offset,
-                    CompressedLength = (int)compressedLength,
-                    RawLength = (int)rawLength,
-                    RawHash = rawHash,
-                };
-                expectedOffset += compressedLength;
+                    throw new InvalidDataException("Invalid index offset");
+                }
+                if (tablesOffset < (ulong)headerLength || tablesOffset > indexOffset || tablesOffset + shapeTableLength + labelTableLength != indexOffset)
+                {
+                    throw new InvalidDataException("Invalid table offsets");
+                }
+
+                // Tables and index.
+                int tablesLength = (int)(shapeTableLength + labelTableLength);
+                var tables = new byte[tablesLength];
+                stream.Position = _base + (long)tablesOffset;
+                RenderStreamFormat.ReadExactly(stream, tables, 0, tables.Length);
+                var index = new byte[indexLength];
+                RenderStreamFormat.ReadExactly(stream, index, 0, index.Length);
+                var hash = new XxHash64();
+                hash.Append(new ReadOnlySpan<byte>(headerBytes, 0, headerLength));
+                hash.Append(tables);
+                hash.Append(index);
+                hash.Append(new ReadOnlySpan<byte>(footer, 0, RenderStreamFormat.FooterHashedSize));
+                if (hash.Digest() != metaHash) throw new InvalidDataException("Render stream header/tables/index checksum mismatch");
+
+                _shapes = TableCodec.ReadShapeTable(tables, 0, (int)shapeTableLength);
+                _labels = TableCodec.ReadLabelTable(tables, (int)shapeTableLength, (int)labelTableLength);
+                _shapesView = Array.AsReadOnly(_shapes);
+                _labelsView = Array.AsReadOnly(_labels);
+                RenderGridSpec grid = _header.Grid;
+                _codec = grid == null ? new FrameCodec() : new FrameCodec(grid.Width, grid.Height);
+                _codec.SetDecodeLimits(_shapes.Length, _labels.Length);
+
+                _tickCount = (int)tickCount;
+                _blocks = new RenderStreamBlockInfo[blockCount];
+                var ir = new ByteReader(index, 0, index.Length);
+                long expectedOffset = headerLength;
+                for (int i = 0; i < _blocks.Length; i++)
+                {
+                    uint firstTick = ir.ReadUInt32();
+                    ulong offset = ir.ReadUInt64();
+                    uint compressedLength = ir.ReadUInt32();
+                    uint rawLength = ir.ReadUInt32();
+                    ulong rawHash = ir.ReadUInt64();
+                    long expectedFirst = (long)i * _header.BlockTicks;
+                    if (firstTick != expectedFirst) throw new InvalidDataException("Block " + i + " has wrong first tick");
+                    if (offset != (ulong)expectedOffset) throw new InvalidDataException("Block " + i + " has wrong offset");
+                    if (compressedLength == 0 || compressedLength > tablesOffset - (ulong)expectedOffset) throw new InvalidDataException("Block " + i + " has invalid compressed length");
+                    if (rawLength > RenderStreamFormat.MaxRawBlockBytes || rawLength > (ulong)compressedLength * 256UL) throw new InvalidDataException("Block " + i + " has invalid raw length");
+                    _blocks[i] = new RenderStreamBlockInfo
+                    {
+                        FirstTick = (int)firstTick,
+                        FrameCount = (int)Math.Min(_header.BlockTicks, tickCount - firstTick),
+                        Offset = (long)offset,
+                        CompressedLength = (int)compressedLength,
+                        RawLength = (int)rawLength,
+                        RawHash = rawHash,
+                    };
+                    expectedOffset += compressedLength;
+                }
+                if ((ulong)expectedOffset != tablesOffset) throw new InvalidDataException("Blocks do not end at the tables");
+                _blocksView = Array.AsReadOnly(_blocks);
             }
-            if ((ulong)expectedOffset != indexOffset) throw new InvalidDataException("Blocks do not end at the index");
-            _blocksView = Array.AsReadOnly(_blocks);
+            catch
+            {
+                if (!leaveOpen) stream.Dispose();
+                throw;
+            }
         }
 
         public RenderStreamHeader Header => _header;
@@ -132,11 +174,29 @@ namespace Ballverse.Core.RenderStream
 
         public int BlockCount => _blocks.Length;
 
+        /// <summary>The shape table: <c>Shapes[shapeId]</c> is the geometry of bodies with that <see cref="BodyState.ShapeId"/>.</summary>
+        public IReadOnlyList<ShapeDefinition> Shapes => _shapesView;
+
+        /// <summary>The label table, 0-based: <c>Labels[labelId - 1]</c>. Prefer <see cref="GetLabel"/>.</summary>
+        public IReadOnlyList<string> Labels => _labelsView;
+
+        /// <summary>Number of labels; valid label ids are [1, LabelCount] plus <see cref="BodyState.NoLabel"/>.</summary>
+        public int LabelCount => _labels.Length;
+
+        /// <summary>Returns the label text of <paramref name="labelId"/>, or null for <see cref="BodyState.NoLabel"/>.</summary>
+        public string GetLabel(int labelId)
+        {
+            if (labelId == BodyState.NoLabel) return null;
+            if (labelId < 1 || labelId > _labels.Length) throw new ArgumentOutOfRangeException(nameof(labelId));
+            return _labels[labelId - 1];
+        }
+
         /// <summary>The validated block index (read-only view; the reader's internal copy cannot be modified through it).</summary>
         public IReadOnlyList<RenderStreamBlockInfo> Blocks => _blocksView;
 
         /// <summary>
-        /// Decodes the frame of <paramref name="tick"/> into <paramref name="destination"/> (bodies sorted by id, HUD by key).
+        /// Decodes the frame of <paramref name="tick"/> into <paramref name="destination"/> (bodies sorted by id, HUD by key;
+        /// the destination's grid is resized to the header grid and filled, or removed for streams without a grid).
         /// On <see cref="InvalidDataException"/> the destination is left unchanged.
         /// </summary>
         public void ReadFrame(int tick, RenderFrame destination)

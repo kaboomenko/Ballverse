@@ -45,7 +45,7 @@ namespace Ballverse.Core.Tests.RenderStream
         {
             // Guard against a generator regression that would make the round-trip test trivial.
             var frames = StreamScenes.Canonical(StreamScenes.Churn(400, 5));
-            int spawns = 0, despawns = 0, kindChanges = 0, reuses = 0;
+            int spawns = 0, despawns = 0, shapeOrLabelChanges = 0, reuses = 0;
             var everSeen = new HashSet<int>();
             for (int t = 1; t < frames.Count; t++)
             {
@@ -58,9 +58,9 @@ namespace Ballverse.Core.Tests.RenderStream
                         spawns++;
                         if (everSeen.Contains(b.Id)) reuses++;
                     }
-                    else if (pb.Kind != b.Kind)
+                    else if (pb.ShapeId != b.ShapeId || pb.LabelId != b.LabelId)
                     {
-                        kindChanges++;
+                        shapeOrLabelChanges++;
                     }
                 }
                 foreach (var b in prev.Bodies)
@@ -69,8 +69,8 @@ namespace Ballverse.Core.Tests.RenderStream
                     if (!cur.TryGetBody(b.Id, out _)) despawns++;
                 }
             }
-            Assert.True(spawns > 100 && despawns > 100 && kindChanges > 5 && reuses > 10,
-                "spawns " + spawns + ", despawns " + despawns + ", kind changes " + kindChanges + ", reuses " + reuses);
+            Assert.True(spawns > 100 && despawns > 100 && shapeOrLabelChanges > 5 && reuses > 10,
+                "spawns " + spawns + ", despawns " + despawns + ", shape or label changes " + shapeOrLabelChanges + ", reuses " + reuses);
         }
 
         [Fact]
@@ -166,7 +166,7 @@ namespace Ballverse.Core.Tests.RenderStream
             using (var reader = StreamScenes.Open(data))
             {
                 long offset = reader.Blocks[0].Offset;
-                Assert.Equal(4 + 2 + 2 + 2 + 4 + 4 + 1 + "test_mode".Length, offset);
+                Assert.Equal(4 + 2 + 2 + 2 + 4 + 4 + 2 + 2 + 1 + "test_mode".Length, offset);
                 for (int i = 0; i < reader.BlockCount; i++)
                 {
                     var b = reader.Blocks[i];
@@ -198,7 +198,7 @@ namespace Ballverse.Core.Tests.RenderStream
             for (int t = 0; t < 130; t++)
             {
                 var f = new RenderFrame();
-                if (t % 7 < 3) f.AddBody(new BodyState(t % 2 == 0 ? 5 : int.MinValue, BodyKind.Segment, (short)t, (short)-t, (ushort)(t * 1000), 7, 3, BodyFlags.Visible));
+                if (t % 7 < 3) f.AddBody(new BodyState(t % 2 == 0 ? 5 : int.MinValue, 9, (short)t, (short)-t, (ushort)(t * 1000), 7, 3, BodyFlags.Visible));
                 if (t % 5 == 0) f.AddHud(0, t);
                 frames.Add(f);
             }
@@ -235,8 +235,8 @@ namespace Ballverse.Core.Tests.RenderStream
             {
                 var f = new RenderFrame();
                 short ext = (t % 2 == 0) ? short.MinValue : short.MaxValue;
-                f.AddBody(new BodyState(1, BodyKind.Circle, ext, (short)(-1 - ext), (ushort)(t % 3 == 0 ? 0 : 65535), (ushort)(t % 2 == 0 ? 65535 : 0), 0, BodyFlags.None));
-                f.AddBody(new BodyState(2, BodyKind.Polygon, (short)rng.NextUInt(), (short)rng.NextUInt(), (ushort)rng.NextUInt(), (ushort)rng.NextUInt(), (byte)rng.NextUInt(), (BodyFlags)(byte)rng.NextUInt()));
+                f.AddBody(new BodyState(1, 0, ext, (short)(-1 - ext), (ushort)(t % 3 == 0 ? 0 : 65535), (ushort)(t % 2 == 0 ? 65535 : 0), 0, BodyFlags.None));
+                f.AddBody(new BodyState(2, 1, (short)rng.NextUInt(), (short)rng.NextUInt(), (ushort)rng.NextUInt(), (ushort)rng.NextUInt(), (byte)rng.NextUInt(), (BodyFlags)(byte)rng.NextUInt()));
                 f.AddHud(3, t % 2 == 0 ? int.MinValue : int.MaxValue);
                 f.AddHud(HudEntry.MaxKey, (int)rng.NextUInt());
                 frames.Add(f);
@@ -261,13 +261,14 @@ namespace Ballverse.Core.Tests.RenderStream
         public void WriterDoesNotModifyCallerFrame()
         {
             var f = new RenderFrame();
-            f.AddBody(new BodyState(9, BodyKind.Circle, 1, 2, 3, 4, 5, BodyFlags.Visible));
-            f.AddBody(new BodyState(3, BodyKind.Circle, 1, 2, 3, 4, 5, BodyFlags.Visible));
+            f.AddBody(new BodyState(9, 0, 1, 2, 3, 4, 5, BodyFlags.Visible));
+            f.AddBody(new BodyState(3, 0, 1, 2, 3, 4, 5, BodyFlags.Visible));
             f.AddHud(4, 1);
             f.AddHud(2, 1);
             var ms = new MemoryStream();
             using (var w = new RenderStreamWriter(ms, new RenderStreamHeader("m"), leaveOpen: true))
             {
+                StreamScenes.DefineStandardTables(w);
                 w.AppendFrame(0, f);
                 w.Finish();
             }
@@ -283,6 +284,7 @@ namespace Ballverse.Core.Tests.RenderStream
             ms.Write(new byte[] { 1, 2, 3, 4, 5 }, 0, 5);
             using (var w = new RenderStreamWriter(ms, new RenderStreamHeader("m"), leaveOpen: true))
             {
+                StreamScenes.DefineStandardTables(w);
                 for (int t = 0; t < frames.Count; t++) w.AppendFrame(t, frames[t]);
                 w.Finish();
                 Assert.Equal(ms.Length - 5, w.BytesWritten);
@@ -300,7 +302,7 @@ namespace Ballverse.Core.Tests.RenderStream
         {
             var q = RenderQuantization.Default;
             var f = new RenderFrame();
-            f.AddBody(q.QuantizeBody(1, BodyKind.Circle, 1.2345f, -7.5f, 1.0f, 0.25f, 2, BodyFlags.Visible));
+            f.AddBody(q.QuantizeBody(1, 0, 1.2345f, -7.5f, 1.0f, 0.25f, 2, BodyFlags.Visible));
             using (var reader = StreamScenes.Open(StreamScenes.Write(new List<RenderFrame> { f })))
             {
                 var b = reader.ReadFrame(0).GetBody(0);

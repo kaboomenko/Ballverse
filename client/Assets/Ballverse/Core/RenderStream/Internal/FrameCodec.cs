@@ -8,23 +8,30 @@ namespace Ballverse.Core.RenderStream.Internal
     /// The same instance type is used by the writer and the reader, so both sides keep identical prediction state.
     /// <para>Raw (uncompressed) block layout — frame 0 is a keyframe, frames 1..n-1 are deltas:</para>
     /// <code>
-    /// keyframe: uvarint bodyCount · body[bodyCount] · uvarint hudCount · hud[hudCount]
-    ///   body:   id · kind u8 · x svarint · y svarint · angle uvarint · scale uvarint · color u8 · flags u8
+    /// keyframe: uvarint bodyCount · body[bodyCount] · uvarint hudCount · hud[hudCount] · [gridRle]
+    ///   body:   id · shapeId uvarint · labelId uvarint · x svarint · y svarint · angle uvarint · scale uvarint · color u8 · flags u8
     ///   hud:    key · value svarint
     /// delta:    uvarint despawnCount · id[despawnCount]
     ///           uvarint spawnCount · body[spawnCount]
     ///           survivor[*]            (one per body of the previous frame that was not despawned, ascending id)
     ///           uvarint hudRemovedCount · key[hudRemovedCount]
     ///           uvarint hudSetCount · (key · value svarint)[hudSetCount]
+    ///           [gridMode u8 · (gridChanges | gridRle)]
     ///   survivor: mask u8 (bit0 x, bit1 y, bit2 angle, bit3 scale, bit4 color, bit5 flags; bits 6-7 zero)
     ///             then, for each set bit in that order: residual svarint (x, y, angle, scale) or u8 (color, flags)
     /// ids / keys in a list: first as svarint (ids) or uvarint (keys), then uvarint (gap - 1) — lists are strictly ascending.
+    /// grid (only when the header declares a grid layer; cells row-major):
+    ///   gridRle:     runs of (uvarint (runLength - 1) · value u8) covering exactly width · height cells
+    ///   gridMode:    0 = gridChanges, 1 = gridRle (the whole grid); the writer picks the shorter, ties → 0
+    ///   gridChanges: uvarint changeCount · (cellIndex as in an id list, uvarint · value u8)[changeCount]
     /// </code>
     /// <para>
     /// Residuals: each 16-bit channel (x, y as int16 bits, angle, scale) is predicted as 2·prev − prevprev when the body
     /// existed in the two previous frames of this block, otherwise as prev; residual = (cur − prediction) wrapped to int16.
     /// Wrapping keeps teleports small and the decode bit-exact. HUD set values are deltas from the previous value for
-    /// existing keys and absolute for new keys. A body whose kind changes is coded as despawn + spawn.
+    /// existing keys and absolute for new keys. A body whose shape or label changes is coded as despawn + spawn
+    /// (shape and label are static per body lifetime). The decoder rejects shape ids at or above the stream's shape count
+    /// and label ids above its label count.
     /// </para>
     /// </summary>
     internal sealed class FrameCodec
@@ -41,6 +48,8 @@ namespace Ballverse.Core.RenderStream.Internal
         const int MaskColor = 16;
         const int MaskFlags = 32;
         const int MaskInvalid = 0xC0;
+        const int GridModeChanges = 0;
+        const int GridModeRle = 1;
 
         struct Track
         {
@@ -48,6 +57,13 @@ namespace Ballverse.Core.RenderStream.Internal
             public ushort PX, PY, PA, PS;
             public bool HasPrev2;
         }
+
+        readonly int _gridWidth;
+        readonly int _gridHeight;
+        readonly int _gridCells;
+        readonly byte[] _grid;
+        int _shapeLimit = RenderStreamLimits.MaxShapes;
+        int _labelLimit = RenderStreamLimits.MaxLabels;
 
         Track[] _cur = new Track[16];
         int _curCount;
@@ -63,6 +79,28 @@ namespace Ballverse.Core.RenderStream.Internal
         bool[] _dead = new bool[16];
         BodyState[] _spawns = new BodyState[16];
         HudEntry[] _hudSet = new HudEntry[4];
+
+        /// <summary>A codec for streams without a grid layer.</summary>
+        public FrameCodec()
+            : this(0, 0)
+        {
+        }
+
+        /// <summary>A codec for frames with a <paramref name="gridWidth"/> × <paramref name="gridHeight"/> grid (0 × 0 = none).</summary>
+        public FrameCodec(int gridWidth, int gridHeight)
+        {
+            _gridWidth = gridWidth;
+            _gridHeight = gridHeight;
+            _gridCells = gridWidth * gridHeight;
+            _grid = new byte[_gridCells];
+        }
+
+        /// <summary>Decoder validation: shape ids must be below <paramref name="shapeCount"/>, label ids at most <paramref name="labelCount"/>.</summary>
+        public void SetDecodeLimits(int shapeCount, int labelCount)
+        {
+            _shapeLimit = shapeCount;
+            _labelLimit = labelCount;
+        }
 
         /// <summary>Number of frames coded since the last <see cref="ResetBlock"/>.</summary>
         public int FramesInBlock => _framesInBlock;
@@ -107,6 +145,13 @@ namespace Ballverse.Core.RenderStream.Internal
                 _hudNext[i] = hud[i];
             }
             SwapHud(hud.Length);
+
+            if (_gridCells > 0)
+            {
+                ReadOnlySpan<byte> cells = new ReadOnlySpan<byte>(frame.GridArray, 0, _gridCells);
+                WriteRle(w, cells);
+                cells.CopyTo(_grid);
+            }
         }
 
         void EncodeDelta(RenderFrame frame, ByteWriter w)
@@ -130,7 +175,7 @@ namespace Ballverse.Core.RenderStream.Internal
                 }
                 else
                 {
-                    if (_cur[i].Body.Kind != bodies[j].Kind)
+                    if (_cur[i].Body.ShapeId != bodies[j].ShapeId || _cur[i].Body.LabelId != bodies[j].LabelId)
                     {
                         _intScratch[despawnCount++] = i;
                         _intScratch2[j] = -1;
@@ -214,6 +259,83 @@ namespace Ballverse.Core.RenderStream.Internal
             SwapTracks(n);
 
             EncodeHudDelta(frame.Hud, w);
+            if (_gridCells > 0) EncodeGridDelta(new ReadOnlySpan<byte>(frame.GridArray, 0, _gridCells), w);
+        }
+
+        void EncodeGridDelta(ReadOnlySpan<byte> cells, ByteWriter w)
+        {
+            // Exact sizes of both encodings; pick the shorter (ties: change list).
+            int changes = 0;
+            long listBytes = 0;
+            int last = -1;
+            for (int k = 0; k < cells.Length; k++)
+            {
+                if (cells[k] == _grid[k]) continue;
+                listBytes += UVarintSize((ulong)(last < 0 ? k : k - last - 1)) + 1;
+                last = k;
+                changes++;
+            }
+            listBytes += UVarintSize((ulong)changes);
+
+            if (RleSize(cells) < listBytes)
+            {
+                w.WriteByte(GridModeRle);
+                WriteRle(w, cells);
+            }
+            else
+            {
+                w.WriteByte(GridModeChanges);
+                w.WriteUVarint((ulong)changes);
+                last = -1;
+                for (int k = 0; k < cells.Length; k++)
+                {
+                    if (cells[k] == _grid[k]) continue;
+                    w.WriteUVarint((ulong)(last < 0 ? k : k - last - 1));
+                    w.WriteByte(cells[k]);
+                    last = k;
+                }
+            }
+            cells.CopyTo(_grid);
+        }
+
+        static void WriteRle(ByteWriter w, ReadOnlySpan<byte> cells)
+        {
+            int i = 0;
+            while (i < cells.Length)
+            {
+                byte v = cells[i];
+                int j = i + 1;
+                while (j < cells.Length && cells[j] == v) j++;
+                w.WriteUVarint((ulong)(j - i - 1));
+                w.WriteByte(v);
+                i = j;
+            }
+        }
+
+        static long RleSize(ReadOnlySpan<byte> cells)
+        {
+            long size = 0;
+            int i = 0;
+            while (i < cells.Length)
+            {
+                byte v = cells[i];
+                int j = i + 1;
+                while (j < cells.Length && cells[j] == v) j++;
+                size += UVarintSize((ulong)(j - i - 1)) + 1;
+                i = j;
+            }
+            return size;
+        }
+
+        static int UVarintSize(ulong value)
+        {
+            int n = 1;
+            while (value >= 0x80)
+            {
+                value >>= 7;
+                n++;
+            }
+            return n;
         }
 
         void EncodeHudDelta(ReadOnlySpan<HudEntry> hud, ByteWriter w)
@@ -284,7 +406,8 @@ namespace Ballverse.Core.RenderStream.Internal
         static void WriteBody(ByteWriter w, BodyState b, bool first, int previousId)
         {
             WriteId(w, b.Id, first, previousId);
-            w.WriteByte((byte)b.Kind);
+            w.WriteUVarint((ulong)b.ShapeId);
+            w.WriteUVarint((ulong)b.LabelId);
             w.WriteSVarint(b.X);
             w.WriteSVarint(b.Y);
             w.WriteUVarint(b.Angle);
@@ -326,6 +449,8 @@ namespace Ballverse.Core.RenderStream.Internal
             for (int i = 0; i < _curCount; i++) bodies[i] = _cur[i].Body;
             Array.Copy(_hud, dest.HudArray, _hudCount);
             dest.SetCounts(_curCount, _hudCount);
+            dest.SetGridRaw(_gridWidth, _gridHeight);
+            Array.Copy(_grid, dest.GridArray, _gridCells);
         }
 
         /// <summary>Decodes the next frame without materializing it (used when seeking within a block).</summary>
@@ -343,7 +468,7 @@ namespace Ballverse.Core.RenderStream.Internal
             int previousId = 0;
             for (int i = 0; i < count; i++)
             {
-                BodyState b = ReadBody(ref r, i == 0, previousId);
+                BodyState b = ReadBody(ref r, i == 0, previousId, _shapeLimit, _labelLimit);
                 previousId = b.Id;
                 _next[i] = new Track { Body = b };
             }
@@ -359,6 +484,43 @@ namespace Ballverse.Core.RenderStream.Internal
                 _hudNext[i] = new HudEntry(key, ReadInt(ref r));
             }
             SwapHud(hudCount);
+
+            if (_gridCells > 0) ReadRle(ref r);
+        }
+
+        void ReadRle(ref ByteReader r)
+        {
+            int filled = 0;
+            while (filled < _gridCells)
+            {
+                ulong run = r.ReadUVarint();
+                if (run >= (ulong)(_gridCells - filled)) throw new InvalidDataException("Grid run exceeds the grid");
+                byte value = r.ReadByte();
+                int n = (int)run + 1;
+                new Span<byte>(_grid, filled, n).Fill(value);
+                filled += n;
+            }
+        }
+
+        void DecodeGridDelta(ref ByteReader r)
+        {
+            int mode = r.ReadByte();
+            if (mode == GridModeRle)
+            {
+                ReadRle(ref r);
+                return;
+            }
+            if (mode != GridModeChanges) throw new InvalidDataException("Invalid grid mode " + mode);
+            int count = r.ReadCount(Math.Min(_gridCells, r.Remaining / 2), "grid change count");
+            int index = -1;
+            for (int k = 0; k < count; k++)
+            {
+                ulong v = r.ReadUVarint();
+                ulong next = k == 0 ? v : (ulong)index + 1 + v;
+                if (v >= (ulong)_gridCells || next >= (ulong)_gridCells) throw new InvalidDataException("Grid cell index out of range");
+                index = (int)next;
+                _grid[index] = r.ReadByte();
+            }
         }
 
         void DecodeDelta(ref ByteReader r)
@@ -384,7 +546,7 @@ namespace Ballverse.Core.RenderStream.Internal
             previousId = 0;
             for (int k = 0; k < spawnCount; k++)
             {
-                _spawns[k] = ReadBody(ref r, k == 0, previousId);
+                _spawns[k] = ReadBody(ref r, k == 0, previousId, _shapeLimit, _labelLimit);
                 previousId = _spawns[k].Id;
             }
 
@@ -435,6 +597,7 @@ namespace Ballverse.Core.RenderStream.Internal
             SwapTracks(o);
 
             DecodeHudDelta(ref r);
+            if (_gridCells > 0) DecodeGridDelta(ref r);
         }
 
         void DecodeHudDelta(ref ByteReader r)
@@ -513,11 +676,13 @@ namespace Ballverse.Core.RenderStream.Internal
             return (int)v;
         }
 
-        static BodyState ReadBody(ref ByteReader r, bool first, int previousId)
+        static BodyState ReadBody(ref ByteReader r, bool first, int previousId, int shapeLimit, int labelLimit)
         {
             int id = ReadId(ref r, first, previousId);
-            byte kind = r.ReadByte();
-            if (kind > (byte)BodyKind.Other) throw new InvalidDataException("Unknown body kind " + kind);
+            ulong shapeId = r.ReadUVarint();
+            if (shapeId >= (ulong)shapeLimit) throw new InvalidDataException("Body " + id + " references undefined shape " + shapeId);
+            ulong labelId = r.ReadUVarint();
+            if (labelId > (ulong)labelLimit) throw new InvalidDataException("Body " + id + " references undefined label " + labelId);
             long x = r.ReadSVarint();
             long y = r.ReadSVarint();
             if (x < short.MinValue || x > short.MaxValue || y < short.MinValue || y > short.MaxValue)
@@ -529,7 +694,7 @@ namespace Ballverse.Core.RenderStream.Internal
             if (angle > ushort.MaxValue || scale > ushort.MaxValue) throw new InvalidDataException("Angle/scale out of uint16 range");
             byte color = r.ReadByte();
             byte flags = r.ReadByte();
-            return new BodyState(id, (BodyKind)kind, (short)x, (short)y, (ushort)angle, (ushort)scale, color, (BodyFlags)flags);
+            return new BodyState(id, (int)shapeId, (short)x, (short)y, (ushort)angle, (ushort)scale, color, (BodyFlags)flags, (int)labelId);
         }
 
         static int ReadId(ref ByteReader r, bool first, int previousId)

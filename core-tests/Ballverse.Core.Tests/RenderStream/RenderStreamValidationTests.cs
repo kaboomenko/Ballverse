@@ -10,13 +10,15 @@ namespace Ballverse.Core.Tests.RenderStream
         static RenderFrame OneBody(int id = 1)
         {
             var f = new RenderFrame();
-            f.AddBody(new BodyState(id, BodyKind.Circle, 0, 0, 0, 100, 0, BodyFlags.Visible));
+            f.AddBody(new BodyState(id, 0, 0, 0, 0, 100, 0, BodyFlags.Visible));
             return f;
         }
 
         static RenderStreamWriter NewWriter(MemoryStream ms)
         {
-            return new RenderStreamWriter(ms, new RenderStreamHeader("m"), leaveOpen: true);
+            var w = new RenderStreamWriter(ms, new RenderStreamHeader("m"), leaveOpen: true);
+            StreamScenes.DefineStandardTables(w);
+            return w;
         }
 
         [Fact]
@@ -42,12 +44,28 @@ namespace Ballverse.Core.Tests.RenderStream
                 w.AppendFrame(0, OneBody());
 
                 var dup = OneBody(5);
-                dup.AddBody(new BodyState(5, BodyKind.Polygon, 1, 1, 1, 1, 1, BodyFlags.None));
+                dup.AddBody(new BodyState(5, 1, 1, 1, 1, 1, 1, BodyFlags.None));
                 Assert.Throws<ArgumentException>(() => w.AppendFrame(1, dup));
 
-                var badKind = OneBody();
-                badKind.AddBody(new BodyState(2, (BodyKind)4, 0, 0, 0, 0, 0, BodyFlags.None));
-                Assert.Throws<ArgumentException>(() => w.AppendFrame(1, badKind));
+                var badShape = OneBody();
+                badShape.AddBody(new BodyState(2, StreamScenes.StandardShapes.Length, 0, 0, 0, 0, 0, BodyFlags.None));
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(1, badShape));
+
+                var negShape = OneBody();
+                negShape.AddBody(new BodyState(2, -1, 0, 0, 0, 0, 0, BodyFlags.None));
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(1, negShape));
+
+                var badLabel = OneBody();
+                badLabel.AddBody(new BodyState(2, 0, 0, 0, 0, 0, 0, BodyFlags.None, StreamScenes.StandardLabels.Length + 1));
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(1, badLabel));
+
+                var negLabel = OneBody();
+                negLabel.AddBody(new BodyState(2, 0, 0, 0, 0, 0, 0, BodyFlags.None, -1));
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(1, negLabel));
+
+                var unexpectedGrid = OneBody();
+                unexpectedGrid.SetGridSize(2, 2);
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(1, unexpectedGrid));
 
                 var badKey = OneBody();
                 badKey.AddHud(HudEntry.MaxKey + 1, 0);
@@ -153,6 +171,18 @@ namespace Ballverse.Core.Tests.RenderStream
         }
 
         [Fact]
+        public void ReaderDisposesStreamWhenOpenFails()
+        {
+            var owned = new MemoryStream(new byte[100]);
+            Assert.Throws<InvalidDataException>(() => new RenderStreamReader(owned));
+            Assert.False(owned.CanRead, "stream not disposed after a failed open");
+
+            var borrowed = new MemoryStream(new byte[100]);
+            Assert.Throws<InvalidDataException>(() => new RenderStreamReader(borrowed, leaveOpen: true));
+            Assert.True(borrowed.CanRead, "leaveOpen stream was disposed");
+        }
+
+        [Fact]
         public void UnsupportedVersionIsInvalidData()
         {
             byte[] data = StreamScenes.Write(StreamScenes.Churn(10, 1));
@@ -183,8 +213,8 @@ namespace Ballverse.Core.Tests.RenderStream
         [Fact]
         public void FailedFinishFaultsTheWriter()
         {
-            // 30 frames: write #2 is the partial block flushed by Finish, #3 the index, #4 the footer.
-            for (int failOn = 2; failOn <= 4; failOn++)
+            // 30 frames: write #2 is the partial block flushed by Finish, #3 the tables, #4 the index, #5 the footer.
+            for (int failOn = 2; failOn <= 5; failOn++)
             {
                 var ms = new FlakyStream(failOn);
                 using (var w = NewWriter(ms))
@@ -201,13 +231,48 @@ namespace Ballverse.Core.Tests.RenderStream
         }
 
         [Fact]
+        public void FailedFlushInFinishFaultsTheWriter()
+        {
+            // Flush runs after the footer write: the writer is faulted and not finished even though the bytes may be complete.
+            var ms = new FlakyStream(int.MaxValue, failFlush: true);
+            using (var w = NewWriter(ms))
+            {
+                for (int t = 0; t < 30; t++) w.AppendFrame(t, OneBody());
+                Assert.Throws<IOException>(() => w.Finish());
+                Assert.True(w.IsFaulted);
+                Assert.False(w.IsFinished);
+                Assert.Throws<InvalidOperationException>(() => w.Finish());
+                Assert.Throws<InvalidOperationException>(() => w.DefineShape(ShapeDefinition.Circle));
+                Assert.Throws<InvalidOperationException>(() => w.DefineLabel("x"));
+            }
+            // Documented: the in-memory bytes happen to be complete here, which is why callers must discard the file anyway.
+            ms.Position = 0;
+            using (var r = new RenderStreamReader(ms))
+            {
+                Assert.Equal(30, r.TickCount);
+            }
+        }
+
+        [Fact]
+        public void ConstructorDisposesStreamWhenHeaderWriteFails()
+        {
+            var owned = new FlakyStream(1);
+            Assert.Throws<IOException>(() => new RenderStreamWriter(owned, new RenderStreamHeader("m")));
+            Assert.False(owned.CanWrite, "stream not disposed after a failed header write");
+
+            var borrowed = new FlakyStream(1);
+            Assert.Throws<IOException>(() => new RenderStreamWriter(borrowed, new RenderStreamHeader("m"), leaveOpen: true));
+            Assert.True(borrowed.CanWrite, "leaveOpen stream was disposed");
+        }
+
+        [Fact]
         public void ArgumentErrorsDoNotFaultTheWriter()
         {
             using (var w = NewWriter(new MemoryStream()))
             {
                 Assert.Throws<ArgumentException>(() => w.AppendFrame(3, OneBody()));
                 var dup = OneBody(1);
-                dup.AddBody(new BodyState(1, BodyKind.Circle, 0, 0, 0, 0, 0, BodyFlags.None));
+                dup.AddBody(new BodyState(1, 0, 0, 0, 0, 0, 0, BodyFlags.None));
                 Assert.Throws<ArgumentException>(() => w.AppendFrame(0, dup));
                 Assert.False(w.IsFaulted);
                 w.AppendFrame(0, OneBody());
@@ -261,11 +326,19 @@ namespace Ballverse.Core.Tests.RenderStream
         sealed class FlakyStream : MemoryStream
         {
             readonly int _failOn;
+            readonly bool _failFlush;
             int _writes;
 
-            public FlakyStream(int failOn)
+            public FlakyStream(int failOn, bool failFlush = false)
             {
                 _failOn = failOn;
+                _failFlush = failFlush;
+            }
+
+            public override void Flush()
+            {
+                if (_failFlush) throw new IOException("Simulated flush failure");
+                base.Flush();
             }
 
             public override void Write(byte[] buffer, int offset, int count)

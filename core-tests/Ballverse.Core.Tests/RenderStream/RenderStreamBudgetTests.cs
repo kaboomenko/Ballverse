@@ -137,6 +137,7 @@ namespace Ballverse.Core.Tests.RenderStream
             var ms = new System.IO.MemoryStream(_stream.Data.Length + 1024);
             using (var w = new RenderStreamWriter(ms, new RenderStreamHeader("ring_escape"), leaveOpen: true))
             {
+                w.DefineShape(ShapeDefinition.Circle);
                 for (int t = 0; t < 240; t++) w.AppendFrame(t, _stream.Frames[t]);
                 long before = GC.GetAllocatedBytesForCurrentThread();
                 for (int t = 240; t < 1200; t++) w.AppendFrame(t, _stream.Frames[t]);

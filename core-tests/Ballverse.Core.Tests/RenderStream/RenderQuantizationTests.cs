@@ -110,8 +110,8 @@ namespace Ballverse.Core.Tests.RenderStream
         [Fact]
         public void QuantizeBodyUsesAllChannels()
         {
-            var b = Q.QuantizeBody(4, BodyKind.Polygon, 1f, -1f, (float)Math.PI, 8f, 9, BodyFlags.Visible | BodyFlags.Trail);
-            Assert.Equal(new BodyState(4, BodyKind.Polygon, 2048, -2048, 32768, 65535, 9, BodyFlags.Visible | BodyFlags.Trail), b);
+            var b = Q.QuantizeBody(4, 1, 1f, -1f, (float)Math.PI, 8f, 9, BodyFlags.Visible | BodyFlags.Trail);
+            Assert.Equal(new BodyState(4, 1, 2048, -2048, 32768, 65535, 9, BodyFlags.Visible | BodyFlags.Trail), b);
         }
 
         [Fact]

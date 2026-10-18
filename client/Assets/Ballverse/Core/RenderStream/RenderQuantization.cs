@@ -11,7 +11,7 @@ namespace Ballverse.Core.RenderStream
     /// symmetric ±16 m range covers twice the arena and keeps off-screen bodies representable. 0.49 mm is still far below
     /// one pixel at 1080 × 1920; the spec figure should be updated to match (open question for the owner).</item>
     /// <item>Angle: uint16 over one full turn, step 2π/65536 ≈ 0.0055°; angles wrap.</item>
-    /// <item>Radius / scale: uint16 over [0, <see cref="ScaleMax"/>] metres, step 8 m / 65535 ≈ 0.12 mm by default.</item>
+    /// <item>Radius / scale / shape lengths: uint16 over [0, <see cref="ScaleMax"/>] metres (or scale factor), step 8 / 65535 ≈ 0.12 mm by default.</item>
     /// </list>
     /// Out-of-range values clamp; NaN quantizes to 0. For every quantized value q, Quantize(Dequantize(q)) == q,
     /// so the stream round-trips bit-exactly in the quantized domain. The parameters are stored in the .bvs header.
@@ -110,10 +110,22 @@ namespace Ballverse.Core.RenderStream
             return (float)(q * _qToScale);
         }
 
-        /// <summary>Builds a quantized <see cref="BodyState"/> from world-space values (metres, radians).</summary>
-        public BodyState QuantizeBody(int id, BodyKind kind, float x, float y, float angle, float scale, byte color, BodyFlags flags)
+        /// <summary>
+        /// Quantized scale factor 1.0: a non-circle shape drawn at its defined size (spec §7.7, see <see cref="ShapeDefinition"/>).
+        /// Equals <c>QuantizeScale(1f)</c>; clamps to <see cref="ushort.MaxValue"/> when <see cref="ScaleMax"/> &lt; 1.
+        /// </summary>
+        public ushort UnitScale => QuantizeScale(1f);
+
+        /// <summary>Quantizes a body-local shape point given in metres (spec §7.7 shape table, position quantizer).</summary>
+        public ShapePoint QuantizePoint(float x, float y)
         {
-            return new BodyState(id, kind, QuantizePosition(x), QuantizePosition(y), QuantizeAngle(angle), QuantizeScale(scale), color, flags);
+            return new ShapePoint(QuantizePosition(x), QuantizePosition(y));
+        }
+
+        /// <summary>Builds a quantized <see cref="BodyState"/> from world-space values (metres, radians).</summary>
+        public BodyState QuantizeBody(int id, int shapeId, float x, float y, float angle, float scale, byte color, BodyFlags flags, int labelId = BodyState.NoLabel)
+        {
+            return new BodyState(id, shapeId, QuantizePosition(x), QuantizePosition(y), QuantizeAngle(angle), QuantizeScale(scale), color, flags, labelId);
         }
 
         public bool Equals(RenderQuantization other)

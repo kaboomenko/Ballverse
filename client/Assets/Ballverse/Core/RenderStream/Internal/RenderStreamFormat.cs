@@ -5,24 +5,40 @@ using System.Text;
 namespace Ballverse.Core.RenderStream.Internal
 {
     /// <summary>
-    /// Byte layout of a .bvs file (spec §7.4). All integers little-endian.
+    /// Byte layout of a .bvs file, format v1 (spec §7.4). All integers little-endian.
     /// <code>
     /// Header:  magic "BVS1" · formatVersion u16 · tickRate u16 · blockTicks u16
-    ///          positionRange f32 · scaleMax f32 · modeIdLength u8 · modeId UTF-8
+    ///          positionRange f32 · scaleMax f32 · gridWidth u16 · gridHeight u16
+    ///          [gridTopology u8 · gridMinX i16 · gridMinY i16 · gridMaxX i16 · gridMaxY i16]   (only when gridWidth > 0)
+    ///          modeIdLength u8 · modeId UTF-8
     /// Blocks:  LZ4 block-compressed frame data (see FrameCodec), contiguous, in tick order
+    /// Tables:  shape table · label table (see TableCodec), uncompressed, immutable
     /// Index:   blockCount × (firstTick u32 · offset u64 · compressedLength u32 · rawLength u32 · rawHash u64)
-    /// Footer:  indexOffset u64 · blockCount u32 · tickCount u32 · metaHash u64 · magic "BVSX"
+    /// Footer:  tablesOffset u64 · shapeTableLength u32 · labelTableLength u32
+    ///          indexOffset u64 · blockCount u32 · tickCount u32 · metaHash u64 · magic "BVSX"
     /// </code>
-    /// Offsets are relative to the start of the header. rawHash = XXH64 of the decompressed block;
-    /// metaHash = XXH64 of the header bytes, the index bytes and the first 16 footer bytes (indexOffset, blockCount, tickCount),
-    /// so every byte outside the blocks is covered by a checksum and every block byte by its rawHash (after decompression).
+    /// Offsets are relative to the start of the header. Sections are contiguous: blocks end at tablesOffset,
+    /// tablesOffset + shapeTableLength + labelTableLength = indexOffset, the footer follows the index and ends the file.
+    /// The tables are written at the end because shapes and labels may be defined while frames are streamed out; the
+    /// reader loads them on open. gridWidth = gridHeight = 0 means no grid layer.
+    /// rawHash = XXH64 of the decompressed block; metaHash = XXH64 of the header bytes, the table bytes, the index bytes
+    /// and the first 32 footer bytes, so every byte outside the blocks is covered by a checksum and every block byte by its
+    /// rawHash (after decompression).
+    /// <para>
+    /// Format history: v1 was revised in place before release (shape table, label table and grid layer added; the
+    /// per-body kind byte replaced by shape and label ids) because nothing consumed .bvs files yet. Any further change
+    /// must bump <see cref="RenderStreamHeader.CurrentFormatVersion"/>.
+    /// </para>
     /// </summary>
     internal static class RenderStreamFormat
     {
-        public const int MinHeaderSize = 4 + 2 + 2 + 2 + 4 + 4 + 1;
-        public const int MaxHeaderSize = MinHeaderSize + RenderStreamHeader.MaxModeIdBytes;
+        public const int MinHeaderSize = 4 + 2 + 2 + 2 + 4 + 4 + 2 + 2 + 1;
+        public const int GridHeaderSize = 1 + 2 + 2 + 2 + 2;
+        public const int MaxHeaderSize = MinHeaderSize + GridHeaderSize + RenderStreamHeader.MaxModeIdBytes;
         public const int IndexEntrySize = 4 + 8 + 4 + 4 + 8;
-        public const int FooterSize = 8 + 4 + 4 + 8 + 4;
+        public const int FooterSize = 8 + 4 + 4 + 8 + 4 + 4 + 8 + 4;
+        /// <summary>Footer bytes covered by metaHash (everything before metaHash).</summary>
+        public const int FooterHashedSize = 8 + 4 + 4 + 8 + 4 + 4;
         /// <summary>Allocation guard for a single decompressed block.</summary>
         public const int MaxRawBlockBytes = 256 * 1024 * 1024;
 
@@ -40,6 +56,17 @@ namespace Ballverse.Core.RenderStream.Internal
             w.WriteUInt16(header.BlockTicks);
             w.WriteUInt32((uint)BitConverter.SingleToInt32Bits(header.Quantization.PositionRange));
             w.WriteUInt32((uint)BitConverter.SingleToInt32Bits(header.Quantization.ScaleMax));
+            RenderGridSpec grid = header.Grid;
+            w.WriteUInt16(grid == null ? 0 : grid.Width);
+            w.WriteUInt16(grid == null ? 0 : grid.Height);
+            if (grid != null)
+            {
+                w.WriteByte((byte)grid.Topology);
+                w.WriteUInt16(grid.MinX);
+                w.WriteUInt16(grid.MinY);
+                w.WriteUInt16(grid.MaxX);
+                w.WriteUInt16(grid.MaxY);
+            }
             byte[] mode = Encoding.UTF8.GetBytes(header.ModeId);
             w.WriteByte((byte)mode.Length);
             w.WriteBytes(mode);
@@ -63,6 +90,26 @@ namespace Ballverse.Core.RenderStream.Internal
             {
                 throw new InvalidDataException("Invalid quantization parameters");
             }
+
+            int gridWidth = r.ReadUInt16();
+            int gridHeight = r.ReadUInt16();
+            RenderGridSpec grid = null;
+            if (gridWidth != 0 || gridHeight != 0)
+            {
+                if (gridWidth < 1 || gridWidth > RenderStreamLimits.MaxGridWidth || gridHeight < 1 || gridHeight > RenderStreamLimits.MaxGridHeight)
+                {
+                    throw new InvalidDataException("Invalid grid size " + gridWidth + "x" + gridHeight);
+                }
+                byte topology = r.ReadByte();
+                if (topology > (byte)GridTopology.HexOddRowsShifted) throw new InvalidDataException("Invalid grid topology " + topology);
+                short minX = (short)r.ReadUInt16();
+                short minY = (short)r.ReadUInt16();
+                short maxX = (short)r.ReadUInt16();
+                short maxY = (short)r.ReadUInt16();
+                if (minX >= maxX || minY >= maxY) throw new InvalidDataException("Invalid grid bounds");
+                grid = new RenderGridSpec(gridWidth, gridHeight, (GridTopology)topology, minX, minY, maxX, maxY);
+            }
+
             int modeLength = r.ReadByte();
             if (modeLength > RenderStreamHeader.MaxModeIdBytes) throw new InvalidDataException("Mode id too long");
             var modeBytes = r.ReadBytes(modeLength);
@@ -76,7 +123,7 @@ namespace Ballverse.Core.RenderStream.Internal
                 throw new InvalidDataException("Mode id is not valid UTF-8", e);
             }
             headerLength = r.Offset;
-            return new RenderStreamHeader(modeId, tickRate, blockTicks, new RenderQuantization(positionRange, scaleMax));
+            return new RenderStreamHeader(modeId, tickRate, blockTicks, new RenderQuantization(positionRange, scaleMax), grid);
         }
 
         /// <summary>Reads exactly <paramref name="count"/> bytes or throws <see cref="InvalidDataException"/>.</summary>

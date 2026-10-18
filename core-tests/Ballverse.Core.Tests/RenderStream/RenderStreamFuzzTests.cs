@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Ballverse.Core;
-using Ballverse.Core.Compression;
 using Ballverse.Core.RenderStream;
 using Ballverse.Core.RenderStream.Internal;
 using Xunit;
@@ -12,9 +11,10 @@ namespace Ballverse.Core.Tests.RenderStream
     /// <summary>Corrupt or truncated render streams must only ever throw <see cref="InvalidDataException"/>.</summary>
     public class RenderStreamFuzzTests
     {
-        static readonly List<RenderFrame> s_frames = StreamScenes.Churn(130, 42);
+        // Churn with all standard shapes and labels plus an 11 x 7 grid layer, so every section of the format is fuzzed.
+        static readonly List<RenderFrame> s_frames = StreamScenes.AddGrid(StreamScenes.Churn(130, 42), 11, 7, 5);
         static readonly List<RenderFrame> s_expected = StreamScenes.Canonical(s_frames);
-        static readonly byte[] s_file = StreamScenes.Write(s_frames);
+        static readonly byte[] s_file = StreamScenes.Write(s_frames, StreamScenes.GridHeader("fuzz", 11, 7));
 
         /// <summary>Opens and fully reads the stream (sequentially and with seeks). Returns false on InvalidDataException.</summary>
         static bool TryReadAll(byte[] data, out List<RenderFrame> frames)
@@ -134,60 +134,15 @@ namespace Ballverse.Core.Tests.RenderStream
 
         // ------------------------------------------------------------------ corrupt content behind valid checksums
 
-        /// <summary>
-        /// Rebuilds the file with each block's decompressed bytes passed through <paramref name="mutate"/>, recompressing and
-        /// recomputing every checksum, so that the corruption reaches the frame decoder.
-        /// </summary>
         static byte[] Reseal(byte[] file, Func<int, byte[], byte[]> mutate)
         {
-            using (var reader = StreamScenes.Open(file))
-            {
-                int headerLength = (int)reader.Blocks[0].Offset;
-                var output = new MemoryStream();
-                output.Write(file, 0, headerLength);
-                var index = new MemoryStream();
-                var iw = new BinaryWriter(index);
-                for (int i = 0; i < reader.BlockCount; i++)
-                {
-                    var info = reader.Blocks[i];
-                    byte[] raw = Lz4Block.Decompress(new ReadOnlySpan<byte>(file, (int)info.Offset, info.CompressedLength), info.RawLength);
-                    raw = mutate(i, raw);
-                    byte[] compressed = Lz4Block.Compress(raw);
-                    iw.Write((uint)info.FirstTick);
-                    iw.Write((ulong)output.Length);
-                    iw.Write((uint)compressed.Length);
-                    iw.Write((uint)raw.Length);
-                    iw.Write(XxHash64.Hash(raw));
-                    output.Write(compressed, 0, compressed.Length);
-                }
-                iw.Flush();
-                long indexOffset = output.Length;
-                byte[] indexBytes = index.ToArray();
-                output.Write(indexBytes, 0, indexBytes.Length);
-
-                var footer = new MemoryStream();
-                var fw = new BinaryWriter(footer);
-                fw.Write((ulong)indexOffset);
-                fw.Write((uint)reader.BlockCount);
-                fw.Write((uint)reader.TickCount);
-                fw.Flush();
-                var meta = new XxHash64();
-                meta.Append(new ReadOnlySpan<byte>(file, 0, headerLength));
-                meta.Append(indexBytes);
-                meta.Append(footer.ToArray());
-                fw.Write(meta.Digest());
-                fw.Write(new[] { (byte)'B', (byte)'V', (byte)'S', (byte)'X' });
-                fw.Flush();
-                byte[] footerBytes = footer.ToArray();
-                output.Write(footerBytes, 0, footerBytes.Length);
-                return output.ToArray();
-            }
+            return BvsSurgery.Reseal(file, mutate);
         }
 
         [Fact]
         public void ResealWithoutMutationIsByteIdentical()
         {
-            // Pins the documented byte layout (header · blocks · index · footer) from the outside.
+            // Pins the documented byte layout (header · blocks · tables · index · footer) from the outside.
             Assert.Equal(s_file, Reseal(s_file, (i, raw) => raw));
         }
 
@@ -259,7 +214,7 @@ namespace Ballverse.Core.Tests.RenderStream
             using (var reader = StreamScenes.Open(data))
             {
                 var dest = new RenderFrame();
-                dest.AddBody(new BodyState(-42, BodyKind.Other, 1, 2, 3, 4, 5, BodyFlags.Visible));
+                dest.AddBody(new BodyState(-42, 3, 1, 2, 3, 4, 5, BodyFlags.Visible));
                 dest.AddHud(9, 9);
                 var sentinel = new RenderFrame();
                 sentinel.CopyFrom(dest);
@@ -331,7 +286,7 @@ namespace Ballverse.Core.Tests.RenderStream
         public void FrameCodecFuzzOnlyThrowsInvalidData()
         {
             // Encode one block with the internal codec, then decode mutated copies with a fresh codec.
-            var codec = new FrameCodec();
+            var codec = new FrameCodec(11, 7);
             var w = new ByteWriter(1024);
             for (int t = 0; t < 60; t++) codec.Encode(s_expected[t], w);
             byte[] raw = w.Span.ToArray();
@@ -354,7 +309,8 @@ namespace Ballverse.Core.Tests.RenderStream
                     if (rng.NextBool()) Array.Resize(ref data, rng.NextInt(0, data.Length));
                 }
 
-                var decoder = new FrameCodec();
+                var decoder = new FrameCodec(11, 7);
+                decoder.SetDecodeLimits(StreamScenes.StandardShapes.Length, StreamScenes.StandardLabels.Length);
                 var reader = new ByteReader(data, 0, data.Length);
                 try
                 {
