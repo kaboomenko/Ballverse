@@ -24,20 +24,16 @@ namespace Ballverse.Core.Monetization
 
         const string Domain = "ballverse.entitlement_cache";
 
-        sealed class CacheFile
-        {
-            public int Version { get; set; }
-            public long SavedAtUnixMs { get; set; }
-            public string[] OwnedProducts { get; set; }
-            public string Signature { get; set; }
-        }
+        // Strict UTF-8: an unpaired surrogate throws instead of collapsing to U+FFFD, so two different ids can never
+        // produce the same MAC message.
+        static readonly UTF8Encoding s_strictUtf8 = new UTF8Encoding(false, true);
 
         /// <summary>
         /// Serializes <paramref name="ownedProductIds"/> (null/empty ids dropped, then sorted ordinal and deduplicated)
         /// with the caller's timestamp and signs it.
         /// </summary>
         /// <exception cref="ArgumentNullException">ids or key is null.</exception>
-        /// <exception cref="ArgumentException">key is empty.</exception>
+        /// <exception cref="ArgumentException">key is empty, or an id is not valid UTF-16 (unpaired surrogate).</exception>
         public static string Serialize(IEnumerable<string> ownedProductIds, long savedAtUnixMs, byte[] key)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
@@ -52,12 +48,23 @@ namespace Ballverse.Core.Monetization
             var ids = new string[set.Count];
             set.CopyTo(ids);
 
-            var file = new CacheFile
+            byte[] mac;
+            try
             {
-                Version = FormatVersion,
-                SavedAtUnixMs = savedAtUnixMs,
-                OwnedProducts = ids,
-                Signature = ToHex(Mac(key, FormatVersion, savedAtUnixMs, ids)),
+                mac = Mac(key, FormatVersion, savedAtUnixMs, ids);
+            }
+            catch (EncoderFallbackException e)
+            {
+                throw new ArgumentException("Product ids must be valid UTF-16", nameof(ownedProductIds), e);
+            }
+
+            // Built explicitly (no reflection over a DTO), so IL2CPP code stripping cannot break the format (spec §8.9).
+            var file = new JObject
+            {
+                ["version"] = FormatVersion,
+                ["savedAtUnixMs"] = savedAtUnixMs,
+                ["ownedProducts"] = new JArray(ids),
+                ["signature"] = ToHex(mac),
             };
             return CoreJson.Serialize(file);
         }
@@ -102,7 +109,16 @@ namespace Ballverse.Core.Monetization
             var sigToken = root["signature"];
             if (sigToken == null || sigToken.Type != JTokenType.String) return EntitlementCacheStatus.BadSignature;
             if (!TryFromHex((string)((JValue)sigToken).Value, out byte[] signature)) return EntitlementCacheStatus.BadSignature;
-            if (!FixedTimeEquals(signature, Mac(key, (int)version, savedAt, ids))) return EntitlementCacheStatus.BadSignature;
+            byte[] expected;
+            try
+            {
+                expected = Mac(key, (int)version, savedAt, ids);
+            }
+            catch (EncoderFallbackException)
+            {
+                return EntitlementCacheStatus.Malformed; // unpaired surrogate: never written by Serialize
+            }
+            if (!FixedTimeEquals(signature, expected)) return EntitlementCacheStatus.BadSignature;
 
             // Signed ids are trusted; normalize anyway so the entry always honours its documented shape.
             var set = new SortedSet<string>(StringComparer.Ordinal);
@@ -147,7 +163,7 @@ namespace Ballverse.Core.Monetization
 
         static void WriteString(Stream s, string value)
         {
-            byte[] bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+            byte[] bytes = s_strictUtf8.GetBytes(value ?? string.Empty);
             VarInt.WriteULong(s, (ulong)bytes.Length);
             s.Write(bytes, 0, bytes.Length);
         }

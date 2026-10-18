@@ -7,10 +7,12 @@ namespace Ballverse.Core.Monetization
     public static class Savings
     {
         static readonly string[] s_singleModes = BuildSingleModes();
-        static readonly string[] s_allModesParts = s_singleModes;
-        static readonly string[] s_noAdsParts = { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds };
-        static readonly string[] s_ultimateParts = Concat(s_singleModes, s_noAdsParts);
-        static readonly string[] s_ultimateCheapestParts = { ProductIds.AllModes, ProductIds.NoAds };
+        static readonly string[] s_noAds = { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds };
+        static readonly IReadOnlyList<string> s_allModesParts = Array.AsReadOnly(s_singleModes);
+        static readonly IReadOnlyList<string> s_noAdsParts = Array.AsReadOnly(s_noAds);
+        static readonly IReadOnlyList<string> s_ultimateParts = Array.AsReadOnly(Concat(s_singleModes, s_noAds));
+        static readonly IReadOnlyList<string> s_ultimateCheapestParts =
+            Array.AsReadOnly(new[] { ProductIds.AllModes, ProductIds.NoAds });
 
         /// <summary>
         /// Every separately sold item a bundle replaces: All Modes → 10 modes; No Ads → Remove Export + Remove Interstitial;
@@ -69,6 +71,8 @@ namespace Ballverse.Core.Monetization
                 decimal amount = total - bundlePrice;
                 if (amount <= 0m) return null;
                 int percent = (int)Math.Round(amount / total * 100m, 0, MidpointRounding.AwayFromZero);
+                // 0 < amount < total: never claim "0%" for a real saving nor "100%" for a paid bundle.
+                percent = Math.Min(99, Math.Max(1, percent));
                 return new BundleSavings(bundleId, ids, bundlePrice, total, amount, percent);
             }
             catch (OverflowException)

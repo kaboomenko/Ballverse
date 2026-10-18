@@ -95,5 +95,16 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Null(ProductCatalog.Ultimate.Mode);
             Assert.Equal(11.99m, ProductCatalog.Ultimate.BasePriceUsd);
         }
+
+        [Fact]
+        public void SharedListsAreReadOnly()
+        {
+            Assert.False(ProductIds.All is string[]);
+            Assert.False(ProductCatalog.All is ProductInfo[]);
+            Assert.False(EntitlementInfo.All is Entitlement[]);
+            Assert.True(((System.Collections.Generic.ICollection<string>)ProductIds.All).IsReadOnly);
+            Assert.Throws<System.NotSupportedException>(() => ((System.Collections.Generic.IList<string>)ProductIds.All)[0] = "x");
+            Assert.Throws<System.NotSupportedException>(() => ((System.Collections.Generic.IDictionary<string, decimal>)ProductCatalog.BasePricesUsd)[ProductIds.Ultimate] = 0m);
+        }
     }
 }

@@ -14,16 +14,22 @@ namespace Ballverse.Core.Monetization
         Revoked = 2,
     }
 
-    /// <summary>One transaction of a product. Immutable.</summary>
+    /// <summary>One state report of a product transaction. Immutable.</summary>
     public readonly struct PurchaseRecord
     {
         public string ProductId { get; }
         public PurchaseState State { get; }
+        /// <summary>
+        /// Store transaction id (StoreKit originalTransactionID / Play purchaseToken), or null. Records sharing a non-null id
+        /// are successive states of one transaction; the last one in the sequence wins (e.g. Purchased then Revoked).
+        /// </summary>
+        public string TransactionId { get; }
 
-        public PurchaseRecord(string productId, PurchaseState state)
+        public PurchaseRecord(string productId, PurchaseState state, string transactionId = null)
         {
             ProductId = productId;
             State = state;
+            TransactionId = transactionId;
         }
     }
 
@@ -31,14 +37,26 @@ namespace Ballverse.Core.Monetization
     public static class OwnedProducts
     {
         /// <summary>
-        /// Ids with at least one <see cref="PurchaseState.Purchased"/> record (pending and refunded ones grant nothing),
-        /// sorted ordinal, distinct. Null/empty ids are dropped; unknown ids are kept for forward compatibility.
+        /// Ids with at least one transaction whose current state is <see cref="PurchaseState.Purchased"/> (pending and
+        /// refunded ones grant nothing; spec §5.4 "Возврат денег … право снимается"), sorted ordinal, distinct.
+        /// The current state of a transaction is its last record with the same <see cref="PurchaseRecord.TransactionId"/>;
+        /// a record without an id is taken as the current state of a transaction of its own, so pass ids when the input
+        /// mixes old and updated states (e.g. iOS Transaction.updates), or pass only current states (StoreKit
+        /// currentEntitlements, Play queryPurchasesAsync). Null/empty product ids are dropped; unknown ids are kept for
+        /// forward compatibility.
         /// </summary>
         public static IReadOnlyList<string> From(IEnumerable<PurchaseRecord> records)
         {
             if (records == null) throw new ArgumentNullException(nameof(records));
+            var latest = new Dictionary<string, PurchaseRecord>(StringComparer.Ordinal);
             var set = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var r in records)
+            {
+                if (r.TransactionId != null) latest[r.TransactionId] = r;
+                else if (r.State == PurchaseState.Purchased && !string.IsNullOrEmpty(r.ProductId)) set.Add(r.ProductId);
+            }
+            // Order of the dictionary does not leak: results go into a sorted set.
+            foreach (var r in latest.Values)
             {
                 if (r.State == PurchaseState.Purchased && !string.IsNullOrEmpty(r.ProductId)) set.Add(r.ProductId);
             }

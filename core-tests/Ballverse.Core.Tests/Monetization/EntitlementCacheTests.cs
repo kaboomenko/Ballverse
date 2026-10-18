@@ -228,5 +228,51 @@ namespace Ballverse.Core.Tests.Monetization
                 Assert.NotEqual(EntitlementCacheStatus.Ok, EntitlementCache.TryLoad(text, Key, out _));
             }
         }
+
+        [Fact]
+        public void UnpairedSurrogateIdIsRejectedOnSave()
+        {
+            Assert.Throws<ArgumentException>(() => EntitlementCache.Serialize(new[] { "a\uD800" }, Ts, Key));
+            Assert.Throws<ArgumentException>(() => EntitlementCache.Serialize(new[] { "\uDC00b" }, Ts, Key));
+        }
+
+        [Fact]
+        public void UnpairedSurrogateIdInFileIsMalformedNotOk()
+        {
+            // With lossy UTF-8 every unpaired surrogate encoded like U+FFFD, so a file signed for "a\uFFFD" verified
+            // after editing the id to "a" + a lone surrogate (raw char in the JSON text, as an editor would leave it).
+            var signed = EntitlementCache.Serialize(new[] { "a\uFFFD" }, Ts, Key);
+            Assert.Contains("\"a\uFFFD\"", signed);
+            foreach (var lone in new[] { "\uD800", "\uDBFF", "\uDC00" })
+            {
+                var tampered = signed.Replace("\"a\uFFFD\"", "\"a" + lone + "\"");
+                Assert.Equal(EntitlementCacheStatus.Malformed, EntitlementCache.TryLoad(tampered, Key, out var entry));
+                Assert.Null(entry);
+            }
+        }
+
+        [Fact]
+        public void ValidSurrogatePairRoundTrips()
+        {
+            var json = EntitlementCache.Serialize(new[] { "future.\uD83D\uDE00" }, Ts, Key);
+            Assert.Equal("future.\uD83D\uDE00", EntitlementCache.Load(json, Key).OwnedProductIds[0]);
+        }
+
+        [Fact]
+        public void SerializedShapeIsExactlyTheV1Fields()
+        {
+            var o = JObject.Parse(Sample());
+            Assert.Equal(new[] { "version", "savedAtUnixMs", "ownedProducts", "signature" }, o.Properties().Select(p => p.Name).ToArray());
+            Assert.Equal(1, (int)o["version"]);
+            Assert.Equal(Ts, (long)o["savedAtUnixMs"]);
+            Assert.Equal(3, ((JArray)o["ownedProducts"]).Count);
+            Assert.Equal(64, ((string)o["signature"]).Length);
+        }
+
+        [Fact]
+        public void EntryIdsAreReadOnly()
+        {
+            Assert.False(EntitlementCache.Load(Sample(), Key).OwnedProductIds is string[]);
+        }
     }
 }

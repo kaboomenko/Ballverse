@@ -41,7 +41,9 @@ namespace Ballverse.Core.Monetization
         };
 
         /// <summary>Every defined entitlement in ascending value order.</summary>
-        public static IReadOnlyList<Entitlement> All => s_all;
+        public static IReadOnlyList<Entitlement> All => s_allView;
+
+        static readonly IReadOnlyList<Entitlement> s_allView = Array.AsReadOnly(s_all);
 
         public static bool IsDefined(Entitlement e)
         {

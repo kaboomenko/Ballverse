@@ -78,6 +78,34 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.True(s.Get(ProductIds.ModeLiquidSand).Visible);
         }
 
+        /// <summary>
+        /// 9 singles, no ads: Ultimate ($11.99) is dearer than the missing part (M15 $1.99 + No Ads $8.99 = $10.98), which
+        /// gives the same, NO_WATERMARK by parts included (§5.2 "он дороже, чем недостающая часть").
+        /// </summary>
+        [Fact]
+        public void Row2_NineSingleModes_UltimateHiddenBecauseMissingPartIsCheaper()
+        {
+            var owned = SingleIds.Take(9).ToArray();
+            var s = Storefront.Build(owned);
+            Assert.Equal(OfferHiddenReason.CheaperViaParts, s.Get(ProductIds.Ultimate).HiddenReason);
+            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds, ProductIds.ModeLiquidSand },
+                VisibleIds(s));
+            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.ModeLiquidSand }, Storefront.CheapestPartsToComplete(s.Entitlements).ToArray());
+            // The export sheet's watermark row opens the missing part, not Ultimate.
+            Assert.Equal(new[] { ProductIds.NoAds, ProductIds.ModeLiquidSand },
+                Storefront.WatermarkOffers(owned).Select(o => o.ProductId).ToArray());
+        }
+
+        /// <summary>8 singles: the missing part costs 2 × $1.99 + $8.99 = $12.97 &gt; $11.99, so Ultimate stays; All Modes too (row 2).</summary>
+        [Fact]
+        public void Row2_EightSingleModes_UltimateAndAllModesVisible()
+        {
+            var s = Storefront.Build(SingleIds.Take(8).ToArray());
+            Assert.True(s.Get(ProductIds.Ultimate).Visible);
+            Assert.True(s.Get(ProductIds.AllModes).Visible);
+            Assert.Equal(8, s.Get(ProductIds.AllModes).OwnedModeCount);
+        }
+
         /// <summary>Row "All Modes": No Ads as last step; ad singles; hides Ultimate and single modes.</summary>
         [Fact]
         public void Row3_AllModes()
@@ -131,8 +159,21 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.NoAds).HiddenReason);
             Assert.Equal(ProductIds.RemoveInterstitialAds, s.Get(ProductIds.NoAds).CheaperAlternativeId);
             Assert.Equal(OfferHiddenReason.Owned, s.Get(ProductIds.RemoveExportAds).HiddenReason);
+            // "Ultimate показывается только если нет режимов", although All Modes + Remove Interstitial = $10.98.
             Assert.True(s.Get(ProductIds.Ultimate).Visible);
+            Assert.Equal(1098, Storefront.CheapestPartsToComplete(s.Entitlements).Sum(id => ProductCatalog.Get(id).BasePriceUsdCents));
             Assert.True(s.Get(ProductIds.AllModes).Visible);
+            Assert.Equal(new[] { ProductIds.Ultimate }, Storefront.WatermarkOffers(new[] { ProductIds.RemoveExportAds }).Select(o => o.ProductId).ToArray());
+        }
+
+        [Fact]
+        public void Row5_RemoveExportAdsWithNineModes_HidesUltimate_WatermarkRowOpensMissingParts()
+        {
+            var owned = SingleIds.Take(9).Concat(new[] { ProductIds.RemoveExportAds }).ToArray();
+            var s = Storefront.Build(owned);
+            Assert.Equal(OfferHiddenReason.CheaperViaParts, s.Get(ProductIds.Ultimate).HiddenReason);
+            Assert.Equal(new[] { ProductIds.RemoveInterstitialAds, ProductIds.ModeLiquidSand },
+                Storefront.WatermarkOffers(owned).Select(o => o.ProductId).ToArray());
         }
 
         [Fact]
@@ -162,7 +203,7 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.True(s.Get(ProductIds.RemoveExportAds).Visible);
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.NoAds).HiddenReason);
             Assert.Equal(ProductIds.RemoveExportAds, s.Get(ProductIds.NoAds).CheaperAlternativeId);
-            Assert.True(s.Get(ProductIds.Ultimate).Visible);
+            Assert.True(s.Get(ProductIds.Ultimate).Visible); // no modes: shown although All Modes + Remove Export = $11.98
 
             var withMode = Storefront.Build(new[] { ProductIds.RemoveInterstitialAds, ProductIds.ModeOrbit });
             Assert.Equal(OfferHiddenReason.CheaperViaParts, withMode.Get(ProductIds.Ultimate).HiddenReason);
@@ -202,6 +243,23 @@ namespace Ballverse.Core.Tests.Monetization
             var allModes = Storefront.Build(new[] { ProductIds.AllModes }, config);
             Assert.False(allModes.Get(ProductIds.NoAds).IsLastStep);
             Assert.True(allModes.Get(ProductIds.Ultimate).Visible);
+        }
+
+        [Fact]
+        public void CheapestPartsToComplete_Examples()
+        {
+            Assert.Equal(new[] { ProductIds.AllModes, ProductIds.NoAds }, Storefront.CheapestPartsToComplete(EntitlementSet.Empty).ToArray());
+            Assert.Empty(Storefront.CheapestPartsToComplete(EntitlementSet.AllDefined));
+            Assert.Equal(new[] { ProductIds.RemoveExportAds, ProductIds.ModeOrbit, ProductIds.ModeLiquidSand },
+                Storefront.CheapestPartsToComplete(Entitlements.From(SingleIds.Take(8).Concat(new[] { ProductIds.RemoveInterstitialAds }))).ToArray());
+        }
+
+        [Fact]
+        public void DisplayOrderIsReadOnly()
+        {
+            Assert.False(Storefront.DisplayOrder is ProductInfo[]);
+            Assert.False(Storefront.Build(new string[0]).Offers is StorefrontOffer[]);
+            Assert.False(Storefront.Build(new string[0]).VisibleOffers is StorefrontOffer[]);
         }
 
         [Fact]

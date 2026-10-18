@@ -6,7 +6,7 @@ namespace Ballverse.Core.Monetization
     public enum EntitlementCacheStatus
     {
         Ok = 0,
-        /// <summary>Null/empty text, invalid JSON, or fields of the wrong type.</summary>
+        /// <summary>Null/empty text, invalid JSON, fields of the wrong type, or an id that is not valid UTF-16.</summary>
         Malformed = 1,
         /// <summary>Well-formed but written by an unknown format version.</summary>
         UnsupportedVersion = 2,
@@ -20,15 +20,17 @@ namespace Ballverse.Core.Monetization
     public sealed class EntitlementCacheEntry
     {
         readonly string[] _ownedProductIds;
+        readonly IReadOnlyList<string> _ownedView;
 
         /// <summary>Owned product ids as last read from the store; sorted ordinal, distinct. May include ids unknown to this build.</summary>
-        public IReadOnlyList<string> OwnedProductIds => _ownedProductIds;
+        public IReadOnlyList<string> OwnedProductIds => _ownedView;
         /// <summary>When the store was last read successfully, Unix milliseconds (supplied by the caller at save time).</summary>
         public long SavedAtUnixMs { get; }
 
         internal EntitlementCacheEntry(string[] ownedProductIds, long savedAtUnixMs)
         {
             _ownedProductIds = ownedProductIds;
+            _ownedView = System.Array.AsReadOnly(ownedProductIds);
             SavedAtUnixMs = savedAtUnixMs;
         }
 

@@ -110,5 +110,51 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(5.97m, s.InsteadOf);
             Assert.Equal(16, s.Percent); // 0.98 / 5.97 = 16.4%
         }
+
+        static Dictionary<string, decimal> Prices(decimal bundle, params decimal[] parts)
+        {
+            var d = new Dictionary<string, decimal> { ["b"] = bundle };
+            for (int i = 0; i < parts.Length; i++) d["p" + i] = parts[i];
+            return d;
+        }
+
+        static string[] PartNames(int n)
+        {
+            return Enumerable.Range(0, n).Select(i => "p" + i).ToArray();
+        }
+
+        [Fact]
+        public void TinyRealSavingNeverShowsZeroPercent()
+        {
+            var s = Savings.Compute("b", PartNames(2), Prices(13.95m, 6.99m, 6.99m));
+            Assert.Equal(0.03m, s.Amount);
+            Assert.Equal(1, s.Percent);
+        }
+
+        [Fact]
+        public void NearlyFreeBundleNeverShowsHundredPercent()
+        {
+            var s = Savings.Compute("b", PartNames(2), Prices(0.05m, 6.99m, 5.99m));
+            Assert.Equal(12.93m, s.Amount);
+            Assert.Equal(99, s.Percent);
+        }
+
+        [Fact]
+        public void ExactHalfPercentRoundsAwayFromZero()
+        {
+            Assert.Equal(13, Savings.Compute("b", PartNames(1), Prices(87.5m, 100m)).Percent);
+            Assert.Equal(1, Savings.Compute("b", PartNames(1), Prices(99.5m, 100m)).Percent);
+            Assert.Equal(99, Savings.Compute("b", PartNames(1), Prices(0.5m, 100m)).Percent);
+            Assert.Null(Savings.Compute("b", PartNames(1), Prices(100m, 100m)));
+        }
+
+        [Fact]
+        public void PartListsAndPricesAreReadOnly()
+        {
+            Assert.False(Savings.SeparatePartsOf(ProductIds.Ultimate) is string[]);
+            Assert.False(Savings.UltimateCheapestParts is string[]);
+            Assert.False(ProductCatalog.BasePricesUsd is Dictionary<string, decimal>);
+            Assert.False(Savings.ForBundle(ProductIds.NoAds, Base).PartIds is string[]);
+        }
     }
 }

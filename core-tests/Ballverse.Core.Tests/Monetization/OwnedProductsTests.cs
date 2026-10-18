@@ -40,5 +40,38 @@ namespace Ballverse.Core.Tests.Monetization
         {
             Assert.Throws<ArgumentNullException>(() => OwnedProducts.From(null));
         }
+
+        [Fact]
+        public void LaterStateOfSameTransactionWins_RefundRemovesRight()
+        {
+            Assert.Empty(OwnedProducts.From(new[]
+            {
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased, "t1"),
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Revoked, "t1"),
+            }));
+            Assert.Equal(new[] { ProductIds.NoAds }, OwnedProducts.From(new[]
+            {
+                new PurchaseRecord(ProductIds.NoAds, PurchaseState.Pending, "t2"),
+                new PurchaseRecord(ProductIds.NoAds, PurchaseState.Purchased, "t2"),
+            }).ToArray());
+        }
+
+        [Fact]
+        public void DistinctTransactionsAreIndependent()
+        {
+            // Refund of one transaction, a separate purchase of the same product stays.
+            Assert.Equal(new[] { ProductIds.Ultimate }, OwnedProducts.From(new[]
+            {
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased, "t1"),
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Revoked, "t1"),
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased, "t2"),
+            }).ToArray());
+            // Records without an id are independent current states.
+            Assert.Equal(new[] { ProductIds.Ultimate }, OwnedProducts.From(new[]
+            {
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Revoked, "t1"),
+                new PurchaseRecord(ProductIds.Ultimate, PurchaseState.Purchased),
+            }).ToArray());
+        }
     }
 }

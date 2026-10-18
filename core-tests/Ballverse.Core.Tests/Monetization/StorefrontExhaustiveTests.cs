@@ -88,19 +88,23 @@ namespace Ballverse.Core.Tests.Monetization
                 Assert.True(ultimate.RemovesWatermark);
             }
 
-            // Ultimate special rule (§5.2 rows Remove Export / Remove Interstitial).
-            bool special = config.WatermarkByParts && current.ModeCount > 0 && !current.Intersect(EntitlementSet.AdFree).IsEmpty;
+            // Ultimate overpay rule (§5.2 "Ultimate (он дороже, чем недостающая часть)", "только если нет режимов"), checked
+            // against an independent brute-force oracle over every combination of the other 14 products.
+            int partsCost = BruteForcePartsCost(current);
+            bool viaParts = config.WatermarkByParts && current.ModeCount > 0 && partsCost < ProductCatalog.UltimatePriceCents;
             bool cheaperSame = nonOwnedWithGain.Any(q => q != ultimate && q.Gain == ultimate.Gain);
-            Assert.Equal(!ultimate.Owned && !ultimate.Gain.IsEmpty && !cheaperSame && !special, ultimate.Visible);
+            Assert.Equal(!ultimate.Owned && !ultimate.Gain.IsEmpty && !cheaperSame && !viaParts, ultimate.Visible);
+            if (ultimate.HiddenReason == OfferHiddenReason.CheaperViaParts) Assert.True(viaParts);
             if (!config.WatermarkByParts)
                 Assert.Equal(!current.Contains(Entitlement.NoWatermark), ultimate.Visible);
+            Assert.Equal(partsCost, Storefront.CheapestPartsToComplete(current).Sum(id => ProductCatalog.Get(id).BasePriceUsdCents));
 
-            // The cheapest product of each gain class is visible (Ultimate excepted by the special rule).
+            // The cheapest product of each gain class is visible (Ultimate excepted when the missing parts are cheaper).
             foreach (var group in nonOwnedWithGain.GroupBy(o => o.Gain.Mask))
             {
                 int min = group.Min(o => o.Product.BasePriceUsdCents);
                 var cheapest = group.First(o => o.Product.BasePriceUsdCents == min);
-                if (cheapest != ultimate || !special) Assert.True(cheapest.Visible);
+                if (cheapest != ultimate || !viaParts) Assert.True(cheapest.Visible);
             }
 
             // Buying everything visible completes every entitlement: nothing becomes unreachable.
@@ -120,7 +124,57 @@ namespace Ballverse.Core.Tests.Monetization
                     Assert.False(o.PartiallyOwned);
                 }
                 Assert.False(o.Emphasized);
+                Assert.False(o.AlreadyAvailable);
             }
+        }
+
+        // --- Independent oracle: cheapest set of non-Ultimate products completing the Ultimate contents. ---
+        // Entitlements are packed into 12 bits: M06..M15 → bits 0..9, NO_EXPORT_ADS → 10, NO_INTERSTITIALS → 11.
+
+        static readonly int[] s_bestCover = BuildBestCover();
+
+        static int Pack(EntitlementSet e)
+        {
+            int bits = 0;
+            for (int m = 6; m <= 15; m++)
+            {
+                if (e.Contains((Entitlement)m)) bits |= 1 << (m - 6);
+            }
+            if (e.Contains(Entitlement.NoExportAds)) bits |= 1 << 10;
+            if (e.Contains(Entitlement.NoInterstitials)) bits |= 1 << 11;
+            return bits;
+        }
+
+        static int BruteForcePartsCost(EntitlementSet current)
+        {
+            return s_bestCover[0xFFF & ~Pack(current)];
+        }
+
+        static int[] BuildBestCover()
+        {
+            var others = ProductCatalog.All.Where(p => p.Id != ProductIds.Ultimate).ToArray();
+            Assert.Equal(14, others.Length);
+            var best = Enumerable.Repeat(int.MaxValue, 1 << 12).ToArray();
+            for (int sub = 0; sub < 1 << others.Length; sub++)
+            {
+                int bits = 0, cost = 0;
+                for (int i = 0; i < others.Length; i++)
+                {
+                    if ((sub & (1 << i)) == 0) continue;
+                    bits |= Pack(others[i].Grants);
+                    cost += others[i].BasePriceUsdCents;
+                }
+                if (cost < best[bits]) best[bits] = cost;
+            }
+            // best[need] = min over covered supersets of need.
+            for (int b = 0; b < 12; b++)
+            {
+                for (int need = 0; need < 1 << 12; need++)
+                {
+                    if ((need & (1 << b)) == 0 && best[need | (1 << b)] < best[need]) best[need] = best[need | (1 << b)];
+                }
+            }
+            return best;
         }
 
         [Fact]

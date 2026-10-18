@@ -63,21 +63,20 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void NarrowingFreeSetKeepsGrandfatheredModes()
         {
-            var wide = new MonetizationConfig(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05, ModeCode.M06 });
+            var wide = new MonetizationConfig(new[] { ModeCode.M06, ModeCode.M07 });
             var grandfathered = ModeAvailability.RecordUse(None, ModeCode.M06, wide);
             grandfathered = ModeAvailability.RecordUse(grandfathered, ModeCode.M04, wide);
 
-            var narrow = new MonetizationConfig(new[] { ModeCode.M01, ModeCode.M02 });
+            var narrow = new MonetizationConfig(None);
             Assert.Equal(ModeAccess.Grandfathered, ModeAvailability.GetAccess(ModeCode.M06, EntitlementSet.Empty, grandfathered, narrow));
-            Assert.Equal(ModeAccess.Grandfathered, ModeAvailability.GetAccess(ModeCode.M04, EntitlementSet.Empty, grandfathered, narrow));
-            Assert.Equal(ModeAccess.Locked, ModeAvailability.GetAccess(ModeCode.M05, EntitlementSet.Empty, grandfathered, narrow));
+            Assert.Equal(ModeAccess.Free, ModeAvailability.GetAccess(ModeCode.M04, EntitlementSet.Empty, grandfathered, narrow));
             Assert.Equal(ModeAccess.Locked, ModeAvailability.GetAccess(ModeCode.M07, EntitlementSet.Empty, grandfathered, narrow));
 
             // Using a mode under the narrow config never drops existing grandfathered entries.
-            var after = ModeAvailability.RecordUse(grandfathered, ModeCode.M07, narrow);
+            var after = ModeAvailability.RecordUse(grandfathered, ModeCode.M08, narrow);
             Assert.Equal(new[] { ModeCode.M04, ModeCode.M06 }, after.ToArray());
 
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M04, ModeCode.M06 },
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05, ModeCode.M06 },
                 ModeAvailability.AvailableModes(EntitlementSet.Empty, grandfathered, narrow).ToArray());
         }
 
@@ -102,14 +101,35 @@ namespace Ballverse.Core.Tests.Monetization
             }
         }
 
+        /// <summary>Spec §5.1 "M01–M05 доступны всегда", §9.3 free_modes "только расширение".</summary>
         [Fact]
-        public void ConfigFromRemoteParsesCodesAndIgnoresJunk()
+        public void ConfigCanOnlyWidenTheFreeSet()
         {
-            var c = MonetizationConfig.FromRemote(new[] { "M02", "M01", "M16", "m03", null, "M01", "X" });
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02 }, c.FreeModes.ToArray());
-            Assert.Equal(MonetizationConfig.Default.FreeModes.ToArray(), MonetizationConfig.FromRemote(null).FreeModes.ToArray());
-            Assert.Empty(MonetizationConfig.FromRemote(new string[0]).FreeModes);
-            Assert.False(MonetizationConfig.FromRemote(null, false).WatermarkByParts);
+            var defaults = new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 };
+            Assert.Equal(defaults, new MonetizationConfig(None).FreeModes.ToArray());
+            Assert.Equal(defaults, new MonetizationConfig(new[] { ModeCode.M02, ModeCode.M01 }).FreeModes.ToArray());
+            Assert.Equal(defaults.Concat(new[] { ModeCode.M09 }).ToArray(),
+                new MonetizationConfig(new[] { ModeCode.M09, ModeCode.M03, ModeCode.M09 }).FreeModes.ToArray());
+            Assert.False(new MonetizationConfig(None, false).WatermarkByParts);
+        }
+
+        [Fact]
+        public void EmptyFreeSetPayloadStillLeavesFreeModesForNewUser()
+        {
+            var config = new MonetizationConfig(None);
+            Assert.Equal(5, ModeAvailability.AvailableModes(EntitlementSet.Empty, None, config).Count);
+            for (int m = 1; m <= 5; m++)
+                Assert.Equal(ModeAccess.Free, ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, None, config));
+        }
+
+        [Fact]
+        public void FreeModesIsReadOnly()
+        {
+            var config = new MonetizationConfig(new[] { ModeCode.M06 });
+            Assert.False(config.FreeModes is ModeCode[]);
+            Assert.True(((System.Collections.Generic.ICollection<ModeCode>)config.FreeModes).IsReadOnly);
+            Assert.Throws<NotSupportedException>(() => ((System.Collections.Generic.IList<ModeCode>)config.FreeModes)[0] = ModeCode.M15);
+            Assert.True(config.IsFree(ModeCode.M01));
         }
 
         [Fact]

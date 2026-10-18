@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace Ballverse.Core.Monetization
 {
@@ -15,10 +16,12 @@ namespace Ballverse.Core.Monetization
 
         static readonly ProductInfo[] s_all = Build();
         static readonly Dictionary<string, ProductInfo> s_byId = BuildIndex();
-        static readonly Dictionary<string, decimal> s_basePricesUsd = BuildPrices();
+        static readonly IReadOnlyList<ProductInfo> s_allView = Array.AsReadOnly(s_all);
+        static readonly IReadOnlyDictionary<string, decimal> s_basePricesUsd =
+            new ReadOnlyDictionary<string, decimal>(BuildPrices());
 
         /// <summary>All 15 products in spec §5.1 table order (same order as <see cref="ProductIds.All"/>).</summary>
-        public static IReadOnlyList<ProductInfo> All => s_all;
+        public static IReadOnlyList<ProductInfo> All => s_allView;
 
         public static ProductInfo Ultimate => s_byId[ProductIds.Ultimate];
         public static ProductInfo AllModes => s_byId[ProductIds.AllModes];

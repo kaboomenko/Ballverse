@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace Ballverse.Core.Monetization
@@ -37,6 +38,8 @@ namespace Ballverse.Core.Monetization
         };
 
         /// <summary>All ids in spec §5.1 table order (what to register with the store).</summary>
-        public static IReadOnlyList<string> All => s_all;
+        public static IReadOnlyList<string> All => s_allView;
+
+        static readonly IReadOnlyList<string> s_allView = Array.AsReadOnly(s_all);
     }
 }

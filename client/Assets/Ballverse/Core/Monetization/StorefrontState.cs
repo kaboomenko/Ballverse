@@ -6,10 +6,11 @@ namespace Ballverse.Core.Monetization
     public sealed class StorefrontState
     {
         readonly StorefrontOffer[] _offers;
-        readonly StorefrontOffer[] _visible;
+        readonly IReadOnlyList<StorefrontOffer> _offersView;
+        readonly IReadOnlyList<StorefrontOffer> _visible;
 
         /// <summary>All 15 products in display order (Ultimate, All Modes, No Ads, Remove Export, Remove Interstitial, M06…M15), hidden ones included.</summary>
-        public IReadOnlyList<StorefrontOffer> Offers => _offers;
+        public IReadOnlyList<StorefrontOffer> Offers => _offersView;
         /// <summary>Visible offers in display order.</summary>
         public IReadOnlyList<StorefrontOffer> VisibleOffers => _visible;
         /// <summary>The user's current entitlements.</summary>
@@ -20,12 +21,13 @@ namespace Ballverse.Core.Monetization
         internal StorefrontState(StorefrontOffer[] offers, EntitlementSet entitlements)
         {
             _offers = offers;
+            _offersView = System.Array.AsReadOnly(offers);
             var visible = new List<StorefrontOffer>();
             foreach (var o in offers)
             {
                 if (o.Visible) visible.Add(o);
             }
-            _visible = visible.ToArray();
+            _visible = visible.AsReadOnly();
             Entitlements = entitlements;
             AllPurchased = entitlements.IsSupersetOf(EntitlementSet.AllDefined);
         }

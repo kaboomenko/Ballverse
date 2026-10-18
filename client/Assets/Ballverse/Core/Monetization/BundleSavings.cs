@@ -9,7 +9,7 @@ namespace Ballverse.Core.Monetization
     /// </summary>
     public sealed class BundleSavings
     {
-        readonly string[] _partIds;
+        readonly IReadOnlyList<string> _partIds;
 
         public string BundleId { get; }
         /// <summary>The parts the bundle is compared with, in catalog order.</summary>
@@ -19,13 +19,16 @@ namespace Ballverse.Core.Monetization
         public decimal InsteadOf { get; }
         /// <summary>InsteadOf − BundlePrice, always &gt; 0.</summary>
         public decimal Amount { get; }
-        /// <summary>Amount / InsteadOf in whole percent, rounded half away from zero (75, 31, 14 / 64 at base prices).</summary>
+        /// <summary>
+        /// Amount / InsteadOf in whole percent, rounded half away from zero (75, 31, 14 / 64 at base prices), then clamped
+        /// to 1…99: a real saving never reads "0%" and a paid bundle never reads "100%".
+        /// </summary>
         public int Percent { get; }
 
         internal BundleSavings(string bundleId, string[] partIds, decimal bundlePrice, decimal insteadOf, decimal amount, int percent)
         {
             BundleId = bundleId;
-            _partIds = partIds;
+            _partIds = System.Array.AsReadOnly(partIds);
             BundlePrice = bundlePrice;
             InsteadOf = insteadOf;
             Amount = amount;
