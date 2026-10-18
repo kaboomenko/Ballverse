@@ -53,6 +53,8 @@ namespace Ballverse.Core.Sim
             Rules = rules ?? throw new ArgumentNullException(nameof(rules));
             _options = options ?? new SimRunnerOptions();
             _options.Validate();
+            // A world stepped before the runner took over (settle, pre-roll): its past ticks can no longer take inputs.
+            _consumedThrough = world.Tick - 1;
         }
 
         public PhysicsWorld World { get; }
@@ -97,6 +99,13 @@ namespace Ballverse.Core.Sim
         /// <summary>Queued inputs not yet applied.</summary>
         public int PendingInputCount => _queueEnd - _queueHead;
 
+        /// <summary>
+        /// Queued inputs discarded because their tick had already passed when the runner reached it — the world was stepped
+        /// outside the runner (<see cref="PhysicsWorld.Step"/> called directly). Should stay 0; a replay with dropped inputs
+        /// does not reproduce.
+        /// </summary>
+        public int DroppedInputCount { get; private set; }
+
         /// <summary>Calls <see cref="IModeRules.Start"/> if it has not run yet (otherwise done by the first step).</summary>
         public void Start()
         {
@@ -112,8 +121,9 @@ namespace Ballverse.Core.Sim
         /// </summary>
         public void EnqueueInput(in SimInput input)
         {
-            if (input.Tick <= _consumedThrough)
-                throw new ArgumentException("Input for tick " + input.Tick + " arrives after that tick was consumed (next is " + (_consumedThrough + 1) + ")");
+            int next = Math.Max(_consumedThrough + 1, World.Tick);
+            if (input.Tick < next)
+                throw new ArgumentException("Input for tick " + input.Tick + " arrives after that tick was consumed (next is " + next + ")");
             if (_queueEnd == _queue.Length)
             {
                 // Never compact while the rules hold the current tick's input span.
@@ -232,6 +242,12 @@ namespace Ballverse.Core.Sim
             else if (_queueHead >= 64 && _queueHead * 2 >= _queue.Length)
             {
                 CompactQueue();
+            }
+            // The queue is sorted by tick: inputs of ticks the world passed without the runner are dropped, not left to block.
+            while (_queueHead < _queueEnd && _queue[_queueHead].Tick < tick)
+            {
+                _queueHead++;
+                DroppedInputCount++;
             }
             int first = _queueHead;
             int k = first;

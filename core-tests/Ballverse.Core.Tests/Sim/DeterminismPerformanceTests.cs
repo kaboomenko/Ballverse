@@ -114,7 +114,7 @@ namespace Ballverse.Core.Tests.Sim
             w.AddSegment(sensorBody, new Vec2(-4f, 0f), new Vec2(4f, 0f), 0f, ColliderMaterial.Sensor());
             var ring = w.AddBody(BodyDef.Kinematic(new Vec2(0f, 0f), 0f, 2f));
             w.AddRing(ring, Vec2.Zero, 1f, 0.05f, new[] { AngularGap.Centered(0f, 0.6f) }, SimTestUtil.Wall(0.5f, 0.2f));
-            var platformBody = w.AddBody(new BodyDef { Kind = BodyKind.Kinematic, Position = new Vec2(0f, -2f), Scale = 1f, SpinVelocity = 2f });
+            var platformBody = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, Position = new Vec2(0f, -2f), Scale = 1f, SpinVelocity = 2f });
             w.AddSpinPlatform(platformBody, Vec2.Zero, 1.5f, 0.1f, new[] { AngularGap.Centered(0f, 1f) }, SimTestUtil.Wall());
             w.ContactHook = new CountingHook();
             var snapshot = new SimSnapshot();

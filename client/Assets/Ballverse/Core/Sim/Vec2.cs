@@ -69,7 +69,11 @@ namespace Ballverse.Core.Sim
         /// <summary>Rotates by minus the angle whose cosine and sine are given.</summary>
         public static Vec2 InvRotate(Vec2 v, float cos, float sin) => new Vec2(cos * v.X + sin * v.Y, -sin * v.X + cos * v.Y);
 
-        public static Vec2 FromAngle(float radians) => new Vec2(MathF.Cos(radians), MathF.Sin(radians));
+        public static Vec2 FromAngle(float radians)
+        {
+            SimMath.SinCos(radians, out float sin, out float cos);
+            return new Vec2(cos, sin);
+        }
 
         public static float Distance(Vec2 a, Vec2 b) => (a - b).Length;
 

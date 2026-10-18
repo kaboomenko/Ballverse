@@ -206,7 +206,7 @@ namespace Ballverse.Core.Sim
                     float radius = c.Radius * s;
                     if (d - radius < rt && radius - d < rt)
                     {
-                        if (SolidArcAt(ref c, MathF.Atan2(v.Y, v.X)) != NoArc) return true;
+                        if (SolidArcAt(ref c, SimMath.Atan2(v.Y, v.X)) != NoArc) return true;
                         for (int k = 0; k < c.ArcCount; k++)
                         {
                             int ai = c.ArcStart + k;

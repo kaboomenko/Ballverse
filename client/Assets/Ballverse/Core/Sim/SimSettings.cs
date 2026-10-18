@@ -17,9 +17,22 @@ namespace Ballverse.Core.Sim
         public Vec2 Gravity;
         /// <summary>Substeps per 1/60 s tick (default 8). More substeps: stiffer stacks, less tunnelling risk.</summary>
         public int Substeps;
-        /// <summary>Speed clamp in m/s applied to every ball after each substep (spec §2.2 maxSpeed 5–60, default 30).</summary>
+        /// <summary>
+        /// Speed clamp in m/s applied to every ball after each substep (spec §2.2 maxSpeed 5–60, default 30). The solver raises
+        /// it to the fastest kinematic wall surface speed + <see cref="WallSpeedMargin"/> (see
+        /// <see cref="PhysicsWorld.EffectiveMaxSpeed"/>).
+        /// </summary>
         public float MaxSpeed;
-        /// <summary>Approach speeds below this bounce with restitution 0 so resting contacts settle (m/s).</summary>
+        /// <summary>
+        /// Spec §6.5 effective limit max(maxSpeed; v_wall,max + margin), m/s (default 5). Negative disables the rule: the clamp
+        /// is exactly <see cref="MaxSpeed"/> even below a pushing wall's speed.
+        /// </summary>
+        public float WallSpeedMargin;
+        /// <summary>
+        /// Approach speeds below this bounce with restitution 0 so resting contacts settle (m/s, at 1 g). It is scaled by each
+        /// ball's effective gravity |Gravity·GravityScale| / 1 g (capped at 1): without gravity no contact needs to come to rest,
+        /// so zero-gravity elastic scenes («Невесомость», «Медитация») keep their energy at any speed.
+        /// </summary>
         public float RestitutionThreshold;
         /// <summary>Hit/BallHit events whose strongest approach speed in the tick is below this are not reported (m/s).</summary>
         public float HitEventMinSpeed;
@@ -40,6 +53,7 @@ namespace Ballverse.Core.Sim
             Gravity = new Vec2(0f, -StandardGravity),
             Substeps = DefaultSubsteps,
             MaxSpeed = 30f,
+            WallSpeedMargin = 5f,
             RestitutionThreshold = 0.25f,
             HitEventMinSpeed = 0.05f,
             BallCollisions = true,
@@ -53,7 +67,7 @@ namespace Ballverse.Core.Sim
         {
             float a = angleDegrees * SimMath.DegToRad;
             float m = g * StandardGravity;
-            return new Vec2(MathF.Cos(a) * m, MathF.Sin(a) * m);
+            return Vec2.FromAngle(a) * m;
         }
 
         internal void Validate()
@@ -62,6 +76,7 @@ namespace Ballverse.Core.Sim
             if (Substeps < MinSubsteps || Substeps > MaxSubsteps)
                 throw new ArgumentException("Substeps must be in [" + MinSubsteps + ", " + MaxSubsteps + "], got " + Substeps);
             if (!SimMath.IsFinite(MaxSpeed) || MaxSpeed <= 0f) throw new ArgumentException("MaxSpeed must be > 0");
+            if (!SimMath.IsFinite(WallSpeedMargin)) throw new ArgumentException("WallSpeedMargin must be finite");
             if (!SimMath.IsFinite(RestitutionThreshold) || RestitutionThreshold < 0f) throw new ArgumentException("RestitutionThreshold must be >= 0");
             if (!SimMath.IsFinite(HitEventMinSpeed) || HitEventMinSpeed < 0f) throw new ArgumentException("HitEventMinSpeed must be >= 0");
             if (BallIterations < 1 || BallIterations > 8) throw new ArgumentException("BallIterations must be in [1, 8]");

@@ -67,7 +67,12 @@ namespace Ballverse.Core.Sim
             }
         }
 
-        /// <summary><c>round(value · 2^16)</c> half away from zero, saturating; NaN hashes as a sentinel.</summary>
+        /// <summary>
+        /// <c>round(value · 2^16)</c> half away from zero, saturating; NaN hashes as a sentinel. Must stay bit-identical to
+        /// <c>Ballverse.Core.Replay.StateHashBuilder.AddQuantized</c> (on main) so world hashes match the replay HASH record;
+        /// once both modules are merged the quantizer belongs in Foundation, shared by both (QuantizeForHashRoundsHalfAwayAndSaturates
+        /// pins the scheme here).
+        /// </summary>
         public static long QuantizeForHash(float value)
         {
             if (float.IsNaN(value)) return long.MinValue;

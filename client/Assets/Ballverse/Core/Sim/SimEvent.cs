@@ -53,8 +53,13 @@ namespace Ballverse.Core.Sim
 
     /// <summary>
     /// Mode hook called inside the solver before each contact response (spec: "hook for mode logic"). Return false to let the
-    /// ball pass through for the rest of this substep (one-way walls, deadly sectors handled as pass-through, ghost balls).
-    /// Must be deterministic and must not add or remove bodies, balls or colliders.
+    /// ball pass through that collider for the rest of this substep (one-way walls, ghost balls). Must be deterministic.
+    /// <para>
+    /// <see cref="PhysicsWorld.KillBall"/> is allowed here (deadly sector): the ball's remaining contacts of the step are
+    /// skipped and produce no events, whatever the hook returns. Adding balls, bodies or colliders, or changing the settings,
+    /// throws <see cref="System.InvalidOperationException"/> while <see cref="PhysicsWorld.IsStepping"/> — do structural
+    /// changes in <see cref="IModeRules.Tick"/> / <see cref="IModeRules.AfterPhysics"/>.
+    /// </para>
     /// </summary>
     public interface ISimContactHook
     {

@@ -11,7 +11,7 @@ namespace Ballverse.Core.Tests.Sim
         static (PhysicsWorld w, int body, int platform, int ball) Scene(float spin, float spinVelocity = 0f)
         {
             var w = new PhysicsWorld();
-            int body = w.AddBody(new BodyDef { Kind = BodyKind.Kinematic, Scale = 1f, Spin = spin, SpinVelocity = spinVelocity });
+            int body = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, Scale = 1f, Spin = spin, SpinVelocity = spinVelocity });
             // 90° gap centred on azimuth 0 (facing the camera when Spin = 0).
             int platform = w.AddSpinPlatform(body, Vec2.Zero, 2f, 0.2f, new[] { AngularGap.Centered(0f, SimMath.HalfPi) }, SimTestUtil.Wall(0f, 0f));
             var d = SimTestUtil.Ball(new Vec2(0f, 1.5f), Vec2.Zero, 0.2f, 0f, 0f);
@@ -72,7 +72,7 @@ namespace Ballverse.Core.Tests.Sim
         {
             // Ball at x = 1.9 sits at azimuth asin(0.95) ≈ 72°, outside the ±45° gap: lands even with the gap in front.
             var w = new PhysicsWorld();
-            int body = w.AddBody(new BodyDef { Kind = BodyKind.Kinematic, Scale = 1f });
+            int body = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, Scale = 1f });
             w.AddSpinPlatform(body, Vec2.Zero, 2f, 0.2f, new[] { AngularGap.Centered(0f, SimMath.HalfPi) }, SimTestUtil.Wall(0f, 0f));
             var d = SimTestUtil.Ball(new Vec2(1.9f, 1.5f), Vec2.Zero, 0.1f, 0f, 0f);
             d.Flags = BallFlags.LockX;

@@ -68,21 +68,5 @@ namespace Ballverse.Core.Sim
                 a[j + 1] = v;
             }
         }
-
-        /// <summary>Insertion sort for short int lists (broadphase candidates).</summary>
-        public static void InsertionSort(int[] a, int start, int end)
-        {
-            for (int i = start + 1; i < end; i++)
-            {
-                int v = a[i];
-                int j = i - 1;
-                while (j >= start && a[j] > v)
-                {
-                    a[j + 1] = a[j];
-                    j--;
-                }
-                a[j + 1] = v;
-            }
-        }
     }
 }

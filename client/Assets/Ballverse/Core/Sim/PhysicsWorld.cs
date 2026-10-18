@@ -65,6 +65,7 @@ namespace Ballverse.Core.Sim
             get => _settings;
             set
             {
+                CheckNotStepping();
                 value.Validate();
                 _settings = value;
             }
@@ -100,12 +101,14 @@ namespace Ballverse.Core.Sim
         public void ReserveBalls(int capacity)
         {
             if (capacity < 0 || capacity > MaxBalls) throw new ArgumentOutOfRangeException(nameof(capacity));
+            CheckNotStepping();
             EnsureBallCapacity(capacity);
         }
 
         /// <summary>Adds a ball and returns its id.</summary>
         public int AddBall(in BallDef def)
         {
+            CheckNotStepping();
             if (_ballCount >= MaxBalls) throw new InvalidOperationException("Ball limit " + MaxBalls + " reached");
             if (!SimMath.IsFinite(def.Position) || !SimMath.IsFinite(def.Velocity)) throw new ArgumentException("Ball position and velocity must be finite");
             if (!SimMath.IsFinite(def.Angle) || !SimMath.IsFinite(def.AngularVelocity)) throw new ArgumentException("Ball angle and angular velocity must be finite");
@@ -135,6 +138,7 @@ namespace Ballverse.Core.Sim
             _ballPrev[id] = def.Position;
             _ballEventHead[id] = -1;
             _aliveBalls++;
+            _radiusVersion++;
             return id;
         }
 
@@ -177,6 +181,7 @@ namespace Ballverse.Core.Sim
             float mass = scaleMass ? b.Mass * (radius * radius) / (b.Radius * b.Radius) : b.Mass;
             b.Radius = radius;
             SetMass(ref b, mass);
+            _radiusVersion++;
         }
 
         public void SetBallMaterial(int id, float restitution, float friction)
@@ -192,6 +197,7 @@ namespace Ballverse.Core.Sim
             CheckBall(id);
             _balls[id].Category = category;
             _balls[id].Mask = mask;
+            _radiusVersion++;
         }
 
         public void SetBallGravityScale(int id, float gravityScale)
@@ -213,19 +219,24 @@ namespace Ballverse.Core.Sim
             _balls[id].Tag = tag;
         }
 
-        /// <summary>Removes a ball from the simulation. Its id stays reserved; state is kept for inspection.</summary>
+        /// <summary>
+        /// Removes a ball from the simulation. Its id stays reserved; state is kept for inspection. Allowed inside a contact
+        /// hook (deadly sector): the ball's remaining contacts of that step are skipped and produce no events.
+        /// </summary>
         public void KillBall(int id)
         {
             CheckBall(id);
             if (!_balls[id].Alive) return;
             _balls[id].Alive = false;
             _aliveBalls--;
+            _radiusVersion++;
         }
 
         // ------------------------------------------------------------------ bodies
 
         public int AddBody(in BodyDef def)
         {
+            CheckNotStepping();
             if (_bodyCount >= MaxBodies) throw new InvalidOperationException("Body limit reached");
             if (!SimMath.IsFinite(def.Position) || !SimMath.IsFinite(def.LinearVelocity)) throw new ArgumentException("Body position and velocity must be finite");
             if (!SimMath.IsFinite(def.Angle) || !SimMath.IsFinite(def.AngularVelocity)) throw new ArgumentException("Body angle and angular velocity must be finite");
@@ -238,10 +249,10 @@ namespace Ballverse.Core.Sim
                 Array.Resize(ref _frames, _frames.Length * 2);
             }
             int id = _bodyCount++;
-            bool kinematic = def.Kind == BodyKind.Kinematic;
+            bool kinematic = def.Motion == BodyMotion.Kinematic;
             _bodies[id] = new BodyState
             {
-                Kind = def.Kind,
+                Motion = def.Motion,
                 Position = def.Position,
                 Angle = def.Angle,
                 LinearVelocity = kinematic ? def.LinearVelocity : Vec2.Zero,
@@ -270,7 +281,7 @@ namespace Ballverse.Core.Sim
             CheckBody(id);
             if (!SimMath.IsFinite(linear) || !SimMath.IsFinite(angular)) throw new ArgumentException("Velocities must be finite");
             ref BodyState b = ref _bodies[id];
-            if (b.Kind != BodyKind.Kinematic) return;
+            if (b.Motion != BodyMotion.Kinematic) return;
             b.LinearVelocity = linear;
             b.AngularVelocity = angular;
             _frames[id].HasTarget = false;
@@ -280,7 +291,7 @@ namespace Ballverse.Core.Sim
         {
             CheckBody(id);
             if (!SimMath.IsFinite(angular)) throw new ArgumentException("Angular velocity must be finite");
-            if (_bodies[id].Kind != BodyKind.Kinematic) return;
+            if (_bodies[id].Motion != BodyMotion.Kinematic) return;
             _bodies[id].AngularVelocity = angular;
             _frames[id].HasTarget = false;
         }
@@ -290,7 +301,7 @@ namespace Ballverse.Core.Sim
         {
             CheckBody(id);
             if (!SimMath.IsFinite(spinVelocity)) throw new ArgumentException("Spin velocity must be finite");
-            if (_bodies[id].Kind != BodyKind.Kinematic) return;
+            if (_bodies[id].Motion != BodyMotion.Kinematic) return;
             _bodies[id].SpinVelocity = spinVelocity;
         }
 
@@ -299,7 +310,7 @@ namespace Ballverse.Core.Sim
         {
             CheckBody(id);
             if (!SimMath.IsFinite(scaleVelocity)) throw new ArgumentException("Scale velocity must be finite");
-            if (_bodies[id].Kind != BodyKind.Kinematic) return;
+            if (_bodies[id].Motion != BodyMotion.Kinematic) return;
             _bodies[id].ScaleVelocity = scaleVelocity;
         }
 
@@ -312,7 +323,7 @@ namespace Ballverse.Core.Sim
         {
             CheckBody(id);
             if (!SimMath.IsFinite(position) || !SimMath.IsFinite(angle)) throw new ArgumentException("Target pose must be finite");
-            if (_bodies[id].Kind != BodyKind.Kinematic) return;
+            if (_bodies[id].Motion != BodyMotion.Kinematic) return;
             ref BodyFrame f = ref _frames[id];
             f.HasTarget = true;
             f.TargetPosition = position;
@@ -552,6 +563,7 @@ namespace Ballverse.Core.Sim
 
         ColliderData NewCollider(ColliderKind kind, int body, float thickness, in ColliderMaterial m)
         {
+            CheckNotStepping();
             ValidateMaterial(m.Restitution, m.Friction);
             if (_colliderCount >= MaxColliders) throw new InvalidOperationException("Collider limit reached");
             return new ColliderData { Kind = kind, Body = body, Enabled = true, Material = m, HalfThickness = thickness * 0.5f };
@@ -694,8 +706,7 @@ namespace Ballverse.Core.Sim
         {
             ref BodyState b = ref _bodies[id];
             ref BodyFrame f = ref _frames[id];
-            f.Cos = MathF.Cos(b.Angle);
-            f.Sin = MathF.Sin(b.Angle);
+            SimMath.SinCos(b.Angle, out f.Sin, out f.Cos);
             f.PrevCos = f.Cos;
             f.PrevSin = f.Sin;
             f.PrevPosition = b.Position;
@@ -725,6 +736,12 @@ namespace Ballverse.Core.Sim
         {
             if (!SimMath.IsFinite(restitution) || restitution < 0f || restitution > 2f) throw new ArgumentException("Restitution must be in [0, 2]");
             if (!SimMath.IsFinite(friction) || friction < 0f) throw new ArgumentException("Friction must be >= 0");
+        }
+
+        /// <summary>Structural changes inside a contact hook would invalidate the solver's buffers mid-step.</summary>
+        void CheckNotStepping()
+        {
+            if (_stepping) throw new InvalidOperationException("Balls, bodies, colliders and settings cannot be added or changed while Step() runs (contact hook); do it in IModeRules.Tick / AfterPhysics");
         }
 
         void CheckBall(int id)

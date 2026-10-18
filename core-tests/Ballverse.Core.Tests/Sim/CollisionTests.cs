@@ -166,6 +166,85 @@ namespace Ballverse.Core.Tests.Sim
             Assert.True(worstDrift < 0.01f, "Jacobi drift " + worstDrift);
         }
 
+        /// <summary>
+        /// Slow elastic balls without gravity (spec M02 «Невесомость», «Медитация»): the restitution threshold scales with
+        /// gravity, so a 0.2 m/s ball neither sticks to the walls nor loses energy.
+        /// </summary>
+        [Fact]
+        public void SlowElasticBallWithoutGravityKeepsSpeedOverSixtySeconds()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            Assert.Equal(0.25f, w.Settings.RestitutionThreshold);
+            SimTestUtil.AddPolygonArena(w, 6, 3.6f, 0.12f, 0f, 1f, 0f);
+            int b = w.AddBall(SimTestUtil.Ball(Vec2.Zero, new Vec2(0.2f, 0.05f), 0.25f, 1f, 0f));
+            float v0 = w.GetBall(b).Velocity.Length;
+            int hits = 0;
+            for (int t = 0; t < 3600; t++)
+            {
+                w.Step();
+                hits += w.EventCount;
+            }
+            float v1 = w.GetBall(b).Velocity.Length;
+            Assert.True(hits >= 2, "the ball must bounce off walls, hits " + hits);
+            Assert.True(MathF.Abs(v1 - v0) / v0 < 1e-3f, "speed " + v0 + " -> " + v1);
+        }
+
+        [Fact]
+        public void SlowElasticBallsInSlowlyRotatingPolygonWithoutGravityConserveJacobiIntegral()
+        {
+            const float omega = 0.15f;
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            SimTestUtil.AddPolygonArena(w, 6, 3.6f, 0.12f, omega, 1f, 0f);
+            var rng = Rng.FromSeed(12UL);
+            for (int i = 0; i < 12; i++)
+            {
+                var d = SimTestUtil.Ball(new Vec2(rng.NextFloat(-2f, 2f), rng.NextFloat(-2f, 2f)),
+                    Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi)) * 0.2f, 0.15f, 1f, 0f);
+                d.Mask = 1u;
+                d.Category = 2u;
+                w.AddBall(d);
+            }
+            var j0 = new float[w.BallCount];
+            for (int i = 0; i < w.BallCount; i++) j0[i] = Jacobi(w.GetBall(i), omega);
+            int hits = 0;
+            for (int t = 0; t < 3600; t++)
+            {
+                w.Step();
+                hits += w.EventCount;
+            }
+            float worst = 0f;
+            for (int i = 0; i < w.BallCount; i++)
+            {
+                worst = MathF.Max(worst, MathF.Abs(Jacobi(w.GetBall(i), omega) - j0[i]) / MathF.Abs(j0[i]));
+            }
+            _out.WriteLine("slow rotating polygon: hits " + hits + ", Jacobi drift " + worst);
+            Assert.True(hits > 20, "hits " + hits);
+            Assert.True(worst < 0.02f, "Jacobi drift " + worst);
+        }
+
+        [Fact]
+        public void SlowElasticBallPairWithoutGravityBouncesInsteadOfMerging()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            int a = w.AddBall(SimTestUtil.Ball(new Vec2(-0.5f, 0f), new Vec2(0.05f, 0f), 0.2f));
+            int b = w.AddBall(SimTestUtil.Ball(new Vec2(0.5f, 0f), new Vec2(-0.05f, 0f), 0.2f));
+            for (int t = 0; t < 600; t++) w.Step();
+            Assert.Equal(-0.05f, w.GetBall(a).Velocity.X, 4);
+            Assert.Equal(0.05f, w.GetBall(b).Velocity.X, 4);
+        }
+
+        [Fact]
+        public void GravityScaleZeroBallInGravityWorldKeepsSlowElasticBounces()
+        {
+            var w = new PhysicsWorld(SimSettings.Default);
+            SimTestUtil.AddPolygonArena(w, 4, 3f, 0.1f, 0f, 1f, 0f);
+            var d = SimTestUtil.Ball(Vec2.Zero, new Vec2(0.15f, 0f), 0.2f, 1f, 0f);
+            d.GravityScale = 0f;
+            int b = w.AddBall(d);
+            for (int t = 0; t < 3600; t++) w.Step();
+            Assert.Equal(0.15f, w.GetBall(b).Velocity.Length, 4);
+        }
+
         static float Jacobi(in BallState b, float omega)
         {
             return 0.5f * b.Velocity.LengthSquared - omega * Vec2.Cross(b.Position, b.Velocity);
@@ -180,7 +259,7 @@ namespace Ballverse.Core.Tests.Sim
         public void MovingPaddleImpartsOnePlusRestitutionTimesItsSpeed(float restitution, float expected)
         {
             var w = new PhysicsWorld(SimTestUtil.NoGravity());
-            int paddle = w.AddBody(new BodyDef { Kind = BodyKind.Kinematic, Position = new Vec2(-1f, 0f), LinearVelocity = new Vec2(5f, 0f) });
+            int paddle = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, Position = new Vec2(-1f, 0f), LinearVelocity = new Vec2(5f, 0f) });
             w.AddSegment(paddle, new Vec2(0f, -1f), new Vec2(0f, 1f), 0.1f, SimTestUtil.Wall(0f, 0f));
             int b = w.AddBall(SimTestUtil.Ball(Vec2.Zero, Vec2.Zero, 0.2f, restitution, 0f));
             for (int t = 0; t < 30; t++) w.Step();
@@ -225,7 +304,7 @@ namespace Ballverse.Core.Tests.Sim
         {
             var w = new PhysicsWorld();
             // A long kinematic floor sliding along itself at 3 m/s (conveyor).
-            int floor = w.AddBody(new BodyDef { Kind = BodyKind.Kinematic, LinearVelocity = new Vec2(3f, 0f), Scale = 1f });
+            int floor = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, LinearVelocity = new Vec2(3f, 0f), Scale = 1f });
             w.AddSegment(floor, new Vec2(-1000f, 0f), new Vec2(1000f, 0f), 0f, SimTestUtil.Wall(0f, 1f));
             int b = w.AddBall(SimTestUtil.Ball(new Vec2(0f, 0.2f), Vec2.Zero, 0.2f, 0f, 1f));
             for (int t = 0; t < 120; t++) w.Step();
@@ -239,7 +318,7 @@ namespace Ballverse.Core.Tests.Sim
         public void ShrinkingRingPushesBallInward()
         {
             var w = new PhysicsWorld(SimTestUtil.NoGravity());
-            int body = w.AddBody(new BodyDef { Kind = BodyKind.Kinematic, Scale = 1f, ScaleVelocity = -0.5f });
+            int body = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, Scale = 1f, ScaleVelocity = -0.5f });
             w.AddRing(body, Vec2.Zero, 3f, 0.1f, ReadOnlySpan<AngularGap>.Empty, SimTestUtil.Wall(1f, 0f));
             int b = w.AddBall(SimTestUtil.Ball(new Vec2(2.7f, 0f), Vec2.Zero, 0.2f, 1f, 0f));
             for (int t = 0; t < 30; t++) w.Step();
@@ -447,6 +526,118 @@ namespace Ballverse.Core.Tests.Sim
             Assert.True(w.GetBall(ghost).Position.X > 1.5f);
             Assert.True(w.GetBall(solid).Position.X < 1f);
             Assert.True(hook.Calls > 0);
+        }
+
+        /// <summary>A hook that kills the ball (deadly sector) ends its contacts: no response or Hit event from later colliders.</summary>
+        [Fact]
+        public void BallKilledInContactHookStopsCollidingAndEmitsNoFurtherHits()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            int body = w.AddBody(BodyDef.Static(Vec2.Zero));
+            int deadly = w.AddSegment(body, new Vec2(1f, -1f), new Vec2(1f, 1f), 0.02f, SimTestUtil.Wall(0.5f, 0f));
+            w.AddSegment(body, new Vec2(1f, -1f), new Vec2(1f, 1f), 0.02f, SimTestUtil.Wall(0.5f, 0f));
+            int b = w.AddBall(SimTestUtil.Ball(Vec2.Zero, new Vec2(20f, 0f), 0.1f));
+            var hook = new KillHook { Collider = deadly };
+            w.ContactHook = hook;
+            int hitEvents = 0;
+            for (int t = 0; t < 10; t++)
+            {
+                w.Step();
+                foreach (var e in w.Events)
+                {
+                    if (e.Kind == SimEventKind.Hit) hitEvents++;
+                }
+            }
+            Assert.False(w.GetBall(b).Alive);
+            Assert.Equal(1, hook.Kills);
+            Assert.Equal(0, hitEvents);
+            Assert.Equal(20f, w.GetBall(b).Velocity.X);
+            Assert.Equal(0f, w.GetBall(b).Velocity.Y);
+        }
+
+        [Fact]
+        public void BallKilledInBallHitHookIsNotResolved()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            int a = w.AddBall(SimTestUtil.Ball(new Vec2(-1f, 0f), new Vec2(3f, 0f), 0.2f));
+            int b = w.AddBall(SimTestUtil.Ball(new Vec2(1f, 0f), new Vec2(-3f, 0f), 0.2f));
+            w.ContactHook = new KillHook { Collider = -1, KillOnBallHit = true };
+            int ballHits = 0;
+            for (int t = 0; t < 40; t++)
+            {
+                w.Step();
+                foreach (var e in w.Events)
+                {
+                    if (e.Kind == SimEventKind.BallHit) ballHits++;
+                }
+            }
+            Assert.Equal(0, ballHits);
+            Assert.False(w.GetBall(a).Alive);
+            Assert.True(w.GetBall(b).Alive);
+            Assert.Equal(-3f, w.GetBall(b).Velocity.X);
+        }
+
+        [Fact]
+        public void StructuralChangesInsideContactHookAreRefused()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            int body = w.AddBody(BodyDef.Static(Vec2.Zero));
+            w.AddSegment(body, new Vec2(1f, -1f), new Vec2(1f, 1f), 0.02f, SimTestUtil.Wall(0.5f, 0f));
+            w.AddBall(SimTestUtil.Ball(Vec2.Zero, new Vec2(10f, 0f), 0.1f));
+            var hook = new MutatingHook();
+            w.ContactHook = hook;
+            Assert.False(w.IsStepping);
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+            {
+                for (int t = 0; t < 30; t++) w.Step();
+            });
+            Assert.Contains("Step()", ex.Message);
+            Assert.True(hook.WasStepping);
+            // The world stays usable after the refused change.
+            Assert.False(w.IsStepping);
+            w.ContactHook = null;
+            w.AddBall(SimTestUtil.Ball(new Vec2(-1f, 0f), Vec2.Zero, 0.1f));
+            w.Step();
+            Assert.Equal(2, w.BallCount);
+        }
+
+        sealed class KillHook : ISimContactHook
+        {
+            public int Collider;
+            public bool KillOnBallHit;
+            public int Kills;
+
+            public bool PreSolveHit(PhysicsWorld world, int ball, int collider, in ContactPoint contact)
+            {
+                if (collider != Collider) return true;
+                world.KillBall(ball);
+                Kills++;
+                return false;
+            }
+
+            public bool PreSolveBallHit(PhysicsWorld world, int ballA, int ballB, in ContactPoint contact)
+            {
+                // Kill and still accept: the solver must notice the dead ball and skip the response.
+                if (KillOnBallHit) world.KillBall(ballA);
+                return true;
+            }
+        }
+
+        sealed class MutatingHook : ISimContactHook
+        {
+            public bool WasStepping;
+
+            public bool PreSolveHit(PhysicsWorld world, int ball, int collider, in ContactPoint contact)
+            {
+                WasStepping = world.IsStepping;
+                world.AddBall(SimTestUtil.Ball(new Vec2(-2f, 0f), Vec2.Zero, 0.1f));
+                return true;
+            }
+
+            public bool PreSolveBallHit(PhysicsWorld world, int ballA, int ballB, in ContactPoint contact)
+            {
+                return true;
+            }
         }
 
         sealed class GhostHook : ISimContactHook

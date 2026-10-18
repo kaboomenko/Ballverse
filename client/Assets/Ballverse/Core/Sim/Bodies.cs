@@ -1,6 +1,10 @@
 namespace Ballverse.Core.Sim
 {
-    public enum BodyKind
+    /// <summary>
+    /// How a physics body moves. Named BodyMotion (not BodyKind) so it never clashes with
+    /// <c>Ballverse.Core.Params.BodyKind</c> (body-budget categories) in mode code that uses both namespaces.
+    /// </summary>
+    public enum BodyMotion
     {
         /// <summary>Never moves; velocities are ignored.</summary>
         Static = 0,
@@ -11,7 +15,7 @@ namespace Ballverse.Core.Sim
     /// <summary>Description of a static or kinematic body that carries colliders.</summary>
     public struct BodyDef
     {
-        public BodyKind Kind;
+        public BodyMotion Motion;
         public Vec2 Position;
         /// <summary>Rotation in radians (counter-clockwise).</summary>
         public float Angle;
@@ -30,19 +34,19 @@ namespace Ballverse.Core.Sim
 
         public static BodyDef Static(Vec2 position, float angle = 0f)
         {
-            return new BodyDef { Kind = BodyKind.Static, Position = position, Angle = angle, Scale = 1f };
+            return new BodyDef { Motion = BodyMotion.Static, Position = position, Angle = angle, Scale = 1f };
         }
 
         public static BodyDef Kinematic(Vec2 position, float angle = 0f, float angularVelocity = 0f)
         {
-            return new BodyDef { Kind = BodyKind.Kinematic, Position = position, Angle = angle, AngularVelocity = angularVelocity, Scale = 1f };
+            return new BodyDef { Motion = BodyMotion.Kinematic, Position = position, Angle = angle, AngularVelocity = angularVelocity, Scale = 1f };
         }
     }
 
     /// <summary>Pose and velocities of one body. Read through <see cref="PhysicsWorld.GetBody"/>.</summary>
     public struct BodyState
     {
-        public BodyKind Kind;
+        public BodyMotion Motion;
         public Vec2 Position;
         public float Angle;
         public Vec2 LinearVelocity;

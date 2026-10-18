@@ -189,6 +189,80 @@ namespace Ballverse.Core.Tests.Sim
             Assert.True(w.GetBall(a).Position.X < w.GetBall(b).Position.X);
         }
 
+        /// <summary>
+        /// Mixed sizes: the grid is sized from the typical radius and balls above twice the median ("big" balls) are paired with
+        /// everyone directly. Big–small and big–big contacts must still be found and resolved.
+        /// </summary>
+        [Fact]
+        public void BigBallsAmongSmallOnesCollideWithEveryone()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            var rng = Rng.FromSeed(21UL);
+            for (int i = 0; i < 150; i++)
+            {
+                var p = new Vec2(rng.NextFloat(-3f, 3f), rng.NextFloat(-3f, 3f));
+                w.AddBall(SimTestUtil.Ball(p, Vec2.Zero, 0.08f, 0.5f, 0f));
+            }
+            int big = w.AddBall(SimTestUtil.Ball(new Vec2(-6f, 0.3f), new Vec2(6f, 0f), 1.2f, 0.5f, 0f));
+            int other = w.AddBall(SimTestUtil.Ball(new Vec2(6f, -0.3f), new Vec2(-6f, 0f), 0.9f, 0.5f, 0f));
+            int bigHits = 0, bigBigHits = 0;
+            float worstOverlap = 0f;
+            for (int t = 0; t < 150; t++)
+            {
+                w.Step();
+                foreach (var e in w.Events)
+                {
+                    if (e.Kind != SimEventKind.BallHit) continue;
+                    if (e.B == big || e.B == other) bigHits++;
+                    if (e.A == big && e.B == other) bigBigHits++;
+                }
+                for (int i = 0; i < w.BallCount; i++)
+                {
+                    for (int j = i + 1; j < w.BallCount; j++)
+                    {
+                        ref readonly BallState a = ref w.GetBall(i);
+                        ref readonly BallState b = ref w.GetBall(j);
+                        float overlap = a.Radius + b.Radius - (a.Position - b.Position).Length;
+                        worstOverlap = MathF.Max(worstOverlap, overlap / MathF.Min(a.Radius, b.Radius));
+                    }
+                }
+            }
+            _out.WriteLine("big-ball hits " + bigHits + ", big-big " + bigBigHits + ", worst overlap " + worstOverlap + " r");
+            Assert.True(bigHits > 50, "big balls must hit many small balls, got " + bigHits);
+            Assert.True(bigBigHits > 0, "the two big balls must collide");
+            Assert.True(worstOverlap < 0.5f, "worst overlap " + worstOverlap + " of the smaller radius");
+        }
+
+        [Fact]
+        public void GrowingBallsRunIsDeterministic()
+        {
+            ulong Run()
+            {
+                var w = new PhysicsWorld();
+                SimTestUtil.AddPolygonArena(w, 6, 3.6f, 0.12f, 1f, 0.9f, 0.2f);
+                var rng = Rng.FromSeed(4UL);
+                for (int i = 0; i < 60; i++)
+                {
+                    w.AddBall(SimTestUtil.Ball(new Vec2(rng.NextFloat(-2f, 2f), rng.NextFloat(-2f, 2f)),
+                        new Vec2(rng.NextFloat(-4f, 4f), rng.NextFloat(-4f, 4f)), 0.1f, 0.9f, 0.2f));
+                }
+                ulong acc = 0;
+                for (int t = 0; t < 300; t++)
+                {
+                    w.Step();
+                    // «Рост»: each ball grows on its own wall hits, so sizes drift apart (and the grid radius changes).
+                    foreach (var e in w.Events)
+                    {
+                        if (e.Kind == SimEventKind.Hit && w.GetBall(e.A).Radius < 0.6f) w.SetBallRadius(e.A, w.GetBall(e.A).Radius * 1.05f);
+                    }
+                    acc = acc * 31UL + w.ComputeStateHash();
+                }
+                return acc;
+            }
+
+            Assert.Equal(Run(), Run());
+        }
+
         [Fact]
         public void BallsSpreadFarApartStillCollideViaCoarserGrid()
         {

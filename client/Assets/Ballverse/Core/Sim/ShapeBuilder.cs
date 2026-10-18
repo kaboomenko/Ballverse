@@ -14,7 +14,7 @@ namespace Ballverse.Core.Sim
             for (int i = 0; i < sides; i++)
             {
                 float a = rotation + SimMath.TwoPi * i / sides;
-                pts[i] = centre + new Vec2(MathF.Cos(a), MathF.Sin(a)) * circumradius;
+                pts[i] = centre + Vec2.FromAngle(a) * circumradius;
             }
             return pts;
         }
@@ -30,7 +30,7 @@ namespace Ballverse.Core.Sim
             {
                 float a = rotation + SimMath.Pi * i / points;
                 float r = (i & 1) == 0 ? outerRadius : innerRadius;
-                pts[i] = centre + new Vec2(MathF.Cos(a), MathF.Sin(a)) * r;
+                pts[i] = centre + Vec2.FromAngle(a) * r;
             }
             return pts;
         }
@@ -53,7 +53,7 @@ namespace Ballverse.Core.Sim
         public static float Inradius(int sides, float circumradius)
         {
             if (sides < 3) throw new ArgumentOutOfRangeException(nameof(sides));
-            return circumradius * MathF.Cos(SimMath.Pi / sides);
+            return circumradius * SimMath.Cos(SimMath.Pi / sides);
         }
     }
 }

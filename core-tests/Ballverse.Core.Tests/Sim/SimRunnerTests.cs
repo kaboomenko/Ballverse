@@ -61,6 +61,46 @@ namespace Ballverse.Core.Tests.Sim
         }
 
         [Fact]
+        public void RunnerOnPreSteppedWorldRejectsPastTicksAndDeliversLaterInputs()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity());
+            for (int t = 0; t < 10; t++) w.Step(); // settle / pre-roll before the run
+            var rules = new ScriptedRules();
+            var runner = new SimRunner(w, rules);
+            Assert.Throws<ArgumentException>(() => runner.EnqueueInput(new SimInput(5, 1, 5)));
+            runner.EnqueueInput(new SimInput(10, 1, 10));
+            runner.EnqueueInput(new SimInput(20, 1, 20));
+            runner.EnqueueInput(new SimInput(30, 1, 30));
+            runner.RunHeadless(30);
+            Assert.Equal(3, rules.Applied.Count);
+            Assert.Equal((10, 10), (rules.Applied[0].tick, rules.Applied[0].input.A));
+            Assert.Equal((20, 20), (rules.Applied[1].tick, rules.Applied[1].input.A));
+            Assert.Equal((30, 30), (rules.Applied[2].tick, rules.Applied[2].input.A));
+            Assert.Equal(0, runner.PendingInputCount);
+            Assert.Equal(0, runner.DroppedInputCount);
+            Assert.Equal(40, runner.EnqueueInputNow(1));
+        }
+
+        [Fact]
+        public void InputsOfTicksSteppedOutsideTheRunnerAreDroppedAndCountedNotBlocking()
+        {
+            var rules = new ScriptedRules();
+            var runner = NewRunner(rules);
+            runner.EnqueueInput(new SimInput(1, 1, 1));
+            runner.EnqueueInput(new SimInput(2, 1, 2));
+            runner.EnqueueInput(new SimInput(5, 1, 5));
+            runner.Step();                 // tick 0
+            runner.World.Step();           // tick 1 runs without the runner: its input is lost
+            runner.World.Step();           // tick 2 as well
+            runner.RunHeadless(5);         // ticks 3..7
+            Assert.Single(rules.Applied);
+            Assert.Equal((5, 5), (rules.Applied[0].tick, rules.Applied[0].input.A));
+            Assert.Equal(2, runner.DroppedInputCount);
+            Assert.Equal(0, runner.PendingInputCount);
+            Assert.Throws<ArgumentException>(() => runner.EnqueueInput(new SimInput(6, 0)));
+        }
+
+        [Fact]
         public void RulesMayQueueInputsForLaterTicksDuringTick()
         {
             var rules = new ScriptedRules();

@@ -4,15 +4,45 @@ namespace Ballverse.Core.Sim
 {
     public sealed partial class PhysicsWorld
     {
+        bool _stepping;
+        float _gravityLength;
+        float _effectiveMaxSpeed;
+
+        /// <summary>
+        /// Speed clamp the next tick will use (the current one while stepping): <see cref="SimSettings.MaxSpeed"/>, raised to
+        /// the fastest wall surface speed plus <see cref="SimSettings.WallSpeedMargin"/> so the clamp never makes a ball slower
+        /// than the wall pushing it (spec §6.5: max(maxSpeed; v_wall,max + 5 m/s)).
+        /// </summary>
+        public float EffectiveMaxSpeed => _stepping ? _effectiveMaxSpeed : ComputeEffectiveMaxSpeed();
+
+        /// <summary>True while <see cref="Step"/> runs (contact hooks): adding balls, bodies or colliders is refused then.</summary>
+        public bool IsStepping => _stepping;
+
         /// <summary>
         /// Advances the world by one tick (1/60 s) in <see cref="SimSettings.Substeps"/> substeps: kinematic bodies move,
         /// balls integrate gravity, ball–ball contacts are solved (uniform grid; bottom-up along gravity, otherwise ascending
-        /// id), then every ball (ascending id) is swept and resolved against the colliders (ascending id), so walls win over
-        /// ball pushes. Afterwards <see cref="Events"/> holds this tick's sorted events.
+        /// id), then every ball (ascending id) is swept against all colliders at once and resolved (time of impact order, then
+        /// overlaps by ascending collider id), so walls win over ball pushes. Afterwards <see cref="Events"/> holds this tick's
+        /// sorted events.
         /// </summary>
         public void Step()
         {
+            if (_stepping) throw new InvalidOperationException("Step() called from inside Step() (contact hook)");
+            _stepping = true;
+            try
+            {
+                StepCore();
+            }
+            finally
+            {
+                _stepping = false;
+            }
+        }
+
+        void StepCore()
+        {
             BeginTickEvents();
+            EnsureColliderScratch();
             float dt = TickDuration;
             for (int i = 0; i < _bodyCount; i++)
             {
@@ -22,6 +52,8 @@ namespace Ballverse.Core.Sim
                 b.LinearVelocity = (f.TargetPosition - b.Position) * SimConstants.TickRate;
                 b.AngularVelocity = SimMath.WrapPi(f.TargetAngle - b.Angle) * SimConstants.TickRate;
             }
+            _gravityLength = _settings.Gravity.Length;
+            _effectiveMaxSpeed = ComputeEffectiveMaxSpeed();
 
             int substeps = _settings.Substeps;
             float h = dt / substeps;
@@ -42,8 +74,7 @@ namespace Ballverse.Core.Sim
                 // Keep angles small so float precision does not degrade over a 180 s run.
                 b.Angle = SimMath.WrapPi(b.Angle);
                 b.Spin = SimMath.WrapPi(b.Spin);
-                f.Cos = MathF.Cos(b.Angle);
-                f.Sin = MathF.Sin(b.Angle);
+                SimMath.SinCos(b.Angle, out f.Sin, out f.Cos);
             }
             for (int i = 0; i < _ballCount; i++)
             {
@@ -64,13 +95,12 @@ namespace Ballverse.Core.Sim
                 f.PrevCos = f.Cos;
                 f.PrevSin = f.Sin;
                 f.PrevScale = b.Scale;
-                if (b.Kind != BodyKind.Kinematic || !b.Enabled) continue;
+                if (b.Motion != BodyMotion.Kinematic || !b.Enabled) continue;
                 b.Position = b.Position + b.LinearVelocity * h;
                 if (b.AngularVelocity != 0f)
                 {
                     b.Angle = b.Angle + b.AngularVelocity * h;
-                    f.Cos = MathF.Cos(b.Angle);
-                    f.Sin = MathF.Sin(b.Angle);
+                    SimMath.SinCos(b.Angle, out f.Sin, out f.Cos);
                 }
                 if (b.ScaleVelocity != 0f)
                 {
@@ -81,7 +111,7 @@ namespace Ballverse.Core.Sim
             }
 
             Vec2 g = _settings.Gravity;
-            float maxSpeed = _settings.MaxSpeed;
+            float maxSpeed = _effectiveMaxSpeed;
             for (int i = 0; i < _ballCount; i++)
             {
                 ref BallState b = ref _balls[i];
@@ -101,17 +131,8 @@ namespace Ballverse.Core.Sim
                 ref BallState b = ref _balls[i];
                 if (!b.Alive || b.Mask == 0u) continue;
                 Vec2 p0 = _ballPrev[i];
-                float r = b.Radius;
-                for (int c = 0; c < _colliderCount; c++)
-                {
-                    ref ColliderBounds cb = ref _colliderBounds[c];
-                    if (!cb.Active) continue;
-                    ref ColliderData cd = ref _colliders[c];
-                    if (cd.Material.IsSensor) continue;
-                    if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
-                    if (!MayTouch(ref cb, p0, b.Position, r)) continue;
-                    CollideBallWithCollider(i, c, h);
-                }
+                CollideBallWithWalls(i, h);
+                if (!b.Alive) continue;
                 ApplyLocksAndClamp(ref b, maxSpeed);
                 if ((b.Flags & BallFlags.LockX) != 0) b.Position.X = p0.X;
                 if ((b.Flags & BallFlags.LockY) != 0) b.Position.Y = p0.Y;
@@ -134,6 +155,46 @@ namespace Ballverse.Core.Sim
             float maxSpin = 2f * maxSpeed / b.Radius;
             if (b.AngularVelocity > maxSpin) b.AngularVelocity = maxSpin;
             else if (b.AngularVelocity < -maxSpin) b.AngularVelocity = -maxSpin;
+        }
+
+        /// <summary>
+        /// max(MaxSpeed, v_wall,max + WallSpeedMargin): v_wall,max bounds the surface speed of every enabled kinematic collider
+        /// over its whole extent (linear + |ω|·reach + scale rate·reach + platform spin), a slight over-estimate of the
+        /// "reachable zone" of spec §6.5. Body velocities are constant within a tick, so this is evaluated once per tick.
+        /// </summary>
+        float ComputeEffectiveMaxSpeed()
+        {
+            float max = _settings.MaxSpeed;
+            float margin = _settings.WallSpeedMargin;
+            if (margin < 0f) return max;
+            float wall = 0f;
+            for (int c = 0; c < _colliderCount; c++)
+            {
+                ref ColliderData cd = ref _colliders[c];
+                if (!cd.Enabled || cd.Material.IsSensor) continue;
+                ref BodyState b = ref _bodies[cd.Body];
+                if (!b.Enabled || b.Motion != BodyMotion.Kinematic) continue;
+                float reach = (cd.BoundCentre.Length + cd.BoundRadius) * b.Scale + cd.HalfThickness;
+                float v = b.LinearVelocity.Length + MathF.Abs(b.AngularVelocity) * reach + MathF.Abs(b.ScaleVelocity) * reach / b.Scale;
+                if (cd.Kind == ColliderKind.SpinPlatform) v += MathF.Abs(b.SpinVelocity) * cd.Radius * b.Scale;
+                if (v > wall) wall = v;
+            }
+            // No moving wall: the clamp stays exactly MaxSpeed (even below the margin).
+            if (wall <= 0f) return max;
+            float limit = wall + margin;
+            return limit > max ? limit : max;
+        }
+
+        /// <summary>
+        /// Restitution threshold for a ball with the given gravity scale: <see cref="SimSettings.RestitutionThreshold"/> scaled by
+        /// the ball's effective gravity relative to 1 g (capped at 1). Without gravity nothing has to come to rest, so slow
+        /// elastic contacts keep their energy.
+        /// </summary>
+        float RestingThreshold(float gravityScale)
+        {
+            float g = _gravityLength * MathF.Abs(gravityScale);
+            if (g >= SimSettings.StandardGravity) return _settings.RestitutionThreshold;
+            return _settings.RestitutionThreshold * (g / SimSettings.StandardGravity);
         }
 
         void UpdateColliderBounds(float h)

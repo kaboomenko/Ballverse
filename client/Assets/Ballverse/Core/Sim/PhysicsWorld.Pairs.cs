@@ -5,6 +5,12 @@ namespace Ballverse.Core.Sim
     // Ball–ball contacts: uniform grid broadphase rebuilt every substep (counting sort, cells filled in a fixed order),
     // sequential impulses with positional correction.
     //
+    // Cell size: twice the "grid radius" — the largest radius not above twice the median radius of the colliding balls
+    // (cached until a radius, filter or ball count changes). Balls up to that radius are binned and find their partners in
+    // the 3×3 cell neighbourhood; the rare larger ones ("big" balls: grown balls, wide size spreads) stay out of the grid and
+    // are paired with every other ball directly. One grown ball therefore costs O(n) checks instead of inflating every cell
+    // (and every candidate list) to its size.
+    //
     // Visiting order: with gravity, balls are ranked by height along −gravity (ties by id) and every pair is solved from
     // the lower ball's rank upwards ("shock propagation", Guendelman et al. 2003): for a contact whose normal points
     // mostly up, the lower ball counts as immovable for the positional correction, and also for the impulse when the
@@ -30,7 +36,16 @@ namespace Ballverse.Core.Sim
         ulong[] _orderKeys = new ulong[16];
         ulong[] _orderScratch = new ulong[16];
         int[] _cellItems = new int[16];
-        int[] _candidates = new int[16];
+        ulong[] _candidates = new ulong[16];
+        ulong[] _candidateScratch = new ulong[16];
+        int[] _bigBalls = new int[16];
+        int[] _pairStart = new int[17];
+        int[] _pairBalls = new int[64];
+        int _bigCount;
+        float _gridRadius;
+        int _gridRadiusVersion = -1;
+        /// <summary>Bumped whenever a radius, filter, alive flag or the ball count changes (grid radius cache key).</summary>
+        int _radiusVersion;
         int[] _cellStart = new int[64];
         int[] _cellFill = new int[64];
         int _gridDimX, _gridDimY;
@@ -48,6 +63,9 @@ namespace Ballverse.Core.Sim
             Array.Resize(ref _orderScratch, size);
             Array.Resize(ref _cellItems, size);
             Array.Resize(ref _candidates, size);
+            Array.Resize(ref _candidateScratch, size);
+            Array.Resize(ref _bigBalls, size);
+            Array.Resize(ref _pairStart, size + 1);
         }
 
         void SolveBallPairs()
@@ -60,37 +78,77 @@ namespace Ballverse.Core.Sim
             if (n < 2) return;
             BuildOrder(n);
             int dimX = _gridDimX, dimY = _gridDimY;
-            // Later passes reuse the grid and order: corrections move balls far less than a cell.
+            // Pass 1 gathers each ball's later-visited partners (grid neighbourhood + big balls, sorted by visiting rank),
+            // solves them and records them; later passes replay the recorded lists — the same grid and order would give
+            // the same lists (corrections move balls far less than a cell).
+            int pairs = 0;
+            for (int k = 0; k < n; k++)
+            {
+                int i = _order[k];
+                _pairStart[k] = pairs;
+                int cell = _cellOfBall[i];
+                if (cell < 0)
+                {
+                    // Big ball: every later-visited ball is a candidate, already in visiting order.
+                    EnsurePairCapacity(pairs + n - k);
+                    for (int m = k + 1; m < n; m++)
+                    {
+                        int j = _order[m];
+                        _pairBalls[pairs++] = j;
+                        SolvePair(i, j);
+                    }
+                    continue;
+                }
+                int cy = cell / dimX;
+                int cx = cell - cy * dimX;
+                int count = 0;
+                int y0 = cy > 0 ? cy - 1 : 0, y1 = cy + 1 < dimY ? cy + 1 : dimY - 1;
+                int x0 = cx > 0 ? cx - 1 : 0, x1 = cx + 1 < dimX ? cx + 1 : dimX - 1;
+                for (int y = y0; y <= y1; y++)
+                {
+                    for (int x = x0; x <= x1; x++)
+                    {
+                        int c = y * dimX + x;
+                        int end = _cellStart[c + 1];
+                        for (int m = _cellStart[c]; m < end; m++)
+                        {
+                            int rj = _rank[_cellItems[m]];
+                            if (rj > k) _candidates[count++] = (ulong)rj;
+                        }
+                    }
+                }
+                for (int m = 0; m < _bigCount; m++)
+                {
+                    int rj = _rank[_bigBalls[m]];
+                    if (rj > k) _candidates[count++] = (ulong)rj;
+                }
+                if (count == 0) continue;
+                // Solve in visiting order (bottom-up under gravity); merge sort beyond short lists.
+                SimSort.Sort(_candidates, count, _candidateScratch);
+                EnsurePairCapacity(pairs + count);
+                for (int m = 0; m < count; m++)
+                {
+                    int j = _order[(int)_candidates[m]];
+                    _pairBalls[pairs++] = j;
+                    SolvePair(i, j);
+                }
+            }
+            _pairStart[n] = pairs;
             int iterations = _settings.BallIterations;
-            for (int it = 0; it < iterations; it++)
+            for (int it = 1; it < iterations; it++)
             {
                 for (int k = 0; k < n; k++)
                 {
                     int i = _order[k];
-                    int cell = _cellOfBall[i];
-                    int cy = cell / dimX;
-                    int cx = cell - cy * dimX;
-                    int count = 0;
-                    int y0 = cy > 0 ? cy - 1 : 0, y1 = cy + 1 < dimY ? cy + 1 : dimY - 1;
-                    int x0 = cx > 0 ? cx - 1 : 0, x1 = cx + 1 < dimX ? cx + 1 : dimX - 1;
-                    for (int y = y0; y <= y1; y++)
-                    {
-                        for (int x = x0; x <= x1; x++)
-                        {
-                            int c = y * dimX + x;
-                            int end = _cellStart[c + 1];
-                            for (int m = _cellStart[c]; m < end; m++)
-                            {
-                                int rj = _rank[_cellItems[m]];
-                                if (rj > k) _candidates[count++] = rj;
-                            }
-                        }
-                    }
-                    if (count == 0) continue;
-                    SimSort.InsertionSort(_candidates, 0, count);
-                    for (int m = 0; m < count; m++) SolvePair(i, _order[_candidates[m]]);
+                    int end = _pairStart[k + 1];
+                    for (int m = _pairStart[k]; m < end; m++) SolvePair(i, _pairBalls[m]);
                 }
             }
+        }
+
+        void EnsurePairCapacity(int size)
+        {
+            if (_pairBalls.Length < size) Array.Resize(ref _pairBalls, Math.Max(size, _pairBalls.Length * 2));
         }
 
         /// <summary>Fills <see cref="_order"/> (visiting order) and <see cref="_rank"/> (inverse) for the binned balls.</summary>
@@ -121,25 +179,45 @@ namespace Ballverse.Core.Sim
             return bits < 0 ? ~(uint)bits : (uint)bits | 0x80000000u;
         }
 
-        /// <summary>Bins colliding balls into a grid with cells ≥ the largest diameter. Returns the number of binned balls.</summary>
+        /// <summary>
+        /// Bins colliding balls up to the grid radius into a grid with cells of twice that radius; larger balls go to
+        /// <see cref="_bigBalls"/> (cell −1). Returns the number of colliding balls (binned + big).
+        /// </summary>
         int BuildGrid()
         {
             int n = 0;
-            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue, maxR = 0f;
             for (int i = 0; i < _ballCount; i++)
             {
                 ref BallState b = ref _balls[i];
                 if (!b.Alive || b.Mask == 0u || b.Category == 0u) continue;
                 _gridBalls[n++] = i;
+            }
+            _bigCount = 0;
+            if (n < 2) return n;
+            if (_gridRadiusVersion != _radiusVersion) UpdateGridRadius(n);
+            float cut = _gridRadius;
+            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+            for (int k = 0; k < n; k++)
+            {
+                int id = _gridBalls[k];
+                ref BallState b = ref _balls[id];
                 Vec2 p = b.Position;
+                if (b.Radius > cut)
+                {
+                    _bigBalls[_bigCount++] = id;
+                    continue;
+                }
                 if (p.X < minX) minX = p.X;
                 if (p.Y < minY) minY = p.Y;
                 if (p.X > maxX) maxX = p.X;
                 if (p.Y > maxY) maxY = p.Y;
-                if (b.Radius > maxR) maxR = b.Radius;
             }
-            if (n < 2) return n;
-            float cellSize = 2f * maxR;
+            if (_bigCount == n)
+            {
+                // Only big balls (cannot happen with the median rule, kept for safety): an empty one-cell grid.
+                minX = minY = maxX = maxY = 0f;
+            }
+            float cellSize = 2f * cut;
             if (cellSize < MinCellSize) cellSize = MinCellSize;
             float w = maxX - minX, hgt = maxY - minY;
             if (!SimMath.IsFinite(w) || !SimMath.IsFinite(hgt)) throw new InvalidOperationException("Ball positions are not finite");
@@ -165,6 +243,12 @@ namespace Ballverse.Core.Sim
             for (int k = 0; k < n; k++)
             {
                 int id = _gridBalls[k];
+                if (_balls[id].Radius > cut)
+                {
+                    _gridCellOf[k] = -1;
+                    _cellOfBall[id] = -1;
+                    continue;
+                }
                 Vec2 p = _balls[id].Position;
                 int cx = (int)((p.X - minX) * inv);
                 int cy = (int)((p.Y - minY) * inv);
@@ -179,8 +263,37 @@ namespace Ballverse.Core.Sim
             }
             for (int c = 0; c < cells; c++) _cellStart[c + 1] += _cellStart[c];
             for (int c = 0; c < cells; c++) _cellFill[c] = _cellStart[c];
-            for (int k = 0; k < n; k++) _cellItems[_cellFill[_gridCellOf[k]]++] = _gridBalls[k];
+            for (int k = 0; k < n; k++)
+            {
+                int cell = _gridCellOf[k];
+                if (cell >= 0) _cellItems[_cellFill[cell]++] = _gridBalls[k];
+            }
             return n;
+        }
+
+        /// <summary>Grid radius = largest radius ≤ 2 × median radius of the colliding balls (<see cref="_gridBalls"/>[0..n)).</summary>
+        void UpdateGridRadius(int n)
+        {
+            for (int k = 0; k < n; k++)
+            {
+                int id = _gridBalls[k];
+                _orderKeys[k] = ((ulong)SortableBits(_balls[id].Radius) << 32) | (uint)id;
+            }
+            SimSort.Sort(_orderKeys, n, _orderScratch);
+            float median = _balls[(int)(_orderKeys[n / 2] & 0xFFFFFFFFUL)].Radius;
+            float limit = 2f * median;
+            float cut = median;
+            for (int k = n - 1; k >= 0; k--)
+            {
+                float r = _balls[(int)(_orderKeys[k] & 0xFFFFFFFFUL)].Radius;
+                if (r <= limit)
+                {
+                    cut = r;
+                    break;
+                }
+            }
+            _gridRadius = cut;
+            _gridRadiusVersion = _radiusVersion;
         }
 
         /// <summary>Solves one pair; <paramref name="ia"/> is the earlier-visited (lower) ball.</summary>
@@ -188,6 +301,7 @@ namespace Ballverse.Core.Sim
         {
             ref BallState a = ref _balls[ia];
             ref BallState b = ref _balls[ib];
+            if (!a.Alive || !b.Alive) return;
             if ((a.Mask & b.Category) == 0u || (b.Mask & a.Category) == 0u) return;
             Vec2 d = b.Position - a.Position;
             float rs = a.Radius + b.Radius;
@@ -211,10 +325,12 @@ namespace Ballverse.Core.Sim
             {
                 var info = new ContactPoint { Point = point, Normal = ia < ib ? n : -n, ApproachSpeed = -vn };
                 if (!hook.PreSolveBallHit(this, ia < ib ? ia : ib, ia < ib ? ib : ia, in info)) return;
+                if (!a.Alive || !b.Alive) return;
             }
 
             bool stacking = _shock && Vec2.Dot(n, _up) > StackingNormalCos;
-            bool resting = -vn < _settings.RestitutionThreshold;
+            float gs = MathF.Abs(a.GravityScale) > MathF.Abs(b.GravityScale) ? a.GravityScale : b.GravityScale;
+            bool resting = -vn < RestingThreshold(gs);
             float invMa = stacking ? 0f : a.InvMass;
             float pen = rs - dist - _settings.PositionSlop;
             if (pen > 0f)

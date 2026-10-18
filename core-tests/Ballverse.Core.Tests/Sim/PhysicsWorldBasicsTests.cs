@@ -101,6 +101,53 @@ namespace Ballverse.Core.Tests.Sim
             Assert.Equal(1, w.AliveBallCount);
         }
 
+        /// <summary>Spec §6.5: the clamp is max(maxSpeed; v_wall,max + 5 m/s) so a slow clamp never makes a ball slower than the wall pushing it.</summary>
+        [Fact]
+        public void EffectiveMaxSpeedFollowsFastestWallSurfaceSpeed()
+        {
+            var w = new PhysicsWorld(SimTestUtil.NoGravity(maxSpeed: 5f));
+            Assert.Equal(5f, w.EffectiveMaxSpeed);
+            // Bar of length 4 m (+ 0.05 m half thickness) spinning at 5 rad/s: tip speed 20.25 m/s.
+            int bar = w.AddBody(BodyDef.Kinematic(Vec2.Zero, 0f, 5f));
+            w.AddSegment(bar, Vec2.Zero, new Vec2(4f, 0f), 0.1f, SimTestUtil.Wall(0.5f, 0f));
+            Assert.Equal(5f * 4.05f + 5f, w.EffectiveMaxSpeed, 3);
+            int b = w.AddBall(SimTestUtil.Ball(new Vec2(0f, 3.5f), Vec2.Zero, 0.1f, 0.5f, 0f));
+            float max = 0f;
+            for (int t = 0; t < 120; t++)
+            {
+                w.Step();
+                max = MathF.Max(max, w.GetBall(b).Velocity.Length);
+            }
+            Assert.True(max > 15f, "the bar (17.5 m/s at the ball) must throw the ball faster than maxSpeed 5, got " + max);
+            Assert.True(max <= w.EffectiveMaxSpeed + 1e-3f, "max " + max);
+
+            // A negative margin restores the strict clamp; a disabled body does not count.
+            var strict = w.Settings;
+            strict.WallSpeedMargin = -1f;
+            w.Settings = strict;
+            Assert.Equal(5f, w.EffectiveMaxSpeed);
+            strict.WallSpeedMargin = 5f;
+            w.Settings = strict;
+            w.SetBodyEnabled(bar, false);
+            Assert.Equal(5f, w.EffectiveMaxSpeed);
+        }
+
+        [Fact]
+        public void StrictClampKeepsBallAtMaxSpeedEvenAgainstFastWall()
+        {
+            var s = SimTestUtil.NoGravity(maxSpeed: 5f);
+            s.WallSpeedMargin = -1f;
+            var w = new PhysicsWorld(s);
+            int bar = w.AddBody(BodyDef.Kinematic(Vec2.Zero, 0f, 5f));
+            w.AddSegment(bar, Vec2.Zero, new Vec2(4f, 0f), 0.1f, SimTestUtil.Wall(0.5f, 0f));
+            int b = w.AddBall(SimTestUtil.Ball(new Vec2(0f, 3.5f), Vec2.Zero, 0.1f, 0.5f, 0f));
+            for (int t = 0; t < 120; t++)
+            {
+                w.Step();
+                Assert.True(w.GetBall(b).Velocity.Length <= 5f + 1e-3f);
+            }
+        }
+
         [Fact]
         public void MaxSpeedClampHoldsAfterSuperElasticBounces()
         {
