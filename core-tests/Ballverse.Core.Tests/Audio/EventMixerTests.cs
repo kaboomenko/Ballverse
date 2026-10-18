@@ -290,18 +290,25 @@ namespace Ballverse.Core.Tests.Audio
                 mixer.Render(buffer);
                 tick++;
             }
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 3000; i++)
+            // Warm up with the same event/chunk distribution that is measured, so first-use paths
+            // (new event types, new chunk lengths, tier-up) are outside the measured window.
+            void RunRandom(int iterations)
             {
-                int n = rng.NextInt(0, 4);
-                for (int k = 0; k < n; k++)
+                for (int i = 0; i < iterations; i++)
                 {
-                    var type = (SoundEventType)rng.NextInt(0, 8);
-                    mixer.Queue.TryEnqueue(new SoundEvent(tick, type, rng.NextInt(-1, 80), rng.NextFloat(0f, 8f), rng.NextFloat(0.1f, 1.5f), 0f));
+                    int n = rng.NextInt(0, 4);
+                    for (int k = 0; k < n; k++)
+                    {
+                        var type = (SoundEventType)rng.NextInt(0, 8);
+                        mixer.Queue.TryEnqueue(new SoundEvent(tick, type, rng.NextInt(-1, 80), rng.NextFloat(0f, 8f), rng.NextFloat(0.1f, 1.5f), 0f));
+                    }
+                    if ((i & 1) == 0) tick++;
+                    mixer.Render(new Span<float>(buffer, 0, 2 * rng.NextInt(0, 257)));
                 }
-                if ((i & 1) == 0) tick++;
-                mixer.Render(new Span<float>(buffer, 0, 2 * rng.NextInt(0, 257)));
             }
+            RunRandom(3000);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            RunRandom(3000);
             long after = GC.GetAllocatedBytesForCurrentThread();
             Assert.Equal(0L, after - before);
             Assert.True(mixer.VoicesStarted > 200, "voices " + mixer.VoicesStarted);
