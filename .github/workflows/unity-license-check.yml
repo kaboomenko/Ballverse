@@ -8,6 +8,10 @@ on:
     paths:
       - ".github/workflows/unity-license-check.yml"
 
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
