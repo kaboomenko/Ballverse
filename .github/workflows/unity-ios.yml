@@ -42,7 +42,7 @@ on:
 # push, and a second manual run waits for the first.
 concurrency:
   group: unity-ios-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

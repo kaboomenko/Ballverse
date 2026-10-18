@@ -31,11 +31,11 @@ on:
       - "client/**"
       - ".github/workflows/unity-android.yml"
 
-# Pushes cancel older push runs of the same branch only; a manual run (App Bundle) is never cancelled by a push, and
-# a second manual run waits for the first.
+# Builds are long: a new run never cancels a running one. GitHub keeps only the newest pending run per group,
+# so a burst of pushes builds the running commit and then the latest one.
 concurrency:
   group: unity-android-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
