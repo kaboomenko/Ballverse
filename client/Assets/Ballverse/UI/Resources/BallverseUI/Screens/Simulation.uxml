@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="simulation" class="bv-sim bv-fill">
+        <ui:VisualElement name="render" class="bv-sim__render bv-fill" />
+        <ui:VisualElement name="chrome-top" class="bv-sim__chrome-top" picking-mode="Ignore">
+            <ui:VisualElement class="bv-safe-top" picking-mode="Ignore" />
+            <ui:VisualElement name="topbar" class="bv-sim__topbar bv-glass">
+                <ui:VisualElement name="back" class="bv-icon-btn">
+                    <ui:VisualElement class="bv-icon icon--back" />
+                </ui:VisualElement>
+                <ui:VisualElement name="title-area" class="bv-sim__title-area">
+                    <ui:Label name="mode-name" class="bv-sim__mode-name" picking-mode="Ignore" />
+                    <ui:VisualElement class="bv-sim__preset-row" picking-mode="Ignore">
+                        <ui:Label name="preset-name" class="bv-sim__preset-name" picking-mode="Ignore" />
+                        <ui:Label name="preset-modified" text="#sim.preset_modified" class="bv-sim__preset-modified" picking-mode="Ignore" />
+                        <ui:VisualElement class="bv-icon icon--chevron-down bv-icon--small" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+                <ui:VisualElement name="settings" class="bv-icon-btn">
+                    <ui:VisualElement class="bv-icon icon--gear" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement name="quest" class="bv-quest bv-glass">
+                <ui:VisualElement name="quest-header" class="bv-quest__header">
+                    <ui:Label text="#quest.title" class="bv-quest__title" picking-mode="Ignore" />
+                    <ui:VisualElement name="quest-toggle-icon" class="bv-icon icon--chevron-down bv-icon--small" />
+                </ui:VisualElement>
+                <ui:VisualElement name="quest-steps" class="bv-quest__steps">
+                    <ui:VisualElement name="quest-run" class="bv-quest__step">
+                        <ui:VisualElement class="bv-icon icon--check bv-quest__check" />
+                        <ui:Label text="#quest.step_run" class="bv-quest__step-label" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="quest-generate" class="bv-quest__step">
+                        <ui:VisualElement class="bv-icon icon--check bv-quest__check" />
+                        <ui:Label text="#quest.step_generate" class="bv-quest__step-label" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="quest-export" class="bv-quest__step">
+                        <ui:VisualElement class="bv-icon icon--check bv-quest__check" />
+                        <ui:Label text="#quest.step_export" class="bv-quest__step-label" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="result" class="bv-result-host" picking-mode="Ignore">
+            <ui:VisualElement name="result-card" class="bv-result bv-glass">
+                <ui:VisualElement class="bv-result__head">
+                    <ui:VisualElement name="result-dot" class="bv-result__dot" />
+                    <ui:Label name="result-headline" class="bv-result__headline" />
+                </ui:VisualElement>
+                <ui:Label name="result-time" class="bv-result__time" />
+                <ui:VisualElement name="result-stats" class="bv-result__stats" />
+                <ui:VisualElement class="bv-result__actions">
+                    <ui:VisualElement name="result-retry" class="bv-btn bv-btn--secondary bv-btn--grow">
+                        <ui:VisualElement class="bv-icon icon--retry bv-btn__icon" />
+                        <ui:Label text="#sim.retry" class="bv-btn__label" picking-mode="Ignore" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="result-generate" class="bv-btn bv-btn--secondary bv-btn--grow">
+                        <ui:VisualElement class="bv-icon icon--dice bv-btn__icon" />
+                        <ui:Label text="#sim.generate" class="bv-btn__label" picking-mode="Ignore" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+                <ui:VisualElement name="result-to-video" class="bv-btn bv-btn--primary bv-btn--block">
+                    <ui:VisualElement class="bv-icon icon--film bv-btn__icon" />
+                    <ui:Label text="#sim.to_video" class="bv-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+                <ui:Label text="#sim.previous_runs" class="bv-result__runs-title" />
+                <ui:ScrollView name="result-runs" mode="Horizontal" class="bv-result__runs" />
+                <ui:VisualElement name="result-save-clip" class="bv-btn bv-btn--plain bv-btn--block">
+                    <ui:VisualElement class="bv-icon icon--clip bv-btn__icon" />
+                    <ui:Label text="#sim.save_clip" class="bv-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="chrome-bottom" class="bv-sim__chrome-bottom" picking-mode="Ignore">
+            <ui:VisualElement name="generating" class="bv-sim__generating" picking-mode="Ignore">
+                <ui:Label text="#sim.generating" class="bv-sim__generating-label" picking-mode="Ignore" />
+                <ui:VisualElement name="generating-track" class="bv-progress" picking-mode="Ignore">
+                    <ui:VisualElement name="generating-fill" class="bv-progress__fill" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement name="bottombar" class="bv-sim__bottombar bv-glass">
+                <ui:VisualElement name="retry" class="bv-icon-btn">
+                    <ui:VisualElement class="bv-icon icon--retry" />
+                </ui:VisualElement>
+                <ui:VisualElement name="play" class="bv-icon-btn">
+                    <ui:VisualElement name="play-icon" class="bv-icon icon--pause" />
+                </ui:VisualElement>
+                <ui:VisualElement name="generate" class="bv-dice-btn">
+                    <ui:VisualElement name="generate-icon" class="bv-icon icon--dice bv-dice-btn__icon" />
+                </ui:VisualElement>
+                <ui:VisualElement name="speed" class="bv-icon-btn bv-speed-btn">
+                    <ui:Label name="speed-label" class="bv-speed-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+                <ui:VisualElement name="to-video" class="bv-btn bv-btn--primary bv-to-video">
+                    <ui:VisualElement class="bv-icon icon--film bv-btn__icon" />
+                    <ui:Label text="#sim.to_video" class="bv-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-safe-bottom" picking-mode="Ignore" />
+        </ui:VisualElement>
+
+        <ui:VisualElement name="hint" class="bv-hint" picking-mode="Ignore">
+            <ui:Label name="hint-text" class="bv-hint__text" picking-mode="Ignore" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

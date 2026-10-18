@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="projects" class="bv-page bv-fill">
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-header">
+            <ui:Label text="#projects.title" class="bv-header__title" />
+            <ui:VisualElement name="settings" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--gear" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:VisualElement name="tabs-host" class="bv-page__tabs" />
+        <ui:ScrollView name="scroll" class="bv-page__scroll">
+            <ui:VisualElement name="grid" class="bv-grid" />
+            <ui:VisualElement name="empty" class="bv-empty">
+                <ui:VisualElement name="empty-icon" class="bv-icon icon--film bv-empty__icon" />
+                <ui:Label name="empty-title" text="#projects.empty.title" class="bv-empty__title" />
+                <ui:Label name="empty-body" text="#projects.empty.body" class="bv-empty__body" />
+                <ui:VisualElement name="empty-action" class="bv-btn bv-btn--primary">
+                    <ui:VisualElement class="bv-icon icon--plus bv-btn__icon" />
+                    <ui:Label text="#projects.empty.action" class="bv-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-tabbar-spacer" />
+        </ui:ScrollView>
+    </ui:VisualElement>
+</ui:UXML>

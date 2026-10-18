@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="tracking" class="bv-page bv-page--solid bv-fill">
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-consent">
+            <ui:VisualElement class="bv-consent__art">
+                <ui:VisualElement class="bv-icon icon--shield bv-consent__icon" />
+            </ui:VisualElement>
+            <ui:Label text="#consent.att.title" class="bv-consent__title" />
+            <ui:Label text="#consent.att.body" class="bv-consent__body" />
+            <ui:VisualElement class="bv-consent__points">
+                <ui:VisualElement class="bv-consent__point">
+                    <ui:VisualElement class="bv-icon icon--check bv-consent__point-icon" />
+                    <ui:Label text="#consent.att.point_free" class="bv-consent__point-label" />
+                </ui:VisualElement>
+                <ui:VisualElement class="bv-consent__point">
+                    <ui:VisualElement class="bv-icon icon--check bv-consent__point-icon" />
+                    <ui:Label text="#consent.att.point_choice" class="bv-consent__point-label" />
+                </ui:VisualElement>
+                <ui:VisualElement class="bv-consent__point">
+                    <ui:VisualElement class="bv-icon icon--check bv-consent__point-icon" />
+                    <ui:Label text="#consent.att.point_videos" class="bv-consent__point-label" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-header__spacer" />
+            <ui:VisualElement name="continue" class="bv-btn bv-btn--primary bv-btn--block">
+                <ui:Label text="#common.continue" class="bv-btn__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:VisualElement class="bv-safe-bottom" />
+    </ui:VisualElement>
+</ui:UXML>

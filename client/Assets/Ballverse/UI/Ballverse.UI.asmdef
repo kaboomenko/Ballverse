@@ -1,0 +1,30 @@
+{
+    "name": "Ballverse.UI",
+    "rootNamespace": "Ballverse.UI",
+    "references": [
+        "Ballverse.Core",
+        "Unity.InputSystem"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.inputsystem",
+            "expression": "1.0.0",
+            "define": "BALLVERSE_INPUT_SYSTEM"
+        },
+        {
+            "name": "com.unity.modules.accessibility",
+            "expression": "1.0.0",
+            "define": "BALLVERSE_ACCESSIBILITY"
+        }
+    ],
+    "noEngineReferences": false
+}
