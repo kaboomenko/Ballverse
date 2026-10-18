@@ -262,13 +262,16 @@ namespace Ballverse.Core.Projects
             doc.CreatedAt = nowIso;
             doc.UpdatedAt = nowIso;
             doc.Exports = new List<ExportRecord>();
-            // Membership only; never enumerated.
-            var skip = new HashSet<string>(StringComparer.Ordinal) { ProjectPaths.ProjectFile, ProjectPaths.BackupFile, ProjectPaths.TempFile, ProjectPaths.BackupTempFile };
+            // Membership only; never enumerated. The source's project.json, backup and temp files are never copied
+            // (CopyTree skips them in any letter case): the copy's project.json is written last by Save, and the copy starts
+            // without a backup, so a crash never leaves a listable half-copy and the source never becomes the copy's backup.
+            var skip = new HashSet<string>(StringComparer.Ordinal);
             foreach (var e in src.Document.Exports)
             {
                 if (e.File != null) skip.Add(e.File);
             }
             // Files the copy still references are always copied, even if a (hand-edited) history entry names them.
+            // The sanitizer never lets a reference name a project file (ProjectPaths.IsSafeMediaPath).
             if (doc.Clip?.Replay != null) skip.Remove(doc.Clip.Replay);
             if (doc.UserVideo?.File != null) skip.Remove(doc.UserVideo.File);
             try
@@ -390,18 +393,23 @@ namespace Ballverse.Core.Projects
             }
         }
 
-        /// <summary>Copies the tree under <paramref name="from"/>, skipping files whose project-relative path is in <paramref name="skip"/>.</summary>
+        /// <summary>
+        /// Copies the tree under <paramref name="from"/>, skipping the root project files (<see cref="ProjectPaths.IsProjectFileName"/>,
+        /// any letter case) and files whose project-relative path is in <paramref name="skip"/>.
+        /// </summary>
         void CopyTree(string from, string to, string relPrefix, HashSet<string> skip)
         {
             foreach (var file in _store.ListFiles(from))
             {
-                if (skip.Contains(relPrefix + file)) continue;
+                string rel = relPrefix + file;
+                if (ProjectPaths.IsProjectFileName(rel) || skip.Contains(rel)) continue;
                 string dst = to + "/" + file;
                 _store.Copy(from + "/" + file, dst);
                 _store.Flush(dst);
             }
             foreach (var dir in _store.ListDirectories(from))
             {
+                if (ProjectPaths.IsProjectFileName(relPrefix + dir)) continue; // would block writing the copy's project.json
                 _store.CreateDirectory(to + "/" + dir);
                 CopyTree(from + "/" + dir, to + "/" + dir, relPrefix + dir + "/", skip);
             }
@@ -421,7 +429,7 @@ namespace Ballverse.Core.Projects
 
         static StorageCategory Categorize(string rel, string replay, string userVideo, HashSet<string> exports)
         {
-            if (rel == ProjectPaths.ProjectFile || rel == ProjectPaths.BackupFile || rel == ProjectPaths.TempFile || rel == ProjectPaths.BackupTempFile)
+            if (ProjectPaths.IsProjectFileName(rel))
             {
                 return StorageCategory.ProjectFile;
             }

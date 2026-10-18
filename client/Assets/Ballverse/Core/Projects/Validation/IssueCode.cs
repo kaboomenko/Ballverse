@@ -9,7 +9,7 @@ namespace Ballverse.Core.Projects
         InvalidValue,
         /// <summary>Color is not "#RRGGBB" / "#RRGGBBAA".</summary>
         InvalidColor,
-        /// <summary>Path is absolute, contains '..', backslashes or other forbidden characters.</summary>
+        /// <summary>Path is absolute, contains '..', backslashes or other forbidden characters, or names a reserved project file.</summary>
         UnsafePath,
         /// <summary>Id is missing or not a safe id.</summary>
         InvalidId,

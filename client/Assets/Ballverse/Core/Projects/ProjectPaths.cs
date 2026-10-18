@@ -81,6 +81,42 @@ namespace Ballverse.Core.Projects
             if (!IsSafeId(id)) throw new ArgumentException("Unsafe project id: '" + id + "'", paramName);
         }
 
+        /// <summary>
+        /// True when <paramref name="relativePath"/> names one of the project's own files at the folder root: project.json, its
+        /// backup or their temp files (spec §7.4). Compared ignoring case, as on case-insensitive file systems these names alias.
+        /// </summary>
+        public static bool IsProjectFileName(string relativePath)
+        {
+            return EqualsIgnoreCase(relativePath, ProjectFile)
+                || EqualsIgnoreCase(relativePath, BackupFile)
+                || EqualsIgnoreCase(relativePath, TempFile)
+                || EqualsIgnoreCase(relativePath, BackupTempFile);
+        }
+
+        /// <summary>
+        /// True for root-level names a media reference must not use (ignoring case): the project files
+        /// (<see cref="IsProjectFileName"/>) and the rebuildable render stream <see cref="ClipRenderFile"/>. A reference to them
+        /// would let media import, export cleanup or cache rebuilding overwrite or delete the project itself.
+        /// </summary>
+        public static bool IsReservedFileName(string relativePath)
+        {
+            return IsProjectFileName(relativePath) || EqualsIgnoreCase(relativePath, ClipRenderFile);
+        }
+
+        /// <summary>
+        /// True for a path project.json may reference as media (<c>clip.replay</c>, <c>userVideo.file</c>, <c>exports[].file</c>):
+        /// <see cref="IsSafeRelativePath"/> and not <see cref="IsReservedFileName"/> (spec §7.4).
+        /// </summary>
+        public static bool IsSafeMediaPath(string path)
+        {
+            return IsSafeRelativePath(path) && !IsReservedFileName(path);
+        }
+
+        static bool EqualsIgnoreCase(string a, string b)
+        {
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+
         static bool IsIdChar(char c)
         {
             return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';

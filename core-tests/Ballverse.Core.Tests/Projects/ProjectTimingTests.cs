@@ -89,6 +89,61 @@ namespace Ballverse.Core.Tests.Projects
         }
 
         [Fact]
+        public void ClipOutputNeverNegativeNearTheOverflowEdge()
+        {
+            // QA finding: units·10⁶ fits in a long but the old ceiling division (a + b − 1) / b wrapped to a negative value.
+            // 922337203 ticks at 11424.63x: a = 9223372030000000000, b = 60·1142463·100 = 6854778000, a + b − 1 > long.MaxValue.
+            long us = ProjectTiming.ClipOutputUs(0, 922337203, 11424.63, 0, 0.5);
+            Assert.Equal(ExactClipUs(0, 922337203, 11424.63, 0, 0.5), us);
+            Assert.Equal(1345539131L, us);
+        }
+
+        /// <summary>Exact clip output (µs, rounded up) of the documented model, in arbitrary precision.</summary>
+        static System.Numerics.BigInteger ExactClipUs(int trimIn, int trimOut, double speed, double seconds, double factor)
+        {
+            long length = (long)trimOut - trimIn;
+            long p = ProjectTiming.PercentFromRatio(speed);
+            if (length <= 0 || p <= 0) return 0;
+            long f = ProjectTiming.PercentFromRatio(factor);
+            long slow = ProjectTiming.TicksFromSeconds(seconds);
+            if (f <= 0 || slow <= 0)
+            {
+                f = 100;
+                slow = 0;
+            }
+            long s = Math.Min(slow, length);
+            var units = (System.Numerics.BigInteger)(length - s) * 100 * f + (System.Numerics.BigInteger)s * 10000;
+            var a = units * ProjectLimits.MicrosPerSecond;
+            var b = (System.Numerics.BigInteger)SimConstants.TickRate * p * f;
+            return (a + b - 1) / b;
+        }
+
+        /// <summary>
+        /// Property over absurd, unsanitized inputs: the result is never negative, equals the exact value whenever that fits
+        /// the integer path, and otherwise stays within 1 µs or 1e-9 of it (the floating-point estimate, saturating at long.MaxValue).
+        /// </summary>
+        [Fact]
+        public void ClipOutputMatchesExactModelOnExtremeInputs()
+        {
+            var rng = Rng.FromSeed(0xC1D1_0F10UL, 2);
+            for (int n = 0; n < 5000; n++)
+            {
+                int trimIn = rng.NextInt(0, 4) == 0 ? (int)rng.NextUInt() : rng.NextInt(-1000, 1000);
+                int trimOut = rng.NextInt(0, 3) == 0 ? int.MaxValue - rng.NextInt(0, 1000) : (int)rng.NextUInt();
+                double speed = Math.Pow(10, rng.NextDouble() * 9 - 2);
+                double seconds = rng.NextInt(0, 3) == 0 ? 0 : Math.Pow(10, rng.NextDouble() * 9 - 1);
+                double factor = Math.Pow(10, rng.NextDouble() * 9 - 2);
+                long us = ProjectTiming.ClipOutputUs(trimIn, trimOut, speed, seconds, factor);
+                var exact = ExactClipUs(trimIn, trimOut, speed, seconds, factor);
+                string where = "case " + n + ": " + trimIn + ".." + trimOut + " x" + speed + " slow " + seconds + " s x" + factor;
+                Assert.True(us >= 0, where + " gave " + us);
+                if (exact <= long.MaxValue && us == (long)exact) continue;
+                double diff = Math.Abs((double)(exact - us));
+                Assert.True(diff <= Math.Max(1.0, 1e-9 * (double)exact), where + ": " + us + " vs exact " + exact);
+            }
+        }
+
+        [Fact]
         public void ReelIncludesCoverLeadIn()
         {
             var d = Golden(); // 30 s clip + 2 s at 0.5x = 32 s

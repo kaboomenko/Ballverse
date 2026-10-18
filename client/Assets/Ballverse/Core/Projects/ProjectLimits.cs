@@ -42,6 +42,11 @@ namespace Ballverse.Core.Projects
         public const double MaxSlowMoFactor = 0.5;
         /// <summary>Video track shift relative to the clip, ±180 s.</summary>
         public const long MaxOffsetUs = MaxDurationUs;
+        /// <summary>
+        /// Longest accepted source video (spec §3.2 "до 10 мин на входе"): <c>userVideo.trimOutUs</c> never exceeds it.
+        /// Mirrors <c>Ballverse.Core.Timeline.UserVideoTiming.MaxSourceDurationUs</c>, which rejects trims past it.
+        /// </summary>
+        public const long MaxSourceVideoUs = 600 * MicrosPerSecond;
 
         // §3.5 texts
         public const int MaxTextLayers = 5;

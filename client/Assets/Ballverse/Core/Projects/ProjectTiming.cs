@@ -45,7 +45,8 @@ namespace Ballverse.Core.Projects
 
         /// <summary>
         /// Output duration of the trimmed clip in microseconds (rounded up); 0 for an empty or inverted trim or a
-        /// non-positive speed. A non-positive slow-mo length or factor disables the slow-mo.
+        /// non-positive speed. A non-positive slow-mo length or factor disables the slow-mo. Never negative: absurd,
+        /// unsanitized inputs whose exact value overflows get a floating-point estimate, saturated at <see cref="long.MaxValue"/>.
         /// </summary>
         public static long ClipOutputUs(int trimInTick, int trimOutTick, double speed, double slowMoSeconds, double slowMoFactor)
         {
@@ -75,7 +76,8 @@ namespace Ballverse.Core.Projects
             {
                 // Only reachable with absurd, unsanitized values; an estimate is enough there.
                 double outS = n / (SimConstants.TickRate * p / 100.0) + s / (SimConstants.TickRate * p * f / 10000.0);
-                return outS * ProjectLimits.MicrosPerSecond >= long.MaxValue ? long.MaxValue : (long)Math.Ceiling(outS * ProjectLimits.MicrosPerSecond);
+                double outUs = Math.Ceiling(outS * ProjectLimits.MicrosPerSecond);
+                return outUs >= long.MaxValue ? long.MaxValue : (long)outUs;
             }
         }
 
@@ -94,8 +96,8 @@ namespace Ballverse.Core.Projects
         }
 
         /// <summary>
-        /// Content duration implied by <c>output.durationMode</c> (spec §3.4: Auto = clip, = V, Manual), without the
-        /// cover lead-in. <c>output.cover.atUs</c> lies on this timeline.
+        /// Content duration implied by <c>output.durationMode</c> (spec §3.4: Auto = clip, = V, Manual =
+        /// <c>output.manualDurationUs</c>), without the cover lead-in. <c>output.cover.atUs</c> lies on this content timeline.
         /// </summary>
         public static long ContentDurationUs(ProjectDocument doc)
         {
@@ -132,9 +134,11 @@ namespace Ballverse.Core.Projects
             return ContentDurationUs(doc) + CoverUs(doc);
         }
 
+        /// <summary>Ceiling of a / b for a &gt;= 0, b &gt; 0; never overflows (no a + b − 1 intermediate).</summary>
         static long CeilDiv(long a, long b)
         {
-            return (a + b - 1) / b;
+            long q = a / b;
+            return a % b == 0 ? q : q + 1;
         }
     }
 }

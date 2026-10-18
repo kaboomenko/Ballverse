@@ -13,7 +13,12 @@ namespace Ballverse.Core.Projects
         [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
         public DurationMode DurationMode { get; set; } = DurationMode.Auto;
 
-        /// <summary>Reel duration for <see cref="Ballverse.Core.DurationMode.Manual"/>, 1-180 s in microseconds; omitted otherwise.</summary>
+        /// <summary>
+        /// Content duration for <see cref="Ballverse.Core.DurationMode.Manual"/>, microseconds, without the 0.1 s cover lead-in:
+        /// the reel is this plus <see cref="ProjectTiming.CoverLeadInUs"/> when <c>cover.putFirst</c> is on (spec §3.4). The
+        /// validator keeps it in 1-180 s, or 1-179.9 s in Manual mode with the lead-in, so the reel stays within 180 s.
+        /// Null when never set; kept (1-180 s) in the other modes so switching back to Manual restores it.
+        /// </summary>
         public long? ManualDurationUs { get; set; }
 
         /// <summary>

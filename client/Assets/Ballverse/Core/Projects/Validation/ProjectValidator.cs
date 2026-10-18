@@ -6,9 +6,11 @@ using System.Text;
 namespace Ballverse.Core.Projects
 {
     /// <summary>
-    /// Validates a project document against the spec ranges (spec §3.3-§3.6, §3.8, §3.9, §7.4) and returns a repaired copy.
-    /// Out-of-range numbers are clamped, invalid values replaced by defaults, unsafe paths reset to safe defaults
-    /// (or nulled where null is allowed), and each change is reported as a <see cref="ValidationIssue"/>.
+    /// Validates a project document against the spec ranges (spec §3.2-§3.6, §3.8, §3.9, §7.4) and returns a repaired copy.
+    /// Out-of-range numbers are clamped, invalid values replaced by defaults, unsafe paths and paths naming reserved project
+    /// files (<see cref="ProjectPaths.IsSafeMediaPath"/>) reset to safe defaults (or nulled where null is allowed), and each
+    /// change is reported as a <see cref="ValidationIssue"/>. A clean result is always a valid timeline input: user-video trims
+    /// lie within the 10-min source (spec §3.2), the clip and slow-mo within the §3.4 ranges, the reel within 1-180 s.
     /// Only problems that need outside context (missing clip, bad mode id, bad project id without an expected id,
     /// wrong schema version) are <see cref="IssueSeverity.Error"/>.
     /// </summary>
@@ -229,11 +231,13 @@ namespace Ballverse.Core.Projects
             {
                 v.File = SafePath(v.File, "userVideo.file", ProjectPaths.DefaultUserVideoFile, false);
 
-                const long farMax = long.MaxValue / 4;
-                v.TrimInUs = ClampL(v.TrimInUs, 0, farMax - 1, "userVideo.trimInUs");
-                v.TrimOutUs = ClampL(v.TrimOutUs, 1, farMax, "userVideo.trimOutUs");
+                // The source is at most 10 min long (spec §3.2), so a trim past it names frames that do not exist; it is clamped
+                // to the source, as the timeline (UserVideoTiming) accepts only trimOutUs <= 10 min.
+                const long sourceMax = ProjectLimits.MaxSourceVideoUs;
+                v.TrimInUs = ClampSource(v.TrimInUs, sourceMax - 1, "userVideo.trimInUs");
+                v.TrimOutUs = ClampSource(v.TrimOutUs, sourceMax, "userVideo.trimOutUs");
                 long tin = v.TrimInUs, tout = v.TrimOutUs;
-                if (FixRange(ref tin, ref tout, ProjectLimits.MinDurationUs, farMax))
+                if (FixRange(ref tin, ref tout, ProjectLimits.MinDurationUs, sourceMax))
                 {
                     Warn("userVideo.trimInUs", IssueCode.InvalidRange, "trimInUs must be before trimOutUs.");
                 }
@@ -264,6 +268,17 @@ namespace Ballverse.Core.Projects
                 v.FitBackground = SanitizeFitBackground(v.FitBackground, "userVideo.fitBackground");
                 v.Volume = ClampD(v.Volume, ProjectLimits.MinVolume, ProjectLimits.MaxVolume, 1.0, "userVideo.volume");
                 v.AfterEnd = EnumValue(v.AfterEnd, VideoAfterEnd.Freeze, "userVideo.afterEnd");
+            }
+
+            /// <summary>Clamps a source time to [0, max]; values past the 10-min source limit are reported as such.</summary>
+            long ClampSource(long value, long max, string path)
+            {
+                if (value > max)
+                {
+                    Warn(path, IssueCode.OutOfRange, "Past the 10-min source video limit (spec §3.2); clamped to " + Inv(max) + ".");
+                    return max;
+                }
+                return ClampL(value, 0, max, path);
             }
 
             void SanitizeLayout(LayoutSettings l)
@@ -599,8 +614,9 @@ namespace Ballverse.Core.Projects
                     Warn(path, IssueCode.Missing, "Path missing; default used.");
                     return fallback;
                 }
-                if (ProjectPaths.IsSafeRelativePath(value)) return value;
-                Warn(path, IssueCode.UnsafePath, "Path is not a safe project-relative path; " + (fallback == null ? "cleared." : "default used."));
+                if (ProjectPaths.IsSafeMediaPath(value)) return value;
+                string why = ProjectPaths.IsSafeRelativePath(value) ? "Path names a reserved project file; " : "Path is not a safe project-relative path; ";
+                Warn(path, IssueCode.UnsafePath, why + (fallback == null ? "cleared." : "default used."));
                 return fallback;
             }
 

@@ -12,7 +12,10 @@ namespace Ballverse.Core.Projects
         /// <summary>Trim start in the source video, microseconds.</summary>
         public long TrimInUs { get; set; }
 
-        /// <summary>Trim end in the source video (exclusive), microseconds; greater than <see cref="TrimInUs"/>.</summary>
+        /// <summary>
+        /// Trim end in the source video (exclusive), microseconds; greater than <see cref="TrimInUs"/> and at most
+        /// <see cref="ProjectLimits.MaxSourceVideoUs"/> (spec §3.2: input up to 10 min). The fragment is at most 180 s.
+        /// </summary>
         public long TrimOutUs { get; set; }
 
         /// <summary>Shift of the video track relative to the clip, microseconds (spec §3.4); may be negative.</summary>
