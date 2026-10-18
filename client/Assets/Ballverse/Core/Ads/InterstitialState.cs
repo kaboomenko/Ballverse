@@ -46,7 +46,10 @@ namespace Ballverse.Core.Ads
         /// yields a fresh state.
         /// </summary>
         /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
-        /// <exception cref="System.IO.InvalidDataException">The text is not JSON, or its root is not an object.</exception>
+        /// <exception cref="System.IO.InvalidDataException">
+        /// The text is not JSON (including an integer literal longer than 380 characters, a Newtonsoft reader limit), or
+        /// its root is not an object.
+        /// </exception>
         public static InterstitialState FromJson(string json)
         {
             var obj = AdJson.ParseObject(json, "interstitial state");

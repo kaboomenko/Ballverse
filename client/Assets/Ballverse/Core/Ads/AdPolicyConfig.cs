@@ -6,39 +6,28 @@ namespace Ballverse.Core.Ads
 {
     /// <summary>
     /// Remote-configurable ad rules (spec §5.3, §9.3). Defaults are the build-time values, so the policies work without
-    /// network or a fetched config. <see cref="FromRemoteValues"/> maps the §9.3 Remote Config keys
-    /// (<c>interstitial_every_n_games</c>…); <see cref="FromJson"/> reads the CoreJson file format (camelCase keys) and
-    /// also accepts the §9.3 keys. Every entry point clamps the values.
+    /// network or a fetched config. This type does not parse the §9.3 Remote Config payload: the Config module
+    /// (RemoteConfigParser / RemoteConfigValues) is the only §9.3 parser, and the integration layer maps its typed values
+    /// onto the properties here. The Min*/Max* ranges mirror that module's RemoteConfigLimits, so the safety-net clamp in
+    /// <see cref="Validated"/> never disagrees with the authoritative one. <see cref="FromJson"/> reads only this type's own
+    /// CoreJson format (camelCase keys).
     /// </summary>
     public sealed class AdPolicyConfig
     {
-        /// <summary>Remote Config key of <see cref="InterstitialEveryNGames"/> (spec §9.3).</summary>
-        public const string RemoteKeyInterstitialEveryNGames = "interstitial_every_n_games";
-        /// <summary>Remote Config key of <see cref="InterstitialMinIntervalSec"/> (spec §9.3).</summary>
-        public const string RemoteKeyInterstitialMinIntervalSec = "interstitial_min_interval_sec";
-        /// <summary>Remote Config key of <see cref="InterstitialGraceGames"/> (spec §9.3).</summary>
-        public const string RemoteKeyInterstitialGraceGames = "interstitial_grace_games";
-        /// <summary>Remote Config key of <see cref="RewardedExportEnabled"/>, the RW7 kill switch (spec §9.3).</summary>
-        public const string RemoteKeyRewardedExportEnabled = "rewarded_export_enabled";
-        /// <summary>Remote Config key of <see cref="RewardedWaitTimeoutSec"/> (spec §9.3).</summary>
-        public const string RemoteKeyRewardedWaitTimeoutSec = "rewarded_wait_timeout_sec";
-        /// <summary>Remote Config key of <see cref="RewardedRetryWindowMin"/> (spec §9.3).</summary>
-        public const string RemoteKeyRewardedRetryWindowMin = "rewarded_retry_window_min";
-
         /// <summary>N in "interstitial after every N completed games" (spec §5.3.2 IN1, Р7).</summary>
         public const int DefaultInterstitialEveryNGames = 3;
         public const int MinInterstitialEveryNGames = 1;
-        public const int MaxInterstitialEveryNGames = 100;
+        public const int MaxInterstitialEveryNGames = 20;
 
         /// <summary>Minimum interval between two interstitials, seconds (spec §5.3.2 IN5).</summary>
         public const int DefaultInterstitialMinIntervalSec = 60;
         public const int MinInterstitialMinIntervalSec = 0;
-        public const int MaxInterstitialMinIntervalSec = 3600;
+        public const int MaxInterstitialMinIntervalSec = 600;
 
         /// <summary>Completed games before interstitials start counting (spec §5.3.2 IN6, question В3).</summary>
         public const int DefaultInterstitialGraceGames = 0;
         public const int MinInterstitialGraceGames = 0;
-        public const int MaxInterstitialGraceGames = 1000;
+        public const int MaxInterstitialGraceGames = 50;
 
         /// <summary>No interstitial within this many seconds after a rewarded ad (spec §5.3.2 IN3).</summary>
         public const int DefaultInterstitialQuietAfterRewardedSec = 30;
@@ -53,15 +42,15 @@ namespace Ballverse.Core.Ads
         /// <summary>Retry window after a failed or cancelled ad-funded export, minutes (spec §5.3.1 RW4, §3.8, question В5).</summary>
         public const int DefaultRewardedRetryWindowMin = 10;
         public const int MinRewardedRetryWindowMin = 0;
-        public const int MaxRewardedRetryWindowMin = 1440;
+        public const int MaxRewardedRetryWindowMin = 60;
 
-        /// <summary>Remote Config <c>interstitial_every_n_games</c> (spec §5.3.2 IN1). Range 1–100.</summary>
+        /// <summary>Remote Config <c>interstitial_every_n_games</c> (spec §5.3.2 IN1). Range 1–20.</summary>
         public int InterstitialEveryNGames { get; set; } = DefaultInterstitialEveryNGames;
 
-        /// <summary>Remote Config <c>interstitial_min_interval_sec</c> (spec §5.3.2 IN5). Range 0–3600.</summary>
+        /// <summary>Remote Config <c>interstitial_min_interval_sec</c> (spec §5.3.2 IN5). Range 0–600.</summary>
         public int InterstitialMinIntervalSec { get; set; } = DefaultInterstitialMinIntervalSec;
 
-        /// <summary>Remote Config <c>interstitial_grace_games</c> (spec §5.3.2 IN6). Range 0–1000.</summary>
+        /// <summary>Remote Config <c>interstitial_grace_games</c> (spec §5.3.2 IN6). Range 0–50.</summary>
         public int InterstitialGraceGames { get; set; } = DefaultInterstitialGraceGames;
 
         /// <summary>Quiet period after a rewarded ad, seconds (spec §5.3.2 IN3, fixed at 30 by the spec). Range 0–600.</summary>
@@ -73,7 +62,7 @@ namespace Ballverse.Core.Ads
         /// <summary>Remote Config <c>rewarded_wait_timeout_sec</c> (spec §5.3.1 RW3, RW7). Range 1–30.</summary>
         public int RewardedWaitTimeoutSec { get; set; } = DefaultRewardedWaitTimeoutSec;
 
-        /// <summary>Remote Config <c>rewarded_retry_window_min</c> (spec §5.3.1 RW4). Range 0–1440; 0 disables retry credits.</summary>
+        /// <summary>Remote Config <c>rewarded_retry_window_min</c> (spec §5.3.1 RW4). Range 0–60; 0 disables retry credits.</summary>
         public int RewardedRetryWindowMin { get; set; } = DefaultRewardedRetryWindowMin;
 
         /// <summary><see cref="InterstitialMinIntervalSec"/> in milliseconds.</summary>
@@ -143,64 +132,36 @@ namespace Ballverse.Core.Ads
         }
 
         /// <summary>
-        /// Parses the CoreJson format (camelCase keys, as written by <see cref="ToJson"/>); each value may instead use its
-        /// §9.3 Remote Config key (the camelCase key wins when both are present). Missing keys and values of the wrong type
-        /// keep their defaults; numbers may be JSON numbers or numeric strings, fractions are truncated toward zero, and
-        /// every value is clamped (<see cref="Validated"/>), including values beyond the <see cref="int"/> range.
+        /// Parses this type's CoreJson format (camelCase keys, as written by <see cref="ToJson"/>). The §9.3 Remote Config
+        /// keys (<c>interstitial_every_n_games</c>…) are not read here; the Config module owns them. Missing keys and values
+        /// of the wrong type keep their defaults. Numbers may be JSON numbers or numeric strings and must be integral:
+        /// a fraction, NaN or infinity keeps the default (as the Config module does). Integral values are clamped
+        /// (<see cref="Validated"/>), including values beyond the <see cref="int"/> or <see cref="long"/> range.
         /// The JSON literal <c>null</c> yields the defaults.
         /// </summary>
         /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
-        /// <exception cref="System.IO.InvalidDataException">The text is not JSON, or its root is not an object.</exception>
+        /// <exception cref="System.IO.InvalidDataException">
+        /// The text is not JSON (including an integer literal longer than 380 characters, a Newtonsoft reader limit),
+        /// or its root is not an object.
+        /// </exception>
         public static AdPolicyConfig FromJson(string json)
         {
             var obj = AdJson.ParseObject(json, "ad policy config");
             var c = new AdPolicyConfig();
             if (obj == null) return c;
-            c.InterstitialEveryNGames = ReadInt(obj, "interstitialEveryNGames", RemoteKeyInterstitialEveryNGames, c.InterstitialEveryNGames);
-            c.InterstitialMinIntervalSec = ReadInt(obj, "interstitialMinIntervalSec", RemoteKeyInterstitialMinIntervalSec, c.InterstitialMinIntervalSec);
-            c.InterstitialGraceGames = ReadInt(obj, "interstitialGraceGames", RemoteKeyInterstitialGraceGames, c.InterstitialGraceGames);
-            c.InterstitialQuietAfterRewardedSec = ReadInt(obj, "interstitialQuietAfterRewardedSec", null, c.InterstitialQuietAfterRewardedSec);
-            c.RewardedWaitTimeoutSec = ReadInt(obj, "rewardedWaitTimeoutSec", RemoteKeyRewardedWaitTimeoutSec, c.RewardedWaitTimeoutSec);
-            c.RewardedRetryWindowMin = ReadInt(obj, "rewardedRetryWindowMin", RemoteKeyRewardedRetryWindowMin, c.RewardedRetryWindowMin);
-            if (AdJson.TryGetBool(AdJson.Get(obj, "rewardedExportEnabled"), out bool enabled)
-                || AdJson.TryGetBool(AdJson.Get(obj, RemoteKeyRewardedExportEnabled), out enabled))
-            {
-                c.RewardedExportEnabled = enabled;
-            }
+            c.InterstitialEveryNGames = ReadInt(obj, "interstitialEveryNGames", c.InterstitialEveryNGames);
+            c.InterstitialMinIntervalSec = ReadInt(obj, "interstitialMinIntervalSec", c.InterstitialMinIntervalSec);
+            c.InterstitialGraceGames = ReadInt(obj, "interstitialGraceGames", c.InterstitialGraceGames);
+            c.InterstitialQuietAfterRewardedSec = ReadInt(obj, "interstitialQuietAfterRewardedSec", c.InterstitialQuietAfterRewardedSec);
+            c.RewardedWaitTimeoutSec = ReadInt(obj, "rewardedWaitTimeoutSec", c.RewardedWaitTimeoutSec);
+            c.RewardedRetryWindowMin = ReadInt(obj, "rewardedRetryWindowMin", c.RewardedRetryWindowMin);
+            if (AdJson.TryGetBool(AdJson.Get(obj, "rewardedExportEnabled"), out bool enabled)) c.RewardedExportEnabled = enabled;
             return c.Validated();
         }
 
-        /// <summary>
-        /// Builds a config from Remote Config string values keyed by the §9.3 names (the <c>RemoteKey…</c> constants,
-        /// exact ordinal match). Numbers parse with the invariant culture (fractions truncate toward zero); booleans
-        /// accept true/false/1/0. Missing, null or unparsable values keep the build defaults; every value is clamped.
-        /// The IN3 quiet period has no remote key and stays at its default.
-        /// </summary>
-        /// <exception cref="ArgumentNullException"><paramref name="values"/> is null.</exception>
-        public static AdPolicyConfig FromRemoteValues(IReadOnlyDictionary<string, string> values)
+        static int ReadInt(Newtonsoft.Json.Linq.JObject obj, string key, int fallback)
         {
-            if (values == null) throw new ArgumentNullException(nameof(values));
-            var c = new AdPolicyConfig();
-            c.InterstitialEveryNGames = ReadRemoteInt(values, RemoteKeyInterstitialEveryNGames, c.InterstitialEveryNGames);
-            c.InterstitialMinIntervalSec = ReadRemoteInt(values, RemoteKeyInterstitialMinIntervalSec, c.InterstitialMinIntervalSec);
-            c.InterstitialGraceGames = ReadRemoteInt(values, RemoteKeyInterstitialGraceGames, c.InterstitialGraceGames);
-            c.RewardedWaitTimeoutSec = ReadRemoteInt(values, RemoteKeyRewardedWaitTimeoutSec, c.RewardedWaitTimeoutSec);
-            c.RewardedRetryWindowMin = ReadRemoteInt(values, RemoteKeyRewardedRetryWindowMin, c.RewardedRetryWindowMin);
-            if (values.TryGetValue(RemoteKeyRewardedExportEnabled, out string s) && AdJson.TryParseBool(s, out bool enabled))
-                c.RewardedExportEnabled = enabled;
-            return c.Validated();
-        }
-
-        static int ReadInt(Newtonsoft.Json.Linq.JObject obj, string key, string remoteKey, int fallback)
-        {
-            if (AdJson.TryGetInt(AdJson.Get(obj, key), out int v)) return v;
-            if (remoteKey != null && AdJson.TryGetInt(AdJson.Get(obj, remoteKey), out v)) return v;
-            return fallback;
-        }
-
-        static int ReadRemoteInt(IReadOnlyDictionary<string, string> values, string key, int fallback)
-        {
-            return values.TryGetValue(key, out string s) && AdJson.TryParseLong(s, out long v) ? AdJson.SaturateToInt(v) : fallback;
+            return AdJson.TryGetIntegralInt(AdJson.Get(obj, key), out int v) ? v : fallback;
         }
 
         static void Check(List<string> problems, string name, int value, int min, int max)

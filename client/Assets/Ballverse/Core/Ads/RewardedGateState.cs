@@ -43,13 +43,18 @@ namespace Ballverse.Core.Ads
         }
 
         /// <summary>
-        /// Parses and normalizes: drops credits without a project id, with a negative expiry, with an unknown source or
-        /// with a field of the wrong type; keeps the most generous credit per project (held beats timed, later expiry beats
-        /// earlier); sorts by project id. A timed credit is never claimed. The JSON literal <c>null</c> yields a fresh state.
-        /// Runs in O(n log n) for n stored credits.
+        /// Parses and normalizes: drops credits without a string project id, with an unknown source, or with an
+        /// <c>expiresAtMs</c> that is negative or not a number (a negative value beyond the <see cref="long"/> range
+        /// saturates and is dropped; a positive one saturates to a credit that never expires in practice). A missing or
+        /// wrong-typed <c>claimed</c> reads as false and the credit is kept. Keeps the most generous credit per project (held
+        /// beats timed, later expiry beats earlier); sorts by project id. A timed credit is never claimed. The JSON literal
+        /// <c>null</c> yields a fresh state. Runs in O(n log n) for n stored credits.
         /// </summary>
         /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
-        /// <exception cref="System.IO.InvalidDataException">The text is not JSON, or its root is not an object.</exception>
+        /// <exception cref="System.IO.InvalidDataException">
+        /// The text is not JSON, or its root is not an object. An integer literal longer than 380 characters anywhere in
+        /// the document is reported this way too (a Newtonsoft reader limit), so it fails the whole state, not one credit.
+        /// </exception>
         public static RewardedGateState FromJson(string json)
         {
             var obj = AdJson.ParseObject(json, "rewarded gate state");
@@ -81,9 +86,8 @@ namespace Ballverse.Core.Ads
                 if (!AdJson.TryGetLong(expiresToken, out long e)) return null;
                 expires = e;
             }
-            bool claimed = false;
-            var claimedToken = AdJson.Get(o, "claimed");
-            if (claimedToken != null && !AdJson.TryGetBool(claimedToken, out claimed)) claimed = false;
+            // A missing or wrong-typed "claimed" reads as false (unclaimed); the credit itself is kept.
+            if (!AdJson.TryGetBool(AdJson.Get(o, "claimed"), out bool claimed)) claimed = false;
             return new RewardedExportCredit(projectId, source, expires, claimed);
         }
 

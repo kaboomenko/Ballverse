@@ -71,12 +71,12 @@ namespace Ballverse.Core.Tests.Ads
                 RewardedRetryWindowMin = 100_000,
             };
             var v = c.Validated();
-            Assert.Equal(100, v.InterstitialEveryNGames);
-            Assert.Equal(3600, v.InterstitialMinIntervalSec);
-            Assert.Equal(1000, v.InterstitialGraceGames);
+            Assert.Equal(20, v.InterstitialEveryNGames);
+            Assert.Equal(600, v.InterstitialMinIntervalSec);
+            Assert.Equal(50, v.InterstitialGraceGames);
             Assert.Equal(600, v.InterstitialQuietAfterRewardedSec);
             Assert.Equal(30, v.RewardedWaitTimeoutSec);
-            Assert.Equal(1440, v.RewardedRetryWindowMin);
+            Assert.Equal(60, v.RewardedRetryWindowMin);
         }
 
         [Fact]
@@ -96,11 +96,17 @@ namespace Ballverse.Core.Tests.Ads
             };
             var hi = new AdPolicyConfig
             {
-                InterstitialEveryNGames = 100, InterstitialMinIntervalSec = 3600, InterstitialGraceGames = 1000,
-                InterstitialQuietAfterRewardedSec = 600, RewardedWaitTimeoutSec = 30, RewardedRetryWindowMin = 1440,
+                InterstitialEveryNGames = 20, InterstitialMinIntervalSec = 600, InterstitialGraceGames = 50,
+                InterstitialQuietAfterRewardedSec = 600, RewardedWaitTimeoutSec = 30, RewardedRetryWindowMin = 60,
             };
             Assert.True(lo.IsValid);
             Assert.True(hi.IsValid);
+            var over = new AdPolicyConfig
+            {
+                InterstitialEveryNGames = 21, InterstitialMinIntervalSec = 601, InterstitialGraceGames = 51,
+                InterstitialQuietAfterRewardedSec = 601, RewardedWaitTimeoutSec = 31, RewardedRetryWindowMin = 61,
+            };
+            Assert.Equal(6, over.Validate().Count);
         }
 
         [Fact]
@@ -146,12 +152,59 @@ namespace Ballverse.Core.Tests.Ads
             var json = File.ReadAllText(AdsTestUtil.TestDataPath("ad_policy_config_remote.json"));
             var c = AdPolicyConfig.FromJson(json);
             Assert.Equal(5, c.InterstitialEveryNGames);
-            Assert.Equal(3600, c.InterstitialMinIntervalSec); // 99999 clamped
+            Assert.Equal(600, c.InterstitialMinIntervalSec); // 99999 clamped
             Assert.Equal(3, c.InterstitialGraceGames);
             Assert.Equal(30, c.InterstitialQuietAfterRewardedSec); // missing → default
             Assert.False(c.RewardedExportEnabled);
             Assert.Equal(1, c.RewardedWaitTimeoutSec); // -2 clamped
             Assert.Equal(20, c.RewardedRetryWindowMin);
+        }
+
+        /// <summary>
+        /// The ranges mirror the Config module's RemoteConfigLimits (spec §9.3), the only §9.3 parser, so the safety-net
+        /// clamp here never disagrees with it. If this test fails, RemoteConfigLimits changed or drifted: update both.
+        /// </summary>
+        [Fact]
+        public void RangesMatchRemoteConfigLimits()
+        {
+            Assert.Equal((1, 20), (AdPolicyConfig.MinInterstitialEveryNGames, AdPolicyConfig.MaxInterstitialEveryNGames));
+            Assert.Equal((0, 600), (AdPolicyConfig.MinInterstitialMinIntervalSec, AdPolicyConfig.MaxInterstitialMinIntervalSec));
+            Assert.Equal((0, 50), (AdPolicyConfig.MinInterstitialGraceGames, AdPolicyConfig.MaxInterstitialGraceGames));
+            Assert.Equal((1, 30), (AdPolicyConfig.MinRewardedWaitTimeoutSec, AdPolicyConfig.MaxRewardedWaitTimeoutSec));
+            Assert.Equal((0, 60), (AdPolicyConfig.MinRewardedRetryWindowMin, AdPolicyConfig.MaxRewardedRetryWindowMin));
+        }
+
+        /// <summary>Same inputs as the QA integration probe: the result equals what RemoteConfigParser produces.</summary>
+        [Theory]
+        [InlineData("interstitialEveryNGames", "50", 20)]
+        [InlineData("interstitialEveryNGames", "2.5", 3)]
+        [InlineData("interstitialEveryNGames", "\"2.5\"", 3)]
+        [InlineData("interstitialEveryNGames", "4.0", 4)]
+        [InlineData("interstitialMinIntervalSec", "900", 600)]
+        [InlineData("interstitialMinIntervalSec", "\"1e3\"", 600)]
+        [InlineData("interstitialGraceGames", "100", 50)]
+        [InlineData("rewardedRetryWindowMin", "120", 60)]
+        [InlineData("rewardedRetryWindowMin", "\"Infinity\"", 10)]
+        public void FromJsonAgreesWithConfigModuleRules(string key, string literal, int expected)
+        {
+            var c = AdPolicyConfig.FromJson("{\"" + key + "\":" + literal + "}");
+            int actual = key switch
+            {
+                "interstitialEveryNGames" => c.InterstitialEveryNGames,
+                "interstitialMinIntervalSec" => c.InterstitialMinIntervalSec,
+                "interstitialGraceGames" => c.InterstitialGraceGames,
+                _ => c.RewardedRetryWindowMin,
+            };
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
+        public void FromJsonIgnoresRemoteConfigKeys()
+        {
+            // The §9.3 snake_case keys belong to the Config module; this format reads camelCase keys only.
+            var c = AdPolicyConfig.FromJson("{\"rewarded_export_enabled\":false,\"interstitial_every_n_games\":5}");
+            Assert.True(c.RewardedExportEnabled);
+            Assert.Equal(AdPolicyConfig.DefaultInterstitialEveryNGames, c.InterstitialEveryNGames);
         }
 
         [Fact]

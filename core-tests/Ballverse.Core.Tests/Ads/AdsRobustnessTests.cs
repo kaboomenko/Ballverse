@@ -3,13 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Ballverse.Core.Ads;
-using Newtonsoft.Json;
 using Xunit;
 using static Ballverse.Core.Tests.Ads.AdsTestUtil;
 
 namespace Ballverse.Core.Tests.Ads
 {
-    /// <summary>Clamping at runtime, credit claims, clock rollback, tolerant parsing and Remote Config keys (spec §5.3, §9.3).</summary>
+    /// <summary>Clamping at runtime, credit claims, clock rollback and tolerant parsing (spec §5.3, §9.3).</summary>
     public class AdsRobustnessTests
     {
         const string A = "project-a";
@@ -125,6 +124,35 @@ namespace Ballverse.Core.Tests.Ads
             return 24 * 60 * Min;
         }
 
+        [Fact]
+        public void RW4_RewardOverExistingUnclaimedCreditClaimsIt()
+        {
+            // An offer open for A while A already holds an unclaimed reward credit (e.g. the export after the first reward
+            // never started): the second reward must claim the credit, so a failed export converts it into a retry credit.
+            var state = new RewardedGateState { OpenOfferProjectId = A };
+            state.Credits.Add(new RewardedExportCredit(A, RewardedCreditSource.Reward, null, false));
+            var g = new RewardedExportGate(AdPolicyConfig.CreateDefault(), state);
+            Assert.Equal(RewardedGateStepKind.StartExport, g.OnOfferOutcome(A, RewardedOfferOutcome.UserEarnedReward, T0).Kind);
+            Assert.Equal(1, g.CreditCount);
+            var finish = g.OnExportFinished(A, ExportResult.Failed, T0 + Sec);
+            Assert.Equal(ExportFinishKind.RetryCreditGranted, finish.Kind);
+            Assert.Equal(T0 + Sec + 10 * Min, finish.RetryExpiresAtMs);
+        }
+
+        [Fact]
+        public void RW4_RewardOverExistingRetryCreditClaimsAndHoldsIt()
+        {
+            var state = new RewardedGateState { OpenOfferProjectId = A };
+            state.Credits.Add(new RewardedExportCredit(A, RewardedCreditSource.Retry, T0 + 5 * Min, false));
+            var g = new RewardedExportGate(AdPolicyConfig.CreateDefault(), state);
+            Assert.Equal(RewardedGateStepKind.StartExport, g.OnOfferOutcome(A, RewardedOfferOutcome.UserEarnedReward, T0).Kind);
+            Assert.True(g.TryGetCredit(A, T0, out var credit));
+            Assert.Equal(RewardedCreditSource.Reward, credit.Source);
+            Assert.Null(credit.ExpiresAtMs);
+            Assert.True(credit.Claimed);
+            Assert.Equal(ExportFinishKind.RetryCreditGranted, g.OnExportFinished(A, ExportResult.Cancelled, T0 + Sec).Kind);
+        }
+
         // ---------- Decide closes a stale open offer ----------
 
         [Fact]
@@ -212,12 +240,12 @@ namespace Ballverse.Core.Tests.Ads
         }
 
         [Fact]
-        public void ConfigHugeAndFractionalValuesAreClamped()
+        public void ConfigHugeValuesAreClampedAndFractionsKeepDefaults()
         {
             var c = AdPolicyConfig.FromJson("{\"interstitialMinIntervalSec\":3000000000,\"interstitialEveryNGames\":2.5," +
                 "\"interstitialGraceGames\":-1e30,\"rewardedWaitTimeoutSec\":99999999999999999999999,\"rewardedRetryWindowMin\":\"12\"}");
             Assert.Equal(AdPolicyConfig.MaxInterstitialMinIntervalSec, c.InterstitialMinIntervalSec);
-            Assert.Equal(2, c.InterstitialEveryNGames);
+            Assert.Equal(AdPolicyConfig.DefaultInterstitialEveryNGames, c.InterstitialEveryNGames); // fraction keeps the default
             Assert.Equal(0, c.InterstitialGraceGames);
             Assert.Equal(AdPolicyConfig.MaxRewardedWaitTimeoutSec, c.RewardedWaitTimeoutSec);
             Assert.Equal(12, c.RewardedRetryWindowMin);
@@ -235,6 +263,45 @@ namespace Ballverse.Core.Tests.Ads
         }
 
         [Fact]
+        public void NegativeBigIntegersSaturateNegative()
+        {
+            const string hugeNeg = "-99999999999999999999";
+            var s = RewardedGateState.FromJson("{\"credits\":[{\"projectId\":\"a\",\"source\":\"Retry\",\"expiresAtMs\":" + hugeNeg + "}," +
+                "{\"projectId\":\"b\",\"source\":\"Retry\",\"expiresAtMs\":99999999999999999999}]}");
+            Assert.Single(s.Credits); // the negative expiry is dropped, not turned into "never expires"
+            Assert.Equal("b", s.Credits[0].ProjectId);
+            Assert.Equal(long.MaxValue, s.Credits[0].ExpiresAtMs);
+            var c = AdPolicyConfig.FromJson("{\"interstitialEveryNGames\":" + hugeNeg + ",\"interstitialMinIntervalSec\":" + hugeNeg + "}");
+            Assert.Equal(AdPolicyConfig.MinInterstitialEveryNGames, c.InterstitialEveryNGames);
+            Assert.Equal(AdPolicyConfig.MinInterstitialMinIntervalSec, c.InterstitialMinIntervalSec);
+            var st = InterstitialState.FromJson("{\"lastInterstitialShownMs\":" + hugeNeg + ",\"completedGames\":" + hugeNeg + "}");
+            Assert.Null(st.LastInterstitialShownMs);
+            Assert.Equal(0, st.CompletedGames);
+        }
+
+        [Fact]
+        public void IntegerLiteralLimitIsReportedAsMalformedJson()
+        {
+            // Documented Newtonsoft limit: 380 digits still parse (and saturate); 381 make the whole document malformed.
+            string ok = new string('9', 380);
+            string tooLong = new string('9', 381);
+            var s = RewardedGateState.FromJson("{\"credits\":[{\"projectId\":\"a\",\"source\":\"Retry\",\"expiresAtMs\":" + ok + "}]}");
+            Assert.Equal(long.MaxValue, s.Credits[0].ExpiresAtMs);
+            Assert.Throws<InvalidDataException>(() => RewardedGateState.FromJson(
+                "{\"credits\":[{\"projectId\":\"a\",\"source\":\"Retry\",\"expiresAtMs\":" + tooLong + "}]}"));
+            Assert.Throws<InvalidDataException>(() => AdPolicyConfig.FromJson("{\"interstitialEveryNGames\":" + tooLong + "}"));
+            Assert.Throws<InvalidDataException>(() => InterstitialState.FromJson("{\"completedGames\":" + tooLong + "}"));
+        }
+
+        [Fact]
+        public void WrongTypedClaimedKeepsCreditUnclaimed()
+        {
+            var s = RewardedGateState.FromJson("{\"credits\":[{\"projectId\":\"a\",\"source\":\"Reward\",\"claimed\":[1]}]}");
+            Assert.Single(s.Credits);
+            Assert.False(s.Credits[0].Claimed);
+        }
+
+        [Fact]
         public void InterstitialStateHugeAndWrongValuesAreNormalized()
         {
             var s = InterstitialState.FromJson("{\"completedGames\":3000000000,\"totalCompletedGames\":\"x\",\"lastInterstitialShownMs\":1.5e3,\"lastRewardedShownMs\":{}}");
@@ -242,65 +309,6 @@ namespace Ballverse.Core.Tests.Ads
             Assert.Equal(int.MaxValue, s.TotalCompletedGames);
             Assert.Equal(1500, s.LastInterstitialShownMs);
             Assert.Null(s.LastRewardedShownMs);
-        }
-
-        // ---------- §9.3 Remote Config keys ----------
-
-        [Fact]
-        public void RemoteKeysAreTheSpecNames()
-        {
-            Assert.Equal("interstitial_every_n_games", AdPolicyConfig.RemoteKeyInterstitialEveryNGames);
-            Assert.Equal("interstitial_min_interval_sec", AdPolicyConfig.RemoteKeyInterstitialMinIntervalSec);
-            Assert.Equal("interstitial_grace_games", AdPolicyConfig.RemoteKeyInterstitialGraceGames);
-            Assert.Equal("rewarded_export_enabled", AdPolicyConfig.RemoteKeyRewardedExportEnabled);
-            Assert.Equal("rewarded_wait_timeout_sec", AdPolicyConfig.RemoteKeyRewardedWaitTimeoutSec);
-            Assert.Equal("rewarded_retry_window_min", AdPolicyConfig.RemoteKeyRewardedRetryWindowMin);
-        }
-
-        [Fact]
-        public void FromRemoteValuesTestDataFile()
-        {
-            var values = JsonConvert.DeserializeObject<Dictionary<string, string>>(File.ReadAllText(TestDataPath("remote_config_values.json")));
-            var c = AdPolicyConfig.FromRemoteValues(values);
-            Assert.Equal(5, c.InterstitialEveryNGames);
-            Assert.Equal(90, c.InterstitialMinIntervalSec);
-            Assert.Equal(3, c.InterstitialGraceGames);
-            Assert.False(c.RewardedExportEnabled);
-            Assert.Equal(7, c.RewardedWaitTimeoutSec);
-            Assert.Equal(15, c.RewardedRetryWindowMin);
-            Assert.Equal(AdPolicyConfig.DefaultInterstitialQuietAfterRewardedSec, c.InterstitialQuietAfterRewardedSec);
-        }
-
-        [Fact]
-        public void FromRemoteValuesIgnoresUnparsableAndClamps()
-        {
-            var c = AdPolicyConfig.FromRemoteValues(new Dictionary<string, string>
-            {
-                { "interstitial_every_n_games", "0" },
-                { "interstitial_min_interval_sec", "abc" },
-                { "interstitial_grace_games", null },
-                { "rewarded_export_enabled", "nope" },
-                { "rewarded_wait_timeout_sec", "1e12" },
-                { "Rewarded_Retry_Window_Min", "3" },
-            });
-            Assert.Equal(1, c.InterstitialEveryNGames);
-            Assert.Equal(AdPolicyConfig.DefaultInterstitialMinIntervalSec, c.InterstitialMinIntervalSec);
-            Assert.Equal(AdPolicyConfig.DefaultInterstitialGraceGames, c.InterstitialGraceGames);
-            Assert.True(c.RewardedExportEnabled);
-            Assert.Equal(AdPolicyConfig.MaxRewardedWaitTimeoutSec, c.RewardedWaitTimeoutSec);
-            Assert.Equal(AdPolicyConfig.DefaultRewardedRetryWindowMin, c.RewardedRetryWindowMin); // keys are exact
-            Assert.Throws<ArgumentNullException>(() => AdPolicyConfig.FromRemoteValues(null));
-            Assert.False(AdPolicyConfig.FromRemoteValues(new Dictionary<string, string> { { "rewarded_export_enabled", "0" } }).RewardedExportEnabled);
-        }
-
-        [Fact]
-        public void FromJsonAcceptsSpecKeys()
-        {
-            var c = AdPolicyConfig.FromJson("{\"rewarded_export_enabled\":false,\"interstitial_every_n_games\":5}");
-            Assert.False(c.RewardedExportEnabled);
-            Assert.Equal(5, c.InterstitialEveryNGames);
-            var both = AdPolicyConfig.FromJson("{\"interstitialEveryNGames\":4,\"interstitial_every_n_games\":5}");
-            Assert.Equal(4, both.InterstitialEveryNGames);
         }
 
         // ---------- state size: O(n log n) load, order independence, RemoveProject ----------

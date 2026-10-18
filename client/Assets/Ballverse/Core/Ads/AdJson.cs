@@ -8,9 +8,11 @@ using Newtonsoft.Json.Linq;
 namespace Ballverse.Core.Ads
 {
     /// <summary>
-    /// Tolerant readers for the Ads JSON formats (state files, config payloads). Well-formed JSON never throws: a field of
-    /// the wrong type or out of range is skipped or clamped by the caller. Only text that is not JSON, or a root that is
-    /// not an object, is reported, always as <see cref="InvalidDataException"/> (like Foundation's VarInt).
+    /// Tolerant readers for the Ads JSON formats (state files, the config file). Once the text is parsed, a field of the
+    /// wrong type or out of range never throws: it is skipped or clamped by the caller. Text the reader rejects is
+    /// reported, always as <see cref="InvalidDataException"/> (like Foundation's VarInt): text that is not JSON, trailing
+    /// content, a root that is not an object, and also an integer literal longer than 380 characters, which Newtonsoft
+    /// refuses at the reader level (so one such field fails the whole document; this limit is not worked around).
     /// Property names match case-insensitively, as Newtonsoft deserialization does.
     /// </summary>
     internal static class AdJson
@@ -51,8 +53,9 @@ namespace Ballverse.Core.Ads
         }
 
         /// <summary>
-        /// Integer from a JSON number or numeric string. Values beyond <see cref="long"/> saturate; fractions are truncated
-        /// toward zero; NaN, booleans and other types fail.
+        /// Integer from a JSON number or numeric string. Values beyond <see cref="long"/> saturate toward their sign (up to
+        /// the reader's 380-character literal limit, see the class summary); fractions are truncated toward zero; NaN,
+        /// booleans and other types fail.
         /// </summary>
         public static bool TryGetLong(JToken t, out long value)
         {
@@ -84,6 +87,40 @@ namespace Ballverse.Core.Ads
             bool ok = TryGetLong(t, out long v);
             value = ok ? SaturateToInt(v) : 0;
             return ok;
+        }
+
+        /// <summary>
+        /// Like <see cref="TryGetInt"/>, but only integral values are accepted: a fraction, NaN or infinity (as a JSON
+        /// number or a numeric string) fails, matching the Config module's integer rule. Integral values beyond the
+        /// <see cref="int"/> range saturate.
+        /// </summary>
+        public static bool TryGetIntegralInt(JToken t, out int value)
+        {
+            value = 0;
+            if (t == null) return false;
+            double d;
+            switch (t.Type)
+            {
+                case JTokenType.Integer:
+                    return TryGetInt(t, out value);
+                case JTokenType.Float:
+                    d = Convert.ToDouble(((JValue)t).Value, CultureInfo.InvariantCulture);
+                    break;
+                case JTokenType.String:
+                    string s = ((string)t).Trim();
+                    if (long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long n))
+                    {
+                        value = SaturateToInt(n);
+                        return true;
+                    }
+                    if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return false;
+                    break;
+                default:
+                    return false;
+            }
+            if (double.IsNaN(d) || double.IsInfinity(d) || Math.Floor(d) != d) return false;
+            value = d >= int.MaxValue ? int.MaxValue : d <= int.MinValue ? int.MinValue : (int)d;
+            return true;
         }
 
         /// <summary>JSON boolean, or the strings true/false/1/0 (case-insensitive).</summary>
