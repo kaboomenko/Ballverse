@@ -15,5 +15,11 @@ namespace Ballverse.Core.Params
         ColorList = 5,
         StringList = 6,
         Seed = 7,
+        /// <summary>
+        /// Raw JSON that no parameter type can hold (null, a nested object, an array with non-string items). Every
+        /// parameter reports it as <see cref="ParamIssueCode.TypeMismatch"/>, so remote presets carrying it are rejected
+        /// (spec §2.3). Never produced by sanitizing.
+        /// </summary>
+        Invalid = 8,
     }
 }

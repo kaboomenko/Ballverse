@@ -21,5 +21,9 @@
     "values": { "ballCount": 2000, "layout": "funnel", "labelNames": ["a"] }
   },
   { "id": "remote.nan", "name": "Bad color", "modeId": "peg_drop", "values": { "ballColors": ["#FF0000", "red"] } },
-  { "id": "remote.long_name", "name": "This name is definitely longer than thirty-two characters", "modeId": "peg_drop", "values": {} }
+  { "id": "remote.long_name", "name": "This name is definitely longer than thirty-two characters", "modeId": "peg_drop", "values": {} },
+  { "id": "remote.null_value", "name": "Null value", "modeId": "ring_escape", "values": { "ringCount": null } },
+  { "id": "remote.object_value", "name": "Object value", "modeId": "ring_escape", "values": { "ringCount": { "v": 5 } } },
+  { "id": "remote.mixed_array", "name": "Mixed array", "modeId": "ring_escape", "values": { "ballColors": ["#FF0000", 5] } },
+  { "id": "remote.future_shape", "name": "Future shape", "modeId": "ring_escape", "values": { "futureShape": { "a": 1 }, "trail": "long" } }
 ]

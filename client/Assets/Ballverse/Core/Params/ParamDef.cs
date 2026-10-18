@@ -98,12 +98,21 @@ namespace Ballverse.Core.Params
             return modeDef.CopyAttributesFrom(this);
         }
 
-        /// <summary>Whether a <see cref="VisibleIf"/> value can ever match this parameter.</summary>
-        internal virtual bool AcceptsConditionValue(ParamValue value)
+        /// <summary>
+        /// Whether a <see cref="VisibleIf"/> value can ever match this parameter: sanitizing it reports nothing (plain
+        /// double-to-float rounding and kind conversions such as a colour string are not reported).
+        /// <paramref name="normalized"/> is the sanitized form the condition must compare against.
+        /// </summary>
+        internal bool TryNormalizeConditionValue(ParamValue value, out ParamValue normalized)
         {
             var scratch = new List<ParamIssue>();
-            var sanitized = Sanitize(value, DeviceTier.A, false, scratch);
-            return scratch.Count == 0 && sanitized.Equals(value);
+            normalized = Sanitize(value, DeviceTier.A, false, scratch);
+            return scratch.Count == 0;
+        }
+
+        internal void SetVisibleIf(VisibleIf condition)
+        {
+            VisibleIf = condition;
         }
 
         internal ParamDef Clone()
@@ -138,6 +147,12 @@ namespace Ballverse.Core.Params
         {
             issues.Add(new ParamIssue(Id, code, message + "; using default"));
             return DefaultFor(tier, applyTierCap);
+        }
+
+        /// <summary>Kind of a raw value for issue messages ("Invalid (null)" for unusable JSON).</summary>
+        internal static string Describe(ParamValue raw)
+        {
+            return raw.Kind == ParamValueKind.Invalid ? "invalid JSON " + raw.InvalidDescription : raw.Kind.ToString();
         }
 
         /// <summary>The default clamped to the tier cap when one applies.</summary>

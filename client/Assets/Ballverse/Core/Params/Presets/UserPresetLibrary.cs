@@ -16,8 +16,8 @@ namespace Ballverse.Core.Params.Presets
 
         readonly List<Preset> _presets = new List<Preset>();
 
-        /// <summary>All presets in insertion order.</summary>
-        public IReadOnlyList<Preset> All => _presets;
+        /// <summary>All presets in insertion order (read-only view).</summary>
+        public IReadOnlyList<Preset> All => _presets.AsReadOnly();
 
         public IReadOnlyList<Preset> ForMode(string modeId)
         {
@@ -96,6 +96,9 @@ namespace Ballverse.Core.Params.Presets
         /// <summary>
         /// Loads a library; never throws. Invalid entries, duplicate ids and presets beyond <see cref="MaxPerMode"/> for
         /// their mode are skipped and described in <paramref name="problems"/>. Malformed JSON yields an empty library.
+        /// <c>schemaVersion</c> is checked: a missing one is read as version 1; a version newer than
+        /// <see cref="SchemaVersion"/> (written by a newer build) or an invalid one is reported, and the presets are
+        /// still read best-effort so the user does not lose them (values are sanitized when applied).
         /// </summary>
         public static UserPresetLibrary FromJson(string json, out IReadOnlyList<string> problems)
         {
@@ -111,6 +114,16 @@ namespace Ballverse.Core.Params.Presets
             {
                 list.Add("Expected an object with a 'presets' array");
                 return lib;
+            }
+            var version = root["schemaVersion"];
+            if (version != null)
+            {
+                object raw = (version as JValue)?.Value;
+                if (version.Type != JTokenType.Integer)
+                    list.Add("Invalid schemaVersion; reading as version " + SchemaVersion);
+                else if (!(raw is long v) || v < 1 || v > SchemaVersion)
+                    list.Add("Unsupported schemaVersion " + version.ToString(Newtonsoft.Json.Formatting.None) + " (this build reads "
+                        + SchemaVersion + "); presets read best-effort");
             }
             for (int i = 0; i < array.Count; i++)
             {

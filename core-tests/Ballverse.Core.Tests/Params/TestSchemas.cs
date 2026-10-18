@@ -33,7 +33,7 @@ namespace Ballverse.Core.Tests.Params
         public static ParamSchema PegDrop()
         {
             var layer = new ParamSchemaBuilder()
-                .Add(new IntParam("ballCount", 1, 2000, 1, 10).WithTierCap(BodyBudgets.AsTierCap(ModeCode.M04)))
+                .Add(new IntParam("ballCount", 1, 2000, 1, 10).WithTierCap(BodyBudgets.BallCap(ModeCode.M04)))
                 .Add(new IntParam("pegRows", 6, 20, 1, 12).InGroup(ParamGroup.Mode, 10))
                 .Add(new TemplateParam("layout", new[] { "triangle", "diamond", "funnel" }, "triangle").InGroup(ParamGroup.Mode, 20))
                 .BuildLayer();

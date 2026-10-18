@@ -11,8 +11,8 @@ namespace Ballverse.Core.Params
     {
         string[] _options;
 
-        /// <summary>Option ids in panel order.</summary>
-        public IReadOnlyList<string> Options => _options;
+        /// <summary>Option ids in panel order (read-only view).</summary>
+        public IReadOnlyList<string> Options => Array.AsReadOnly(_options);
 
         protected OptionParam(string id, IEnumerable<string> options, string defaultOption)
             : base(id, ParamValue.String(defaultOption))
@@ -61,7 +61,7 @@ namespace Ballverse.Core.Params
         internal override ParamValue Sanitize(ParamValue raw, DeviceTier tier, bool applyTierCap, List<ParamIssue> issues)
         {
             if (raw.Kind != ParamValueKind.String)
-                return Fallback(ParamIssueCode.TypeMismatch, "expected an option id, got " + raw.Kind, tier, applyTierCap, issues);
+                return Fallback(ParamIssueCode.TypeMismatch, "expected an option id, got " + Describe(raw), tier, applyTierCap, issues);
             if (HasOption(raw.AsString)) return raw;
             return Fallback(ParamIssueCode.InvalidOption, "unknown option " + TextRules.Quote(raw.AsString), tier, applyTierCap, issues);
         }

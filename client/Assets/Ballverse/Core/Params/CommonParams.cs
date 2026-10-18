@@ -12,11 +12,15 @@ namespace Ballverse.Core.Params
     /// </summary>
     /// <remarks>
     /// Modelling decisions: <see cref="BallColors"/> empty = use the theme palette; <see cref="Background"/> option
-    /// "theme" = theme background; <see cref="Hud"/> is an enum (auto = mode default elements, minimal, full, off) since
-    /// §7.6 has no flag-set type; <see cref="TargetDuration"/> is an int 10–180 s that also accepts "unlimited" (default);
+    /// "theme" = theme background, option "color" uses <see cref="BackgroundColor"/> (shown only then);
+    /// <see cref="Hud"/> is the master switch ("можно выключить всё") and the §2.2 elements are separate bools
+    /// <see cref="HudTimer"/>, <see cref="HudCounter"/>, <see cref="HudPercent"/>, <see cref="HudLeaders"/> (shown only
+    /// while the HUD is on; modes override their defaults or exclude elements they lack) since §7.6 has no flag-set type;
+    /// <see cref="TargetDuration"/> is an int 10–180 s that also accepts "unlimited" (default);
     /// <see cref="ForcedWinner"/> is 0 = any, otherwise the 1-based participant number (checked against the actual
-    /// participants by the director, spec §2.5); <see cref="Countdown"/> is a bool (off / 3 s); <see cref="Seed"/>
-    /// defaults to 0 and the app supplies a random seed (Core is pure).
+    /// participants by the director, spec §2.5) and exists only in the §2.5 modes (<see cref="SupportsForcedWinner"/>);
+    /// <see cref="Countdown"/> is a bool (off / 3 s); <see cref="Seed"/> defaults to 0 and the app supplies a random
+    /// seed (Core is pure).
     /// </remarks>
     public static class CommonParams
     {
@@ -33,11 +37,16 @@ namespace Ballverse.Core.Params
         public const string BallSkin = "ballSkin";
         public const string Trail = "trail";
         public const string Background = "background";
+        public const string BackgroundColor = "backgroundColor";
         public const string Glow = "glow";
         public const string ImpactFx = "impactFx";
         public const string Labels = "labels";
         public const string LabelNames = "labelNames";
         public const string Hud = "hud";
+        public const string HudTimer = "hudTimer";
+        public const string HudCounter = "hudCounter";
+        public const string HudPercent = "hudPercent";
+        public const string HudLeaders = "hudLeaders";
         public const string SoundPack = "soundPack";
         public const string Melody = "melody";
         public const string SfxVolume = "sfxVolume";
@@ -55,30 +64,38 @@ namespace Ballverse.Core.Params
         public const int MaxBallColors = 32;
 
         /// <summary>Release themes (spec §2.10).</summary>
-        public static readonly IReadOnlyList<string> Themes = new[]
+        public static readonly IReadOnlyList<string> Themes = Array.AsReadOnly(new[]
         {
             "Neon", "Pastel", "Mono", "Candy", "Space", "Ocean", "Sunset", "Retro", "Glass", "Contrast",
-        };
+        });
 
         /// <summary>Sound packs (spec §2.7).</summary>
-        public static readonly IReadOnlyList<string> SoundPacks = new[]
+        public static readonly IReadOnlyList<string> SoundPacks = Array.AsReadOnly(new[]
         {
             "Notes", "Melody", "Pop", "Glass", "Drums", "Asmr", "Chiptune", "None",
-        };
+        });
 
         /// <summary>Built-in melodies named in spec §2.7; more arrive as data (pass them to <see cref="Build"/>).</summary>
-        public static readonly IReadOnlyList<string> Melodies = new[]
+        public static readonly IReadOnlyList<string> Melodies = Array.AsReadOnly(new[]
         {
             "ode_to_joy", "fur_elise", "canon_in_d", "turkish_march", "sugar_plum_fairy", "mountain_king", "greensleeves",
-        };
+        });
 
-        public static readonly IReadOnlyList<string> BallSkins = new[] { "solid", "gradient", "outline", "gloss", "emoji", "flag", "letter" };
-        public static readonly IReadOnlyList<string> Trails = new[] { "off", "short", "long", "rainbow" };
-        public static readonly IReadOnlyList<string> Backgrounds = new[] { "theme", "color", "gradient", "grid", "stars", "blur" };
-        public static readonly IReadOnlyList<string> ImpactFxs = new[] { "off", "sparks", "confetti", "shards" };
-        public static readonly IReadOnlyList<string> LabelModes = new[] { "off", "numbers", "names" };
-        public static readonly IReadOnlyList<string> HudModes = new[] { "auto", "minimal", "full", "off" };
-        public static readonly IReadOnlyList<string> FinaleStyles = new[] { "stop", "slowMo", "zoom", "confetti" };
+        public static readonly IReadOnlyList<string> BallSkins = Array.AsReadOnly(new[] { "solid", "gradient", "outline", "gloss", "emoji", "flag", "letter" });
+        public static readonly IReadOnlyList<string> Trails = Array.AsReadOnly(new[] { "off", "short", "long", "rainbow" });
+        public static readonly IReadOnlyList<string> Backgrounds = Array.AsReadOnly(new[] { "theme", "color", "gradient", "grid", "stars", "blur" });
+        public static readonly IReadOnlyList<string> ImpactFxs = Array.AsReadOnly(new[] { "off", "sparks", "confetti", "shards" });
+        public static readonly IReadOnlyList<string> LabelModes = Array.AsReadOnly(new[] { "off", "numbers", "names" });
+        public static readonly IReadOnlyList<string> FinaleStyles = Array.AsReadOnly(new[] { "stop", "slowMo", "zoom", "confetti" });
+
+        /// <summary>Modes whose winner the director can choose (spec §2.5: M03, M06, M07, M08, M09).</summary>
+        public static readonly IReadOnlyList<ModeCode> ForcedWinnerModes = Array.AsReadOnly(new[]
+        {
+            ModeCode.M03, ModeCode.M06, ModeCode.M07, ModeCode.M08, ModeCode.M09,
+        });
+
+        /// <summary>Default colour of <see cref="BackgroundColor"/>.</summary>
+        public static readonly ColorRgba DefaultBackgroundColor = new ColorRgba(0x10, 0x10, 0x18);
 
         static readonly Lazy<ParamSchema> s_schema = new Lazy<ParamSchema>(() => Build());
 
@@ -111,12 +128,18 @@ namespace Ballverse.Core.Params
             b.Add(new EnumParam(BallSkin, BallSkins, "solid").InGroup(ParamGroup.Look, 20).AsLive());
             b.Add(new EnumParam(Trail, Trails, "short").InGroup(ParamGroup.Look, 30).AsLive());
             b.Add(new EnumParam(Background, Backgrounds, "theme").InGroup(ParamGroup.Look, 40).AsLive());
+            b.Add(new ColorParam(BackgroundColor, DefaultBackgroundColor)
+                .InGroup(ParamGroup.Look, 45).AsLive().WithVisibleIf(VisibleIf.Is(Background, "color")));
             b.Add(new FloatParam(Glow, 0.0, 1.0, 0.05, 0.5).InGroup(ParamGroup.Look, 50).AsLive());
             b.Add(new EnumParam(ImpactFx, ImpactFxs, "sparks").InGroup(ParamGroup.Look, 60).AsLive());
             b.Add(new EnumParam(Labels, LabelModes, "off").InGroup(ParamGroup.Look, 70).AsLive());
             b.Add(new StringListParam(LabelNames, MaxLabelNames, MaxLabelNameLength, new string[0])
                 .InGroup(ParamGroup.Look, 80).AsLive().WithVisibleIf(VisibleIf.Is(Labels, "names")));
-            b.Add(new EnumParam(Hud, HudModes, "auto").InGroup(ParamGroup.Look, 90).AsLive());
+            b.Add(new BoolParam(Hud, true).InGroup(ParamGroup.Look, 90).AsLive());
+            b.Add(new BoolParam(HudTimer, true).InGroup(ParamGroup.Look, 91).AsLive().WithVisibleIf(VisibleIf.IsTrue(Hud)));
+            b.Add(new BoolParam(HudCounter, true).InGroup(ParamGroup.Look, 92).AsLive().WithVisibleIf(VisibleIf.IsTrue(Hud)));
+            b.Add(new BoolParam(HudPercent, false).InGroup(ParamGroup.Look, 93).AsLive().WithVisibleIf(VisibleIf.IsTrue(Hud)));
+            b.Add(new BoolParam(HudLeaders, false).InGroup(ParamGroup.Look, 94).AsLive().WithVisibleIf(VisibleIf.IsTrue(Hud)));
 
             // Sound (live)
             b.Add(new EnumParam(SoundPack, SoundPacks, "Notes").InGroup(ParamGroup.Sound, 10).AsLive());
@@ -137,13 +160,27 @@ namespace Ballverse.Core.Params
         }
 
         /// <summary>
-        /// The common schema for one mode: <see cref="ForcedWinner"/> only exists in modes with a winner (spec §2.2, §2.5).
-        /// Merge the mode layer on top of this.
+        /// Whether the director can force the winner of <paramref name="mode"/>: only the modes listed in spec §2.5, never
+        /// an interactive mode (§2.4). Narrower than <see cref="ModeInfo.HasWinner"/>, which also marks M10 / M14
+        /// (optional winner).
+        /// </summary>
+        public static bool SupportsForcedWinner(ModeInfo mode)
+        {
+            if (mode == null) throw new ArgumentNullException(nameof(mode));
+            if (mode.Interactive) return false;
+            foreach (var code in ForcedWinnerModes)
+                if (code == mode.Code) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// The common schema for one mode: <see cref="ForcedWinner"/> only exists in the modes of spec §2.5
+        /// (<see cref="SupportsForcedWinner"/>). Merge the mode layer on top of this.
         /// </summary>
         public static ParamSchema ForMode(ModeInfo mode)
         {
             if (mode == null) throw new ArgumentNullException(nameof(mode));
-            if (mode.HasWinner) return Schema;
+            if (SupportsForcedWinner(mode)) return Schema;
             var b = new ParamSchemaBuilder();
             foreach (var d in Schema.Params)
                 if (d.Id != ForcedWinner) b.Add(d);

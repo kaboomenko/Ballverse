@@ -8,6 +8,7 @@ namespace Ballverse.Core.Params
     /// <c>Int(min, max, step)</c> parameter (spec §7.6). Values lie on <c>min + k·step</c>; rounding to the grid is
     /// half-up. Optionally accepts the special value "unlimited" (spec §2.2 <c>targetDuration</c> "Без ограничения"),
     /// stored as <see cref="UnlimitedValue"/> and serialized as the string <see cref="UnlimitedToken"/>.
+    /// Tier caps above max are allowed and have no effect (effective max = min(max, cap), spec §2.9 body budgets).
     /// </summary>
     public sealed class IntParam : ParamDef
     {
@@ -91,9 +92,9 @@ namespace Ballverse.Core.Params
                 {
                     double? cap = TierCap.For(tier);
                     if (!cap.HasValue) continue;
-                    if (cap.Value != Math.Floor(cap.Value) || cap.Value < Min || cap.Value > Max)
+                    if (double.IsNaN(cap.Value) || cap.Value != Math.Floor(cap.Value) || cap.Value < Min)
                         throw Error("tier " + tier + " cap " + cap.Value.ToString(CultureInfo.InvariantCulture)
-                            + " must be an integer in [" + Min + ", " + Max + "]");
+                            + " must be an integer >= min " + Min);
                 }
             }
         }
@@ -123,6 +124,16 @@ namespace Ballverse.Core.Params
                     if (!below && !above && k <= kMax && Min + k * Step == v) return raw;
                     break;
                 }
+                case ParamValueKind.Seed when raw.AsSeed > long.MaxValue:
+                    // JSON integers above long.MaxValue are read as seeds (see ParamJson): far above any max.
+                    original = raw.AsSeed.ToString(CultureInfo.InvariantCulture);
+                    below = false;
+                    above = true;
+                    aboveMax = true;
+                    k = 0;
+                    break;
+                case ParamValueKind.Seed:
+                    return Sanitize(ParamValue.Int((long)raw.AsSeed), tier, applyTierCap, issues);
                 case ParamValueKind.Float:
                 {
                     double x = raw.AsFloat;
@@ -137,7 +148,7 @@ namespace Ballverse.Core.Params
                     break;
                 }
                 default:
-                    return Fallback(ParamIssueCode.TypeMismatch, "expected an integer, got " + raw.Kind, tier, applyTierCap, issues);
+                    return Fallback(ParamIssueCode.TypeMismatch, "expected an integer, got " + Describe(raw), tier, applyTierCap, issues);
             }
 
             if (below)
@@ -170,10 +181,16 @@ namespace Ballverse.Core.Params
             return d <= Min + kMax * Step ? Default : ParamValue.Int(Min + kMax * Step);
         }
 
+        /// <summary>
+        /// Range, step, default and tier caps come from the mode; the unit is inherited when the mode gives none, and
+        /// "unlimited" stays allowed when the common parameter allows it (a mode cannot drop a §2.2 range value such as
+        /// targetDuration "Без ограничения" by overriding only the default).
+        /// </summary>
         internal override ParamDef ApplyOverride(ParamDef modeDef)
         {
             var merged = (IntParam)base.ApplyOverride(modeDef);
             if (merged.Unit == null) merged.Unit = Unit;
+            merged.AllowUnlimited = merged.AllowUnlimited || AllowUnlimited;
             return merged;
         }
 

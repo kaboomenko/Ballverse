@@ -7,7 +7,9 @@ namespace Ballverse.Core.Params
     /// <summary>
     /// <c>Float(min, max, step, unit)</c> parameter (spec §7.6). Values are <see cref="float"/>s that lie exactly on the
     /// grid <c>(float)(min + k·step)</c>, computed in double and then cast, so sanitizing is idempotent and free of drift.
-    /// Rounding to the grid is half-up (ties go to the larger k).
+    /// Rounding to the grid is half-up (ties go to the larger k). A grid value whose double sum lands within
+    /// <c>step·1e-9</c> of zero is exactly 0 (cancellation in e.g. <c>-0.3 + 3·0.1</c> would otherwise leave 5.55e-17).
+    /// Tier caps above max are allowed and have no effect (effective max = min(max, cap), spec §2.9).
     /// </summary>
     public sealed class FloatParam : ParamDef
     {
@@ -15,6 +17,11 @@ namespace Ballverse.Core.Params
         const double GridTolerance = 0.01;
         /// <summary>Smallest allowed step relative to max(|min|, |max|): keeps float rounding below 1% of a step.</summary>
         const double MinRelativeStep = 1e-5;
+        /// <summary>
+        /// Grid values closer than this many steps to zero are zero. Double cancellation error is at most about
+        /// 1e-16·max(|min|, |max|), which <see cref="MinRelativeStep"/> keeps below 1e-11 steps.
+        /// </summary>
+        const double ZeroTolerance = 1e-9;
 
         public double Min { get; private set; }
         public double Max { get; private set; }
@@ -87,8 +94,8 @@ namespace Ballverse.Core.Params
                 foreach (DeviceTier tier in new[] { DeviceTier.A, DeviceTier.B, DeviceTier.C })
                 {
                     double? cap = TierCap.For(tier);
-                    if (cap.HasValue && (!IsFinite(cap.Value) || cap.Value < Min || cap.Value > Max))
-                        throw Error("tier " + tier + " cap " + F(cap.Value) + " is outside [" + F(Min) + ", " + F(Max) + "]");
+                    if (cap.HasValue && (!IsFinite(cap.Value) || cap.Value < Min))
+                        throw Error("tier " + tier + " cap " + F(cap.Value) + " is below min " + F(Min));
                 }
             }
             Default = ParamValue.Float(SnapCore(d, Max));
@@ -106,9 +113,14 @@ namespace Ballverse.Core.Params
             {
                 x = raw.AsInt;
             }
+            else if (raw.Kind == ParamValueKind.Seed)
+            {
+                // JSON integers above long.MaxValue are read as seeds (see ParamJson); treat them as numbers.
+                x = raw.AsSeed;
+            }
             else
             {
-                return Fallback(ParamIssueCode.TypeMismatch, "expected a number, got " + raw.Kind, tier, applyTierCap, issues);
+                return Fallback(ParamIssueCode.TypeMismatch, "expected a number, got " + Describe(raw), tier, applyTierCap, issues);
             }
 
             double effMax = applyTierCap ? EffectiveMax(tier) : Max;
@@ -129,8 +141,8 @@ namespace Ballverse.Core.Params
             }
 
             float result = SnapCore(x, effMax);
-            // Plain double-to-float rounding of an on-grid value (1.35 -> 1.35f) is not reported.
-            if (!clamped && BitConverter.SingleToInt32Bits(result) != BitConverter.SingleToInt32Bits((float)x))
+            // Plain double-to-float rounding of an on-grid value (1.35 -> 1.35f) and -0 -> 0 are not reported.
+            if (!clamped && result != (float)x)
             {
                 issues.Add(new ParamIssue(Id, ParamIssueCode.Snapped, F(x) + " snapped to " + F(result)));
             }
@@ -160,7 +172,9 @@ namespace Ballverse.Core.Params
             else if (t >= kMax) k = kMax;
             else k = (long)Math.Floor(t + 0.5);
             if (k > kMax) k = kMax;
-            float r = (float)(Min + k * Step);
+            double v = Min + k * Step;
+            if (Math.Abs(v) < Step * ZeroTolerance) return 0f;
+            float r = (float)v;
             return r == 0f ? 0f : r;
         }
 

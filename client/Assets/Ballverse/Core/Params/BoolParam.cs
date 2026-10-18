@@ -23,7 +23,7 @@ namespace Ballverse.Core.Params
         internal override ParamValue Sanitize(ParamValue raw, DeviceTier tier, bool applyTierCap, List<ParamIssue> issues)
         {
             if (raw.Kind == ParamValueKind.Bool) return raw;
-            return Fallback(ParamIssueCode.TypeMismatch, "expected a bool, got " + raw.Kind, tier, applyTierCap, issues);
+            return Fallback(ParamIssueCode.TypeMismatch, "expected a bool, got " + Describe(raw), tier, applyTierCap, issues);
         }
     }
 }

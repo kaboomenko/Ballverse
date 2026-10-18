@@ -76,7 +76,7 @@ namespace Ballverse.Core.Params
                     if (isLayer) continue;
                     throw new ParamSchemaException(def.Id, "visibleIf references unknown parameter '" + cond.TargetId + "'");
                 }
-                ValidateCondition(def, cond, target);
+                def.SetVisibleIf(ValidateCondition(def, cond, target));
             }
 
             foreach (var def in defs) CheckCycle(def, index);
@@ -103,19 +103,27 @@ namespace Ballverse.Core.Params
             return new ParamSchema(sorted, excluded.ToArray(), isLayer);
         }
 
-        internal static void ValidateCondition(ParamDef def, VisibleIf cond, ParamDef target)
+        /// <summary>
+        /// Checks a condition against its target and returns it with values in their sanitized form, so e.g.
+        /// <c>VisibleIf.Is("g", ParamValue.Float(0.15))</c> on a float target matches the stored <c>0.15f</c>.
+        /// </summary>
+        internal static VisibleIf ValidateCondition(ParamDef def, VisibleIf cond, ParamDef target)
         {
             if (cond.Kind == VisibleIfKind.IsTrue)
             {
                 if (target.Type != ParamType.Bool)
                     throw new ParamSchemaException(def.Id, "visibleIf IsTrue needs a Bool target, '" + target.Id + "' is " + target.Type);
-                return;
+                return cond;
             }
-            foreach (var v in cond.Values)
+            var values = cond.Values;
+            var normalized = new ParamValue[values.Count];
+            for (int i = 0; i < normalized.Length; i++)
             {
-                if (!target.AcceptsConditionValue(v))
-                    throw new ParamSchemaException(def.Id, "visibleIf value " + v + " is never a valid value of '" + target.Id + "'");
+                if (!target.TryNormalizeConditionValue(values[i], out normalized[i]))
+                    throw new ParamSchemaException(def.Id, "visibleIf value " + values[i] + " is never a valid value of '" + target.Id
+                        + "' (it must lie in the range and on the step grid, or be one of the options)");
             }
+            return cond.WithValues(normalized);
         }
 
         internal static void CheckCycle(ParamDef start, Dictionary<string, ParamDef> index)

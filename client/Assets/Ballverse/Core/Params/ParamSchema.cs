@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace Ballverse.Core.Params
 {
@@ -13,20 +14,24 @@ namespace Ballverse.Core.Params
         readonly ParamDef[] _params;
         readonly Dictionary<string, ParamDef> _index;
         readonly string[] _excluded;
+        readonly ReadOnlyCollection<ParamDef> _paramsView;
+        readonly ReadOnlyCollection<string> _excludedView;
 
-        /// <summary>Definitions in schema order.</summary>
-        public IReadOnlyList<ParamDef> Params => _params;
+        /// <summary>Definitions in schema order (read-only view).</summary>
+        public IReadOnlyList<ParamDef> Params => _paramsView;
         public int Count => _params.Length;
         /// <summary>True for a mode layer (see <see cref="ParamSchemaBuilder.BuildLayer"/>).</summary>
         public bool IsLayer { get; }
         /// <summary>Layer only: common parameter ids removed by the mode.</summary>
-        public IReadOnlyList<string> Excluded => _excluded;
+        public IReadOnlyList<string> Excluded => _excludedView;
 
         internal ParamSchema(ParamDef[] defs, string[] excluded, bool isLayer)
         {
             _params = defs;
             _excluded = excluded;
             IsLayer = isLayer;
+            _paramsView = Array.AsReadOnly(defs);
+            _excludedView = Array.AsReadOnly(excluded);
             _index = new Dictionary<string, ParamDef>(StringComparer.Ordinal);
             foreach (var d in defs) _index.Add(d.Id, d);
         }
@@ -59,6 +64,18 @@ namespace Ballverse.Core.Params
         public bool IsLiveEditable(string id)
         {
             return Get(id).Live;
+        }
+
+        /// <summary>
+        /// Sanitizes one value of <paramref name="id"/> on <paramref name="tier"/> (tier caps applied), e.g. a live edit
+        /// from the panel or a replay PARM event (spec §2.2 panel rules, §7.4). Issues go to <paramref name="issues"/>
+        /// when given. Throws <see cref="KeyNotFoundException"/> for an unknown id; never throws for any value.
+        /// </summary>
+        public ParamValue SanitizeValue(string id, ParamValue value, DeviceTier tier, List<ParamIssue> issues = null)
+        {
+            if (value == null) throw new ArgumentNullException(nameof(value));
+            RequireComplete();
+            return Get(id).Sanitize(value, tier, true, issues ?? new List<ParamIssue>());
         }
 
         /// <summary>
@@ -101,7 +118,8 @@ namespace Ballverse.Core.Params
         /// <summary>
         /// Mode schema = common parameters plus the mode layer (spec §7.6 "параметры режима поверх общих").
         /// A mode definition with a common id overrides range, step, default, tier caps and options but must keep the
-        /// type; group, order, <c>live</c>, <c>visibleIf</c> and label stay those of the common parameter.
+        /// type; group, order, <c>live</c>, <c>visibleIf</c> and label stay those of the common parameter. The unit is
+        /// inherited when the mode gives none, and an int parameter that accepts "unlimited" keeps accepting it.
         /// Excluded common ids are removed. The result is validated like <see cref="ParamSchemaBuilder.Build"/>.
         /// </summary>
         public static ParamSchema Merge(ParamSchema common, ParamSchema mode)

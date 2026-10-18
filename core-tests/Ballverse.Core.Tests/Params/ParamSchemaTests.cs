@@ -74,7 +74,7 @@ namespace Ballverse.Core.Tests.Params
         public void LayerValidatesOverriddenValues()
         {
             Assert.Throws<ParamSchemaException>(() => new ParamSchemaBuilder()
-                .Add(new IntParam("ballCount", 1, 2000, 1, 10).WithTierCap(new TierCap(3000, null, null))).BuildLayer());
+                .Add(new IntParam("ballCount", 1, 2000, 1, 10).WithTierCap(new TierCap(0, null, null))).BuildLayer());
             Assert.Throws<ParamSchemaException>(() => new ParamSchemaBuilder()
                 .Add(new FloatParam("restitution", 0, 1.2, 0.01, 1.5)).BuildLayer());
         }
@@ -172,9 +172,11 @@ namespace Ballverse.Core.Tests.Params
         {
             var schema = CommonParams.Schema;
             var all = schema.CreateDefaults().With(CommonParams.SoundPack, ParamValue.String("Melody"))
-                .With(CommonParams.Labels, ParamValue.String("names"));
+                .With(CommonParams.Labels, ParamValue.String("names"))
+                .With(CommonParams.Background, ParamValue.String("color"));
             Assert.Equal(schema.Params.Select(p => p.Id), schema.GetVisible(all).Select(p => p.Id));
-            Assert.Equal(schema.Count - 2, schema.GetVisible(schema.CreateDefaults()).Count);
+            // hidden by default: melody, labelNames, backgroundColor
+            Assert.Equal(schema.Count - 3, schema.GetVisible(schema.CreateDefaults()).Count);
         }
 
         [Fact]

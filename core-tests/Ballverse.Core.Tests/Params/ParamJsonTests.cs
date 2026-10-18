@@ -37,8 +37,8 @@ namespace Ballverse.Core.Tests.Params
                 ("shrinkSpeed", ParamValue.Float(0.7)));
         }
 
-        const ulong CommonDefaultsHash = 0x56094870ac7ec9ffUL;   // cross-checked with the Python `xxhash` package
-        const ulong RingSampleHash = 0x2ffe513bb0016e45UL;
+        const ulong CommonDefaultsHash = 0x49c9b43c5cffb0dbUL;   // cross-checked with the Python `xxhash` package
+        const ulong RingSampleHash = 0x60eb15d26766ff48UL;
 
         static string Golden(string name)
         {
@@ -153,11 +153,14 @@ namespace Ballverse.Core.Tests.Params
         }
 
         [Fact]
-        public void FromJsonSkipsUnsupportedTokensAndLastDuplicateWins()
+        public void FromJsonKeepsUnsupportedTokensAsInvalidAndLastDuplicateWins()
         {
             var v = ParamJson.FromJson("{\"n\":null,\"o\":{\"x\":1},\"mixed\":[\"a\",1],\"d\":1,\"d\":2} // trailing comment");
-            Assert.Equal(new[] { "d" }, v.Ids);
+            Assert.Equal(new[] { "d", "mixed", "n", "o" }, v.Ids);
             Assert.Equal(ParamValue.Int(2), v.Get("d"));
+            Assert.Equal(ParamValue.Invalid("null"), v.Get("n"));
+            Assert.Equal(ParamValue.Invalid("object"), v.Get("o"));
+            Assert.Equal(ParamValueKind.Invalid, v.Get("mixed").Kind);
         }
 
         [Theory]

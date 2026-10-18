@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace Ballverse.Core.Params
 {
@@ -14,6 +15,7 @@ namespace Ballverse.Core.Params
 
         readonly Dictionary<string, ParamValue> _values;
         readonly string[] _ids;
+        readonly ReadOnlyCollection<string> _idsView;
 
         /// <summary>Builds a set; throws on null ids / values or duplicate ids.</summary>
         public ParamSet(IEnumerable<KeyValuePair<string, ParamValue>> values)
@@ -30,6 +32,7 @@ namespace Ballverse.Core.Params
             _ids = new string[_values.Count];
             _values.Keys.CopyTo(_ids, 0);
             Array.Sort(_ids, StringComparer.Ordinal);
+            _idsView = Array.AsReadOnly(_ids);
         }
 
         ParamSet(Dictionary<string, ParamValue> values)
@@ -38,11 +41,12 @@ namespace Ballverse.Core.Params
             _ids = new string[_values.Count];
             _values.Keys.CopyTo(_ids, 0);
             Array.Sort(_ids, StringComparer.Ordinal);
+            _idsView = Array.AsReadOnly(_ids);
         }
 
         public int Count => _ids.Length;
-        /// <summary>Ids in ordinal order.</summary>
-        public IReadOnlyList<string> Ids => _ids;
+        /// <summary>Ids in ordinal order (read-only view).</summary>
+        public IReadOnlyList<string> Ids => _idsView;
 
         public bool Contains(string id)
         {

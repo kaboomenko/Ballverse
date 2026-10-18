@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Ballverse.Core.Params;
 using Xunit;
@@ -32,7 +33,7 @@ namespace Ballverse.Core.Tests.Params
             }
         }
 
-        /// <summary>Every type, odd steps, negative ranges, off-grid tier caps.</summary>
+        /// <summary>Every type, odd steps, negative ranges, ranges crossing zero, off-grid and above-max tier caps.</summary>
         static ParamSchema Synthetic()
         {
             return new ParamSchemaBuilder()
@@ -40,9 +41,13 @@ namespace Ballverse.Core.Tests.Params
                 .Add(new FloatParam("f2", 0.001, 0.01, 0.0003, 0.0019))
                 .Add(new FloatParam("f3", 100, 5000, 0.5, 250))
                 .Add(new FloatParam("f4", -1, -1, 0.1, -1))
+                .Add(new FloatParam("z1", -0.3, 0.3, 0.1, 0.0))
+                .Add(new FloatParam("z2", -0.7, 0.7, 0.1, 0.0).WithTierCap(new TierCap(5, 0.3, 0.0)))
+                .Add(new FloatParam("z3", -2.1, 4.2, 0.3, 0.0))
                 .Add(new IntParam("i1", -50, 50, 7, -50).WithTierCap(new TierCap(null, 20, -10)))
                 .Add(new IntParam("i2", 10, 180, 1, 30).WithUnlimited())
                 .Add(new IntParam("i3", -1073741000, int.MaxValue / 2, 1000, 0))
+                .Add(new IntParam("i4", 0, 16, 1, 6).WithTierCap(new TierCap(76, 76, 76)))
                 .Add(new BoolParam("b", true))
                 .Add(new EnumParam("e", new[] { "a", "b", "c" }, "b"))
                 .Add(new TemplateParam("t", new[] { "zigzag", "funnel", "windmill" }, "funnel"))
@@ -73,8 +78,9 @@ namespace Ballverse.Core.Tests.Params
                 // sanitizing is deterministic
                 Assert.Equal(first.Values, raw.Sanitize(schema, tier).Values);
 
-                // canonical JSON round trip is lossless and hash-stable
-                string json = ParamJson.ToCanonicalJson(first.Values, schema);
+                // canonical JSON round trip through the UTF-8 bytes (replay paramsJson) is lossless and hash-stable
+                string json = Encoding.UTF8.GetString(ParamJson.ToCanonicalUtf8(first.Values, schema));
+                Assert.Equal(ParamJson.ToCanonicalJson(first.Values, schema), json);
                 var reread = ParamJson.FromJson(json).Sanitize(schema, tier);
                 if (reread.Issues.Count != 0) Assert.Fail("iteration " + i + ": " + json + " :: " + string.Join("; ", reread.Issues));
                 Assert.Equal(first.Values, reread.Values);
@@ -85,6 +91,13 @@ namespace Ballverse.Core.Tests.Params
                 var p2 = p1.Values.SanitizePartial(schema);
                 Assert.Equal(p1.Values, p2.Values);
                 Assert.Empty(p2.Issues);
+
+                // canonical bytes never depend on raw kinds: a raw set is either refused or written like its sanitized form
+                bool clean = p1.Issues.All(x => x.Code == ParamIssueCode.Unknown);
+                if (clean)
+                    Assert.Equal(ParamJson.ToCanonicalJson(p1.Values, schema), ParamJson.ToCanonicalJson(raw, schema));
+                else
+                    Assert.Throws<ArgumentException>(() => ParamJson.ParamsHash(raw, schema));
             }
         }
 
@@ -109,7 +122,10 @@ namespace Ballverse.Core.Tests.Params
                             double x = v.AsFloat;
                             Assert.Equal((double)(float)x, x);
                             double k = Math.Round((x - f.Min) / f.Step);
-                            Assert.Equal((float)(f.Min + k * f.Step), (float)x);
+                            double grid = f.Min + k * f.Step;
+                            // grid values within step·1e-9 of zero are exactly zero (no cancellation residue)
+                            Assert.Equal(Math.Abs(grid) < f.Step * 1e-9 ? 0f : (float)grid, (float)x);
+                            Assert.NotEqual(BitConverter.DoubleToInt64Bits(-0.0), BitConverter.DoubleToInt64Bits(x));
                             Assert.True(k >= 0 && f.Min + k * f.Step <= f.EffectiveMax(tier) + 1e-9);
                             break;
                         }
@@ -253,8 +269,10 @@ namespace Ballverse.Core.Tests.Params
 
         static ParamValue RandomAny(ref Rng rng)
         {
-            switch (rng.NextUInt(8))
+            switch (rng.NextUInt(10))
             {
+                case 8: return ParamValue.Invalid(rng.NextBool() ? "null" : "object");
+                case 9: return ParamValue.Seed(ulong.MaxValue - rng.NextUInt(1000));
                 case 0: return RandomNumber(ref rng);
                 case 1: return ParamValue.Int(rng.NextInt(-500, 500));
                 case 2: return ParamValue.Bool(rng.NextBool());

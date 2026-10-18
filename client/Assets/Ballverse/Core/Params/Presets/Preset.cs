@@ -95,11 +95,14 @@ namespace Ballverse.Core.Params.Presets
             return true;
         }
 
-        /// <summary>Trimmed name if it has 1–32 code points after trimming, otherwise null (spec §2.3 rename rules).</summary>
+        /// <summary>
+        /// Trimmed name if it has 1–32 code points after trimming, otherwise null (spec §2.3 rename rules). Unpaired
+        /// surrogates are replaced with U+FFFD so the name survives the UTF-8 preset file.
+        /// </summary>
         public static string NormalizeName(string name)
         {
             if (name == null) return null;
-            string t = name.Trim();
+            string t = TextRules.ReplaceLoneSurrogates(name.Trim());
             int n = TextRules.CodePointCount(t);
             return n >= 1 && n <= MaxNameLength ? t : null;
         }

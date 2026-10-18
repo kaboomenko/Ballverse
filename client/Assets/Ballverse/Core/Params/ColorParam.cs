@@ -28,7 +28,7 @@ namespace Ballverse.Core.Params
                 if (ColorRgba.TryParse(raw.AsString, out ColorRgba c)) return ParamValue.Color(c);
                 return Fallback(ParamIssueCode.InvalidValue, "invalid colour " + TextRules.Quote(raw.AsString), tier, applyTierCap, issues);
             }
-            return Fallback(ParamIssueCode.TypeMismatch, "expected a colour, got " + raw.Kind, tier, applyTierCap, issues);
+            return Fallback(ParamIssueCode.TypeMismatch, "expected a colour, got " + Describe(raw), tier, applyTierCap, issues);
         }
     }
 }

@@ -44,7 +44,7 @@ namespace Ballverse.Core.Params
                     if (TryParse(raw.AsString, out ulong seed)) return ParamValue.Seed(seed);
                     return Fallback(ParamIssueCode.InvalidValue, "invalid seed " + TextRules.Quote(raw.AsString), tier, applyTierCap, issues);
                 default:
-                    return Fallback(ParamIssueCode.TypeMismatch, "expected a seed, got " + raw.Kind, tier, applyTierCap, issues);
+                    return Fallback(ParamIssueCode.TypeMismatch, "expected a seed, got " + Describe(raw), tier, applyTierCap, issues);
             }
         }
     }

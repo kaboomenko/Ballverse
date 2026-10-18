@@ -26,7 +26,7 @@ namespace Ballverse.Core.Params
         public VisibleIfKind Kind { get; }
         public string TargetId { get; }
         /// <summary>Accepted values (one for <see cref="VisibleIfKind.Is"/>, empty for <see cref="VisibleIfKind.IsTrue"/>).</summary>
-        public IReadOnlyList<ParamValue> Values => _values;
+        public IReadOnlyList<ParamValue> Values => Array.AsReadOnly(_values);
 
         VisibleIf(VisibleIfKind kind, string targetId, ParamValue[] values)
         {
@@ -70,6 +70,12 @@ namespace Ballverse.Core.Params
         public static VisibleIf IsTrue(string targetId)
         {
             return new VisibleIf(VisibleIfKind.IsTrue, targetId, new ParamValue[0]);
+        }
+
+        /// <summary>Same condition with other values (used to store sanitized forms when a schema is built).</summary>
+        internal VisibleIf WithValues(ParamValue[] values)
+        {
+            return new VisibleIf(Kind, TargetId, values);
         }
 
         /// <summary>Evaluates the condition against the target's current value (null counts as not matching).</summary>

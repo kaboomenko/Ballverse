@@ -27,5 +27,10 @@ namespace Ballverse.Core.Params
         ListPadded = 10,
         /// <summary>A string was longer than allowed; cut at a code point boundary.</summary>
         StringTruncated = 11,
+        /// <summary>
+        /// A string held unpaired UTF-16 surrogates, which UTF-8 cannot carry; each was replaced with U+FFFD so the
+        /// value round-trips through the replay paramsJson unchanged (spec §7.4).
+        /// </summary>
+        InvalidText = 12,
     }
 }

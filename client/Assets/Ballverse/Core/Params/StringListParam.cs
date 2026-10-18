@@ -6,7 +6,8 @@ namespace Ballverse.Core.Params
     /// <summary>
     /// <c>StringList(maxItems, maxLen)</c> parameter (spec §7.6), e.g. <c>labelNames</c>: up to 32 names of 16 characters
     /// (spec §2.2). Lengths count Unicode code points; sanitizing cuts the list to <see cref="MaxItems"/> and each item
-    /// to <see cref="MaxLength"/> without splitting surrogate pairs. Items are otherwise kept as given (empty allowed).
+    /// to <see cref="MaxLength"/> without splitting surrogate pairs, and replaces unpaired surrogates with U+FFFD (they
+    /// would not survive UTF-8). Items are otherwise kept as given (empty allowed).
     /// </summary>
     public sealed class StringListParam : ParamDef
     {
@@ -51,13 +52,16 @@ namespace Ballverse.Core.Params
             var d = Default.AsStrings;
             if (d.Count > MaxItems) throw Error("default has " + d.Count + " items, max " + MaxItems);
             foreach (string s in d)
+            {
                 if (TextRules.CodePointCount(s) > MaxLength) throw Error("default item " + TextRules.Quote(s) + " is longer than " + MaxLength);
+                if (TextRules.HasLoneSurrogate(s)) throw Error("default item has an unpaired surrogate");
+            }
         }
 
         internal override ParamValue Sanitize(ParamValue raw, DeviceTier tier, bool applyTierCap, List<ParamIssue> issues)
         {
             if (raw.Kind != ParamValueKind.StringList)
-                return Fallback(ParamIssueCode.TypeMismatch, "expected a string list, got " + raw.Kind, tier, applyTierCap, issues);
+                return Fallback(ParamIssueCode.TypeMismatch, "expected a string list, got " + Describe(raw), tier, applyTierCap, issues);
             var items = raw.AsStrings;
             bool changed = false;
             int count = items.Count;
@@ -71,6 +75,13 @@ namespace Ballverse.Core.Params
             for (int i = 0; i < count; i++)
             {
                 string s = items[i];
+                string repaired = TextRules.ReplaceLoneSurrogates(s);
+                if (!ReferenceEquals(repaired, s))
+                {
+                    issues.Add(new ParamIssue(Id, ParamIssueCode.InvalidText, "item " + i + ": unpaired surrogates replaced with U+FFFD"));
+                    s = repaired;
+                    changed = true;
+                }
                 if (TextRules.CodePointCount(s) > MaxLength)
                 {
                     issues.Add(new ParamIssue(Id, ParamIssueCode.StringTruncated, "item " + i + " cut to " + MaxLength + " characters"));

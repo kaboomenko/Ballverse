@@ -17,6 +17,53 @@ namespace Ballverse.Core.Params
             return n;
         }
 
+        /// <summary>True when <paramref name="s"/> holds a high or low surrogate that is not part of a pair.</summary>
+        public static bool HasLoneSurrogate(string s)
+        {
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (char.IsHighSurrogate(c))
+                {
+                    if (i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) i++;
+                    else return true;
+                }
+                else if (char.IsLowSurrogate(c))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// <paramref name="s"/> with every unpaired surrogate replaced by U+FFFD, so the text survives UTF-8 encoding
+        /// unchanged (replay paramsJson, spec §7.4; preset files). Returns the same instance when nothing changes.
+        /// </summary>
+        public static string ReplaceLoneSurrogates(string s)
+        {
+            if (!HasLoneSurrogate(s)) return s;
+            var sb = new StringBuilder(s.Length);
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (char.IsHighSurrogate(c) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]))
+                {
+                    sb.Append(c).Append(s[i + 1]);
+                    i++;
+                }
+                else if (char.IsSurrogate(c))
+                {
+                    sb.Append('\uFFFD');
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            return sb.ToString();
+        }
+
         /// <summary>First <paramref name="maxCodePoints"/> code points of <paramref name="s"/>; never splits a surrogate pair.</summary>
         public static string Truncate(string s, int maxCodePoints)
         {

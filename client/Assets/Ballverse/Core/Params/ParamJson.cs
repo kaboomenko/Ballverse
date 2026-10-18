@@ -13,7 +13,9 @@ namespace Ballverse.Core.Params
     /// JSON form of parameter values (spec §7.4 replay <c>paramsJson</c> / <c>paramsHash</c>, §7.6 preset serialization).
     /// Value encoding: floats as numbers via <see cref="CanonicalFloat"/>, ints as integers, unlimited as
     /// <c>"unlimited"</c>, bools, option ids as strings, colours as canonical <c>#RRGGBB[AA]</c> strings, lists as arrays,
-    /// seeds as decimal strings. Reading is schema-free: <see cref="ParamSet.Sanitize"/> converts raw kinds.
+    /// seeds as decimal strings. Reading is schema-free: <see cref="ParamSet.Sanitize"/> converts raw kinds. JSON integers
+    /// above <see cref="long.MaxValue"/> (up to <see cref="ulong.MaxValue"/>) are read as seeds, which numeric
+    /// parameters accept as numbers (and clamp).
     /// </summary>
     public static class ParamJson
     {
@@ -22,20 +24,32 @@ namespace Ballverse.Core.Params
         /// <summary>
         /// Canonical JSON: exactly the schema's parameters, keys in schema order (not dictionary order), compact unless
         /// <paramref name="indented"/> (LF newlines, 2-space indent). Values missing from <paramref name="set"/> are
-        /// written as defaults; unknown ids are ignored. Pass a sanitized set.
+        /// written as defaults; unknown ids are ignored. Every value is first normalized through its definition (tier caps
+        /// not applied), so equivalent raw kinds give the same bytes (an int 30 for a float parameter is written 30.0, a
+        /// seed string as the seed). Throws <see cref="ArgumentException"/> when a value is not already valid (it would
+        /// be clamped, snapped, truncated or replaced by sanitizing): pass a sanitized set (spec §7.4 paramsJson).
         /// </summary>
         public static string ToCanonicalJson(ParamSet set, ParamSchema schema, bool indented = false)
         {
             if (set == null) throw new ArgumentNullException(nameof(set));
             if (schema == null) throw new ArgumentNullException(nameof(schema));
             schema.RequireComplete();
+            var values = new ParamValue[schema.Count];
+            var issues = new List<ParamIssue>();
+            for (int i = 0; i < values.Length; i++)
+            {
+                var def = schema.Params[i];
+                values[i] = set.TryGet(def.Id, out ParamValue v) ? def.Sanitize(v, DeviceTier.A, false, issues) : def.Default;
+                if (issues.Count > 0)
+                    throw new ArgumentException("Parameter set is not sanitized: " + issues[0], nameof(set));
+            }
             return Write(indented, w =>
             {
                 w.WriteStartObject();
-                foreach (var def in schema.Params)
+                for (int i = 0; i < values.Length; i++)
                 {
-                    w.WritePropertyName(def.Id);
-                    WriteValue(w, set.TryGet(def.Id, out ParamValue v) ? v : def.Default);
+                    w.WritePropertyName(schema.Params[i].Id);
+                    WriteValue(w, values[i]);
                 }
                 w.WriteEndObject();
             });
@@ -75,6 +89,42 @@ namespace Ballverse.Core.Params
             });
         }
 
+        /// <summary>
+        /// Compact canonical JSON of one value, in the encoding of <see cref="ToCanonicalJson"/> (for the replay PARM
+        /// chunk "paramId · value", spec §7.4). Pass a sanitized value (see <see cref="ParamSchema.SanitizeValue"/>).
+        /// </summary>
+        public static string WriteValue(ParamValue value)
+        {
+            if (value == null) throw new ArgumentNullException(nameof(value));
+            if (value.Kind == ParamValueKind.Invalid) throw new ArgumentException("An invalid raw value cannot be written", nameof(value));
+            return Write(false, w => WriteValue(w, value));
+        }
+
+        /// <summary>
+        /// Reads one raw value written by <see cref="WriteValue"/> (or any JSON value: unusable shapes become
+        /// <see cref="ParamValueKind.Invalid"/>). Throws <see cref="FormatException"/> on malformed JSON. Sanitize the
+        /// result with <see cref="ParamSchema.SanitizeValue"/>.
+        /// </summary>
+        public static ParamValue ReadValue(string json)
+        {
+            if (json == null) throw new ArgumentNullException(nameof(json));
+            try
+            {
+                using (var reader = new JsonTextReader(new StringReader(json)))
+                {
+                    reader.DateParseHandling = DateParseHandling.None;
+                    reader.FloatParseHandling = FloatParseHandling.Double;
+                    var token = JToken.ReadFrom(reader);
+                    if (reader.Read()) throw new FormatException("Unexpected content after the JSON value");
+                    return FromToken(token);
+                }
+            }
+            catch (JsonException e)
+            {
+                throw new FormatException("Malformed JSON: " + e.Message, e);
+            }
+        }
+
         /// <summary>Reads a JSON object of raw values. Throws <see cref="FormatException"/> on malformed JSON.</summary>
         public static ParamSet FromJson(string json)
         {
@@ -83,8 +133,9 @@ namespace Ballverse.Core.Params
         }
 
         /// <summary>
-        /// Reads a JSON object of raw values; never throws. Nulls, nested objects and arrays with non-string items are
-        /// skipped (a later <see cref="ParamSet.Sanitize"/> reports them as missing). Duplicate keys: the last wins.
+        /// Reads a JSON object of raw values; never throws. Nulls, nested objects and arrays with non-string items become
+        /// <see cref="ParamValueKind.Invalid"/> values, which sanitizing reports as type mismatches (or unknown ids), so
+        /// they are never dropped silently (spec §2.3). Duplicate keys: the last wins.
         /// </summary>
         public static bool TryFromJson(string json, out ParamSet set, out string error)
         {
@@ -133,11 +184,7 @@ namespace Ballverse.Core.Params
         internal static ParamSet FromJObject(JObject obj)
         {
             var pairs = new Dictionary<string, ParamValue>(StringComparer.Ordinal);
-            foreach (var prop in obj.Properties())
-            {
-                var v = FromToken(prop.Value);
-                if (v != null) pairs[prop.Name] = v;
-            }
+            foreach (var prop in obj.Properties()) pairs[prop.Name] = FromToken(prop.Value);
             return new ParamSet(pairs);
         }
 
@@ -173,13 +220,17 @@ namespace Ballverse.Core.Params
                     var items = new List<string>();
                     foreach (var item in (JArray)token)
                     {
-                        if (item.Type != JTokenType.String) return null;
+                        if (item.Type != JTokenType.String) return ParamValue.Invalid("array with a non-string item");
                         items.Add((string)((JValue)item).Value);
                     }
                     return ParamValue.Strings(items);
                 }
+                case JTokenType.Null:
+                    return ParamValue.Invalid("null");
+                case JTokenType.Object:
+                    return ParamValue.Invalid("object");
                 default:
-                    return null;
+                    return ParamValue.Invalid(token.Type.ToString().ToLowerInvariant());
             }
         }
 
@@ -211,6 +262,8 @@ namespace Ballverse.Core.Params
                 }
                 case ParamValueKind.Seed:
                     return new JValue(v.AsSeed.ToString(CultureInfo.InvariantCulture));
+                case ParamValueKind.Invalid:
+                    return JValue.CreateNull();
                 default:
                     throw new ArgumentOutOfRangeException(nameof(v));
             }
@@ -248,6 +301,10 @@ namespace Ballverse.Core.Params
                     break;
                 case ParamValueKind.Seed:
                     w.WriteValue(v.AsSeed.ToString(CultureInfo.InvariantCulture));
+                    break;
+                case ParamValueKind.Invalid:
+                    // Only reachable from ToJson of an unsanitized set; read back as Invalid again.
+                    w.WriteNull();
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(v));

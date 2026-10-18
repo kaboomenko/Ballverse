@@ -15,7 +15,8 @@ namespace Ballverse.Core.Tests.Params
             {
                 "timeScale", "ballCount", "ballSize", "theme",
                 "gravity", "gravityAngle", "restitution", "friction", "maxSpeed",
-                "ballColors", "ballSkin", "trail", "background", "glow", "impactFx", "labels", "labelNames", "hud",
+                "ballColors", "ballSkin", "trail", "background", "backgroundColor", "glow", "impactFx", "labels", "labelNames",
+                "hud", "hudTimer", "hudCounter", "hudPercent", "hudLeaders",
                 "soundPack", "melody", "sfxVolume", "haptics",
                 "targetDuration", "forcedWinner", "finaleStyle", "countdown", "seed",
             }, S.Params.Select(p => p.Id));
@@ -30,7 +31,8 @@ namespace Ballverse.Core.Tests.Params
             }
             G(ParamGroup.Basic, "timeScale", "ballCount", "ballSize", "theme");
             G(ParamGroup.Physics, "gravity", "gravityAngle", "restitution", "friction", "maxSpeed");
-            G(ParamGroup.Look, "ballColors", "ballSkin", "trail", "background", "glow", "impactFx", "labels", "labelNames", "hud");
+            G(ParamGroup.Look, "ballColors", "ballSkin", "trail", "background", "backgroundColor", "glow", "impactFx", "labels",
+                "labelNames", "hud", "hudTimer", "hudCounter", "hudPercent", "hudLeaders");
             G(ParamGroup.Sound, "soundPack", "melody", "sfxVolume", "haptics");
             G(ParamGroup.Director, "targetDuration", "forcedWinner", "finaleStyle", "countdown", "seed");
         }
@@ -85,7 +87,6 @@ namespace Ballverse.Core.Tests.Params
         [InlineData("background", "theme", new[] { "theme", "color", "gradient", "grid", "stars", "blur" })]
         [InlineData("impactFx", "sparks", new[] { "off", "sparks", "confetti", "shards" })]
         [InlineData("labels", "off", new[] { "off", "numbers", "names" })]
-        [InlineData("hud", "auto", new[] { "auto", "minimal", "full", "off" })]
         [InlineData("finaleStyle", "slowMo", new[] { "stop", "slowMo", "zoom", "confetti" })]
         public void EnumOptions(string id, string def, string[] options)
         {
@@ -118,8 +119,8 @@ namespace Ballverse.Core.Tests.Params
         {
             var live = new[]
             {
-                "timeScale", "theme", "ballColors", "ballSkin", "trail", "background", "glow", "impactFx", "labels", "labelNames",
-                "hud", "soundPack", "melody", "sfxVolume", "haptics",
+                "timeScale", "theme", "ballColors", "ballSkin", "trail", "background", "backgroundColor", "glow", "impactFx", "labels",
+                "labelNames", "hud", "hudTimer", "hudCounter", "hudPercent", "hudLeaders", "soundPack", "melody", "sfxVolume", "haptics",
             };
             foreach (var p in S.Params)
                 Assert.True(live.Contains(p.Id) == p.Live, p.Id + " live flag");
@@ -130,13 +131,74 @@ namespace Ballverse.Core.Tests.Params
         }
 
         [Fact]
-        public void ForModeDropsForcedWinnerForModesWithoutWinner()
+        public void ForModeOffersForcedWinnerExactlyInTheSpec25Modes()
         {
-            Assert.False(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M01)).Contains("forcedWinner"));
-            Assert.True(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M03)).Contains("forcedWinner"));
+            // spec §2.5: M03, M06, M07, M08, M09; §2.4: never interactive modes (M10 and M14 have only an optional winner)
+            var expected = new[] { ModeCode.M03, ModeCode.M06, ModeCode.M07, ModeCode.M08, ModeCode.M09 };
+            var actual = ModeCatalog.All.Where(m => CommonParams.ForMode(m).Contains("forcedWinner")).Select(m => m.Code);
+            Assert.Equal(expected, actual);
+            Assert.Equal(expected, ModeCatalog.All.Where(CommonParams.SupportsForcedWinner).Select(m => m.Code));
+            Assert.False(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M10)).Contains("forcedWinner"));
+            Assert.False(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M14)).Contains("forcedWinner"));
             Assert.Same(CommonParams.Schema, CommonParams.ForMode(ModeCatalog.Get(ModeCode.M07)));
-            foreach (var m in ModeCatalog.All)
-                Assert.Equal(m.HasWinner, CommonParams.ForMode(m).Contains("forcedWinner"));
+            Assert.Equal(S.Count - 1, CommonParams.ForMode(ModeCatalog.Get(ModeCode.M01)).Count);
+        }
+
+        [Fact]
+        public void HudIsAMasterSwitchPlusPerElementToggles()
+        {
+            // spec §2.2: elements timer, counter, percentages, leader names; "можно выключить всё"
+            Assert.True(Assert.IsType<BoolParam>(S.Get("hud")).DefaultValue);
+            Assert.Null(S.Get("hud").VisibleIf);
+            foreach (var id in new[] { "hudTimer", "hudCounter", "hudPercent", "hudLeaders" })
+            {
+                var p = Assert.IsType<BoolParam>(S.Get(id));
+                Assert.Equal(VisibleIfKind.IsTrue, p.VisibleIf.Kind);
+                Assert.Equal("hud", p.VisibleIf.TargetId);
+            }
+            var d = S.CreateDefaults();
+            Assert.True(S.IsVisible("hudTimer", d));
+            var off = d.With("hud", ParamValue.Bool(false));
+            Assert.False(S.IsVisible("hudTimer", off));
+            Assert.False(S.IsVisible("hudLeaders", off));
+            // "timer on, percentages off" is expressible
+            var mixed = d.With("hudTimer", ParamValue.Bool(true)).With("hudPercent", ParamValue.Bool(false)).Sanitize(S, DeviceTier.A);
+            Assert.False(mixed.HasIssues);
+            Assert.True(mixed.Values.GetBool("hudTimer"));
+            Assert.False(mixed.Values.GetBool("hudPercent"));
+        }
+
+        [Fact]
+        public void HudElementDefaultsCanBeOverriddenByAMode()
+        {
+            var layer = new ParamSchemaBuilder()
+                .Add(new BoolParam("hudPercent", true))
+                .Exclude("hudLeaders")
+                .BuildLayer();
+            var s = ParamSchema.Merge(S, layer);
+            Assert.True(s.CreateDefaults().GetBool("hudPercent"));
+            Assert.False(s.Contains("hudLeaders"));
+            Assert.Equal("hud", s.Get("hudPercent").VisibleIf.TargetId);
+            Assert.True(s.IsLiveEditable("hudPercent"));
+        }
+
+        [Fact]
+        public void BackgroundColorIsShownOnlyForTheColorBackground()
+        {
+            var p = Assert.IsType<ColorParam>(S.Get("backgroundColor"));
+            Assert.Equal(CommonParams.DefaultBackgroundColor, p.DefaultValue);
+            var d = S.CreateDefaults();
+            Assert.False(S.IsVisible("backgroundColor", d));
+            Assert.True(S.IsVisible("backgroundColor", d.With("background", ParamValue.String("color"))));
+            Assert.False(S.IsVisible("backgroundColor", d.With("background", ParamValue.String("stars"))));
+        }
+
+        [Fact]
+        public void OptionListsCannotBeMutatedThroughCasts()
+        {
+            Assert.False(CommonParams.Themes is string[]);
+            Assert.False(((EnumParam)S.Get("theme")).Options is string[]);
+            Assert.False(CommonParams.ForcedWinnerModes is ModeCode[]);
         }
 
         [Fact]
@@ -170,22 +232,89 @@ namespace Ballverse.Core.Tests.Params
     public class BodyBudgetsTests
     {
         [Theory]
-        [InlineData(ModeCode.M01, 300, 200, 120)]
-        [InlineData(ModeCode.M02, 600, 400, 200)]
-        [InlineData(ModeCode.M04, 2000, 1000, 400)]
-        [InlineData(ModeCode.M08, 120, 80, 50)]
-        [InlineData(ModeCode.M09, 2500, 1200, 500)]
-        [InlineData(ModeCode.M11, 600, 350, 200)]
-        [InlineData(ModeCode.M12, 400, 250, 150)]
-        [InlineData(ModeCode.M13, 40, 40, 30)]
-        [InlineData(ModeCode.M14, 1000, 600, 300)]
-        [InlineData(ModeCode.M15, 3000, 1500, 700)]
-        public void MatchSpecCards(ModeCode mode, int a, int b, int c)
+        [InlineData(ModeCode.M01, BodyKind.Bodies, 300, 200, 120)]
+        [InlineData(ModeCode.M02, BodyKind.Balls, 600, 400, 200)]
+        [InlineData(ModeCode.M04, BodyKind.Balls, 2000, 1000, 400)]
+        [InlineData(ModeCode.M08, BodyKind.Balls, 120, 80, 50)]
+        [InlineData(ModeCode.M09, BodyKind.Balls, 2500, 1200, 500)]
+        [InlineData(ModeCode.M10, BodyKind.Balls, 20, 20, 20)]
+        [InlineData(ModeCode.M11, BodyKind.Shards, 600, 350, 200)]
+        [InlineData(ModeCode.M12, BodyKind.Bodies, 400, 250, 150)]
+        [InlineData(ModeCode.M13, BodyKind.Balls, 40, 40, 30)]
+        [InlineData(ModeCode.M14, BodyKind.Bodies, 1000, 600, 300)]
+        [InlineData(ModeCode.M15, BodyKind.Bodies, 3000, 1500, 700)]
+        public void SingleNumberBudgetsMatchSpecCards(ModeCode mode, BodyKind kind, int a, int b, int c)
         {
-            Assert.Equal(a, BodyBudgets.Get(mode, DeviceTier.A));
-            Assert.Equal(b, BodyBudgets.Get(mode, DeviceTier.B));
-            Assert.Equal(c, BodyBudgets.Get(mode, DeviceTier.C));
-            Assert.Equal(new TierCap(a, b, c), BodyBudgets.AsTierCap(mode));
+            Assert.Equal(a, BodyBudgets.Total(mode, DeviceTier.A));
+            Assert.Equal(b, BodyBudgets.Total(mode, DeviceTier.B));
+            Assert.Equal(c, BodyBudgets.Total(mode, DeviceTier.C));
+            Assert.Equal(a, BodyBudgets.Get(mode, DeviceTier.A, kind));
+            Assert.Equal(c, BodyBudgets.Get(mode, DeviceTier.C, kind));
+            Assert.Equal(new TierCap(a, b, c), BodyBudgets.AsTierCap(mode, kind));
+        }
+
+        [Fact]
+        public void CompositeBudgetsKeepTheirParts()
+        {
+            // spec §2.9 M03 "16 шаров + до 60 подвижных препятствий на всех тирах"
+            Assert.Equal(new TierCap(16, 16, 16), BodyBudgets.AsTierCap(ModeCode.M03, BodyKind.Balls));
+            Assert.Equal(new TierCap(60, 60, 60), BodyBudgets.AsTierCap(ModeCode.M03, BodyKind.Obstacles));
+            Assert.Equal(76, BodyBudgets.Total(ModeCode.M03, DeviceTier.C));
+            // M05 "1 шар + до 30 видимых платформ + осколки 150 / 100 / 60"
+            Assert.Equal(1, BodyBudgets.Get(ModeCode.M05, DeviceTier.B, BodyKind.Balls));
+            Assert.Equal(30, BodyBudgets.Get(ModeCode.M05, DeviceTier.B, BodyKind.Platforms));
+            Assert.Equal(new TierCap(150, 100, 60), BodyBudgets.AsTierCap(ModeCode.M05, BodyKind.Shards));
+            Assert.Equal(131, BodyBudgets.Total(ModeCode.M05, DeviceTier.B));
+            // M06 "8 бойцов + оружие (сенсоры) + стрелы до 40"
+            Assert.Equal(new TierCap(8, 8, 8), BodyBudgets.BallCap(ModeCode.M06));
+            Assert.Equal(new TierCap(40, 40, 40), BodyBudgets.AsTierCap(ModeCode.M06, BodyKind.Projectiles));
+            // M07 "32 шара + плитки до 200 / 150 / 100"
+            Assert.Equal(new TierCap(32, 32, 32), BodyBudgets.BallCap(ModeCode.M07));
+            Assert.Equal(new TierCap(200, 150, 100), BodyBudgets.AsTierCap(ModeCode.M07, BodyKind.Tiles));
+            Assert.Null(BodyBudgets.Get(ModeCode.M07, DeviceTier.A, BodyKind.Obstacles));
+            Assert.False(BodyBudgets.Has(ModeCode.M03, BodyKind.Tiles));
+            Assert.Throws<System.ArgumentException>(() => BodyBudgets.AsTierCap(ModeCode.M03, BodyKind.Tiles));
+        }
+
+        [Fact]
+        public void BallCapFallsBackToTheSharedBodyBudget()
+        {
+            Assert.Equal(new TierCap(300, 200, 120), BodyBudgets.BallCap(ModeCode.M01));
+            Assert.Equal(new TierCap(2000, 1000, 400), BodyBudgets.BallCap(ModeCode.M04));
+            Assert.Throws<System.ArgumentException>(() => BodyBudgets.BallCap(ModeCode.M11));
+        }
+
+        [Fact]
+        public void BudgetsApplyToCountParamsWhoseMaxIsBelowTheBudget()
+        {
+            // M03 ballCount 2–16 with its 16-ball budget; M07 tiles param; common ballCount 1–100 with M01's 300 (no-op cap)
+            var m03 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M03)), new ParamSchemaBuilder()
+                .Add(new IntParam("ballCount", 2, 16, 1, 6).WithTierCap(BodyBudgets.BallCap(ModeCode.M03)))
+                .Add(new IntParam("obstacleCount", 0, 60, 1, 20).WithTierCap(BodyBudgets.AsTierCap(ModeCode.M03, BodyKind.Obstacles)))
+                .BuildLayer());
+            Assert.Equal(16, ((IntParam)m03.Get("ballCount")).EffectiveMax(DeviceTier.C));
+            Assert.Equal(60, ((IntParam)m03.Get("obstacleCount")).EffectiveMax(DeviceTier.C));
+
+            var m07 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M07)), new ParamSchemaBuilder()
+                .Add(new IntParam("ballCount", 4, 32, 1, 12).WithTierCap(BodyBudgets.BallCap(ModeCode.M07)))
+                .Add(new IntParam("tileCount", 20, 400, 10, 120).WithTierCap(BodyBudgets.AsTierCap(ModeCode.M07, BodyKind.Tiles)))
+                .BuildLayer());
+            var r = TestSchemas.Set(("tileCount", ParamValue.Int(400)), ("ballCount", ParamValue.Int(32))).Sanitize(m07, DeviceTier.C);
+            Assert.Equal(100, r.Values.GetInt("tileCount"));
+            Assert.Equal(32, r.Values.GetInt("ballCount"));
+            Assert.Contains(r.Issues, i => i.ParamId == "tileCount" && i.Code == ParamIssueCode.TierCapped);
+
+            var m06 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M06)), new ParamSchemaBuilder()
+                .Add(new IntParam("ballCount", 2, 8, 1, 4).WithTierCap(BodyBudgets.BallCap(ModeCode.M06)))
+                .BuildLayer());
+            Assert.Equal(8, ((IntParam)m06.Get("ballCount")).EffectiveMax(DeviceTier.C));
+
+            var m01 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M01)), new ParamSchemaBuilder()
+                .Add(new IntParam("ballCount", 1, 100, 1, 1).WithTierCap(BodyBudgets.BallCap(ModeCode.M01)))
+                .BuildLayer());
+            Assert.Equal(100, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.A));
+            Assert.Equal(100, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.B));
+            Assert.Equal(100, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.C));
         }
 
         [Fact]
@@ -193,10 +322,11 @@ namespace Ballverse.Core.Tests.Params
         {
             foreach (var m in ModeCatalog.All)
             {
-                int a = BodyBudgets.Get(m.Code, DeviceTier.A), b = BodyBudgets.Get(m.Code, DeviceTier.B), c = BodyBudgets.Get(m.Code, DeviceTier.C);
+                int a = BodyBudgets.Total(m.Code, DeviceTier.A), b = BodyBudgets.Total(m.Code, DeviceTier.B), c = BodyBudgets.Total(m.Code, DeviceTier.C);
                 Assert.True(a >= b && b >= c && c > 0, m.Id);
             }
-            Assert.Throws<System.ArgumentOutOfRangeException>(() => BodyBudgets.Get((ModeCode)99, DeviceTier.A));
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => BodyBudgets.Total((ModeCode)99, DeviceTier.A));
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => BodyBudgets.Get(ModeCode.M01, (DeviceTier)7, BodyKind.Balls));
         }
     }
 }

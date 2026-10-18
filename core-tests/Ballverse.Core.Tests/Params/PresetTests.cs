@@ -232,7 +232,7 @@ namespace Ballverse.Core.Tests.Params
         {
             var r = RemotePresets.Load(ReadTestData("remote_presets.json"), SchemaFor);
 
-            Assert.Equal(new[] { "remote.rainbow_rush", "remote.peg_rain" }, r.Accepted.Select(p => p.Id));
+            Assert.Equal(new[] { "remote.rainbow_rush", "remote.peg_rain", "remote.future_shape" }, r.Accepted.Select(p => p.Id));
             var rush = r.Accepted[0];
             Assert.Equal(PresetSource.Remote, rush.Source);
             Assert.True(rush.IsNew);
@@ -245,7 +245,7 @@ namespace Ballverse.Core.Tests.Params
             Assert.Equal(2000, rain.Values.GetInt("ballCount")); // tier caps applied later, by Apply
             Assert.Equal(400, rain.Apply(TestSchemas.PegDrop(), DeviceTier.C).Values.GetInt("ballCount"));
 
-            Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 10, 11 }, r.Rejected.Select(x => x.Index));
+            Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14 }, r.Rejected.Select(x => x.Index));
             string Reason(int index) => r.Rejected.Single(x => x.Index == index).Reason;
             Assert.Contains("TypeMismatch", Reason(1));
             Assert.Equal("remote.bad_type", r.Rejected[0].PresetId);
@@ -259,6 +259,13 @@ namespace Ballverse.Core.Tests.Params
             Assert.Contains("Duplicate", Reason(8));
             Assert.Contains("InvalidValue", Reason(10));
             Assert.Contains("name must be", Reason(11));
+            // null, nested object and mixed array for known params are type mismatches, never silently dropped
+            Assert.Contains("ringCount: TypeMismatch", Reason(12));
+            Assert.Contains("null", Reason(12));
+            Assert.Contains("ringCount: TypeMismatch", Reason(13));
+            Assert.Contains("object", Reason(13));
+            Assert.Contains("ballColors: TypeMismatch", Reason(14));
+            Assert.Equal(new[] { "trail" }, r.Accepted[2].Values.Ids);
 
             var warnings = r.Warnings.Select(w => w.PresetId + ":" + w.Issue.ParamId + ":" + w.Issue.Code).ToArray();
             Assert.Equal(new[]
@@ -266,6 +273,7 @@ namespace Ballverse.Core.Tests.Params
                 "remote.rainbow_rush:timeScale:Snapped",
                 "remote.rainbow_rush:ringCount:OutOfRange",
                 "remote.rainbow_rush:futureParam:Unknown",
+                "remote.future_shape:futureShape:Unknown",
             }, warnings);
         }
 

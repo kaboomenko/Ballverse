@@ -49,7 +49,8 @@ namespace Ballverse.Core.Tests.Params
             Assert.Contains("grid", BuildFails(new FloatParam("f", 0, 1, 0.1, 0.55)).Message);
             Assert.Contains("finite", BuildFails(new FloatParam("f", 0, double.PositiveInfinity, 0.1, 0.5)).Message);
             Assert.Contains("too small", BuildFails(new FloatParam("f", 0, 1000, 0.000001, 1)).Message);
-            Assert.Contains("cap", BuildFails(new FloatParam("f", 0, 1, 0.1, 0.5).WithTierCap(new TierCap(null, 2, null))).Message);
+            Assert.Contains("cap", BuildFails(new FloatParam("f", 0, 1, 0.1, 0.5).WithTierCap(new TierCap(null, -0.5, null))).Message);
+            Assert.Contains("cap", BuildFails(new FloatParam("f", 0, 1, 0.1, 0.5).WithTierCap(new TierCap(null, double.NaN, null))).Message);
             Assert.Contains("number", BuildFails(new FloatParam("f", 0, 1, 0.1, 0.5).WithDefault(ParamValue.String("x"))).Message);
         }
 

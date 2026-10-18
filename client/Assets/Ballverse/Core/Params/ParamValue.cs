@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text;
 
@@ -7,12 +8,15 @@ namespace Ballverse.Core.Params
 {
     /// <summary>
     /// Immutable tagged value of one parameter (spec §7.6). Equality is structural; floats compare by bit pattern
-    /// (sanitized values never hold -0 or NaN). Lists are copied on construction and exposed read-only.
+    /// (sanitized values never hold -0 or NaN). Lists are copied on construction and exposed through read-only wrappers,
+    /// so a value (and therefore a schema default) cannot be changed by casting a getter's result.
     /// </summary>
     public sealed class ParamValue : IEquatable<ParamValue>
     {
         static readonly ColorRgba[] s_noColors = new ColorRgba[0];
         static readonly string[] s_noStrings = new string[0];
+        static readonly ReadOnlyCollection<ColorRgba> s_noColorsView = Array.AsReadOnly(s_noColors);
+        static readonly ReadOnlyCollection<string> s_noStringsView = Array.AsReadOnly(s_noStrings);
 
         readonly double _float;
         readonly long _int;
@@ -22,6 +26,8 @@ namespace Ballverse.Core.Params
         readonly ColorRgba _color;
         readonly ColorRgba[] _colors;
         readonly string[] _strings;
+        readonly ReadOnlyCollection<ColorRgba> _colorsView;
+        readonly ReadOnlyCollection<string> _stringsView;
 
         public ParamValueKind Kind { get; }
 
@@ -37,6 +43,8 @@ namespace Ballverse.Core.Params
             _color = color;
             _colors = colors;
             _strings = strings;
+            if (colors != null) _colorsView = colors.Length == 0 ? s_noColorsView : Array.AsReadOnly(colors);
+            if (strings != null) _stringsView = strings.Length == 0 ? s_noStringsView : Array.AsReadOnly(strings);
         }
 
         /// <summary>
@@ -91,6 +99,25 @@ namespace Ballverse.Core.Params
             return new ParamValue(ParamValueKind.Seed, seed: value);
         }
 
+        /// <summary>
+        /// Raw JSON value of no usable shape (spec §2.3 remote preset validation); <paramref name="description"/> names the
+        /// JSON shape, e.g. "null", "object". Every parameter rejects it as a type mismatch.
+        /// </summary>
+        public static ParamValue Invalid(string description)
+        {
+            return new ParamValue(ParamValueKind.Invalid, s: description ?? "");
+        }
+
+        /// <summary>The JSON shape of an <see cref="ParamValueKind.Invalid"/> value.</summary>
+        public string InvalidDescription
+        {
+            get
+            {
+                Expect(ParamValueKind.Invalid);
+                return _string;
+            }
+        }
+
         public double AsFloat
         {
             get
@@ -142,7 +169,7 @@ namespace Ballverse.Core.Params
             get
             {
                 Expect(ParamValueKind.ColorList);
-                return _colors;
+                return _colorsView;
             }
         }
 
@@ -151,7 +178,7 @@ namespace Ballverse.Core.Params
             get
             {
                 Expect(ParamValueKind.StringList);
-                return _strings;
+                return _stringsView;
             }
         }
 
@@ -179,6 +206,7 @@ namespace Ballverse.Core.Params
                 case ParamValueKind.Bool:
                     return _bool == other._bool;
                 case ParamValueKind.String:
+                case ParamValueKind.Invalid:
                     return string.Equals(_string, other._string, StringComparison.Ordinal);
                 case ParamValueKind.Color:
                     return _color == other._color;
@@ -214,7 +242,9 @@ namespace Ballverse.Core.Params
                     case ParamValueKind.Float: return h ^ BitConverter.DoubleToInt64Bits(_float).GetHashCode();
                     case ParamValueKind.Int: return h ^ _int.GetHashCode();
                     case ParamValueKind.Bool: return h ^ (_bool ? 1 : 0);
-                    case ParamValueKind.String: return h ^ StringComparer.Ordinal.GetHashCode(_string);
+                    case ParamValueKind.String:
+                    case ParamValueKind.Invalid:
+                        return h ^ StringComparer.Ordinal.GetHashCode(_string);
                     case ParamValueKind.Color: return h ^ _color.GetHashCode();
                     case ParamValueKind.ColorList:
                         foreach (var c in _colors) h = h * 31 + c.GetHashCode();
@@ -250,6 +280,7 @@ namespace Ballverse.Core.Params
                     return sb.Append(']').ToString();
                 }
                 case ParamValueKind.Seed: return "seed:" + _seed.ToString(CultureInfo.InvariantCulture);
+                case ParamValueKind.Invalid: return "invalid:" + _string;
                 default: return Kind.ToString();
             }
         }

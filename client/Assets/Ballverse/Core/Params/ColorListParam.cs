@@ -63,7 +63,7 @@ namespace Ballverse.Core.Params
             }
             else
             {
-                return Fallback(ParamIssueCode.TypeMismatch, "expected a colour list, got " + raw.Kind, tier, applyTierCap, issues);
+                return Fallback(ParamIssueCode.TypeMismatch, "expected a colour list, got " + Describe(raw), tier, applyTierCap, issues);
             }
 
             if (colors.Count > MaxCount)
