@@ -1,0 +1,46 @@
+name: Unity license check
+
+# Fast smoke test of the Unity secrets (UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD):
+# activates the license inside the GameCI editor image and opens an empty throwaway project.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/unity-license-check.yml"
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secrets present
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        run: |
+          missing=0
+          for v in UNITY_LICENSE UNITY_EMAIL UNITY_PASSWORD; do
+            if [ -z "${!v}" ]; then echo "::error::Secret $v is missing"; missing=1; else echo "$v is set"; fi
+          done
+          if ! printf '%s' "$UNITY_LICENSE" | head -c 200 | grep -q "<?xml"; then echo "::warning::UNITY_LICENSE does not start with <?xml — paste the whole .ulf file content"; fi
+          exit $missing
+      - name: Create empty probe project
+        run: |
+          mkdir -p probe/Assets probe/ProjectSettings probe/Packages
+          echo "m_EditorVersion: 6000.3.26f1" > probe/ProjectSettings/ProjectVersion.txt
+          echo '{ "dependencies": { "com.unity.test-framework": "1.5.1" } }' > probe/Packages/manifest.json
+      - name: Activate license and open project (EditMode test run)
+        uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: probe
+          testMode: editmode
+          githubToken: ${{ secrets.GITHUB_TOKEN }}

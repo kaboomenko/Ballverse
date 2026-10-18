@@ -1,0 +1,21 @@
+{
+  "id": "ode_to_joy",
+  "name": "Ode to Joy (Beethoven, own arrangement)",
+  "notes": [
+    { "pitch": 64, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 64, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 65, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 67, "durWeight": 1, "velocity": 0.9 },
+    { "pitch": 67, "durWeight": 1, "velocity": 0.9 },
+    { "pitch": 65, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 64, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 62, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 60, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 60, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 62, "durWeight": 1, "velocity": 0.8 },
+    { "pitch": 64, "durWeight": 1, "velocity": 0.9 },
+    { "pitch": 64, "durWeight": 1.5, "velocity": 0.9 },
+    { "pitch": 62, "durWeight": 0.5, "velocity": 0.7 },
+    { "pitch": 62, "durWeight": 2, "velocity": 0.8 }
+  ]
+}

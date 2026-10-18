@@ -1,0 +1,366 @@
+using System;
+using System.Linq;
+using Ballverse.Core.Projects;
+using Xunit;
+using static Ballverse.Core.Tests.Projects.ProjectTestUtil;
+
+namespace Ballverse.Core.Tests.Projects
+{
+    /// <summary>
+    /// The duration model matches the timeline's integer model (speed and slow-mo factor in hundredths, slow-mo in whole ticks,
+    /// 0.1 s cover lead-in prepended), so the 180 s cap never cuts content and the project duration equals the export
+    /// within one frame (spec §3.4, §3.8 acceptance).
+    /// </summary>
+    public class ProjectTimingTests
+    {
+        static void HasIssue(SanitizeResult r, string path, IssueCode code)
+        {
+            Assert.True(r.Issues.Any(i => i.Path == path && i.Code == code), "missing " + code + " at " + path + "; got:\n" + string.Join("\n", r.Issues));
+        }
+
+        static ProjectDocument FullRun(double speed, bool putFirst)
+        {
+            var d = Golden();
+            d.Output.DurationMode = DurationMode.Auto;
+            d.Output.Cover.PutFirst = putFirst;
+            d.Clip.TrimInTick = 0;
+            d.Clip.TrimOutTick = SimConstants.MaxDurationTicks;
+            d.Clip.Speed = speed;
+            d.Clip.FinaleSlowMo.Seconds = 0;
+            return d;
+        }
+
+        // ---- reference: the timeline's frame count (StudioTimeline, spec §3.4/§7.5), without the [fps, 180·fps] clamp ----
+
+        static int RefPercent(double ratio)
+        {
+            return (int)Math.Round(ratio * 100.0, MidpointRounding.AwayFromZero);
+        }
+
+        static long RefUnclampedFrames(ProjectDocument d, int fps)
+        {
+            long cover = d.Output.Cover.PutFirst ? fps / 10 : 0;
+            long frames;
+            switch (d.Output.DurationMode)
+            {
+                case DurationMode.MatchVideo:
+                    frames = (d.UserVideo.TrimOutUs - d.UserVideo.TrimInUs - 1) * fps / 1000000 + 1;
+                    break;
+                case DurationMode.Manual:
+                    frames = (d.Output.ManualDurationUs.Value * fps + 999999) / 1000000;
+                    break;
+                default:
+                    long p = RefPercent(d.Clip.Speed), f = RefPercent(d.Clip.FinaleSlowMo.Factor);
+                    long length = d.Clip.TrimOutTick - d.Clip.TrimInTick;
+                    long s = Math.Min((long)Math.Round(d.Clip.FinaleSlowMo.Seconds * 60, MidpointRounding.AwayFromZero), length);
+                    long units = (length - s) * 100 * f + s * 10000;
+                    long ups = 60 * p * f;
+                    frames = (units * fps + ups - 1) / ups;
+                    break;
+            }
+            return frames + cover;
+        }
+
+        // ---- ProjectTiming ----
+
+        [Fact]
+        public void ClipOutputUsesHundredthsAndWholeTicks()
+        {
+            // Values the timeline renders (QA integration probe): 0.994 plays at 0.99x, 0.5049 at 0.5x.
+            Assert.Equal(180723906, ProjectTiming.ClipOutputUs(0, 10735, 0.994, 0, 0.5));
+            Assert.Equal(181733334, ProjectTiming.ClipOutputUs(0, 5452, 0.5049, 0, 0.5));
+            // 1.009 s of slow-mo = 61 ticks: 539 ticks at 1x + 61 ticks at 0.5x, rounded up to whole µs.
+            Assert.Equal(11016667, ProjectTiming.ClipOutputUs(0, 600, 1.0, 1.009, 0.5));
+            // Factor 0.334 plays at 0.33.
+            Assert.Equal(3030304, ProjectTiming.ClipOutputUs(0, 60, 1.0, 1, 0.334));
+            Assert.Equal(99, ProjectTiming.PercentFromRatio(0.994));
+            Assert.Equal(100, ProjectTiming.PercentFromRatio(1.005)); // binary 1.00499…, as the timeline rounds it
+            Assert.Equal(0, ProjectTiming.PercentFromRatio(double.NaN));
+            Assert.Equal(61, ProjectTiming.TicksFromSeconds(1.009));
+            Assert.Equal(0, ProjectTiming.TicksFromSeconds(double.PositiveInfinity));
+            Assert.Equal(0, ProjectTiming.ClipOutputUs(0, 60, 0.004, 0, 0.5)); // rounds to 0x
+        }
+
+        [Fact]
+        public void ClipOutputSurvivesAbsurdUnsanitizedValues()
+        {
+            Assert.True(ProjectTiming.ClipOutputUs(0, int.MaxValue, 1e6, 1e6, 1e6) > 0);
+            Assert.True(ProjectTiming.ClipOutputUs(int.MinValue, int.MaxValue, 0.01, 1e7, 0.01) > 0);
+        }
+
+        [Fact]
+        public void ClipOutputNeverNegativeNearTheOverflowEdge()
+        {
+            // QA finding: units·10⁶ fits in a long but the old ceiling division (a + b − 1) / b wrapped to a negative value.
+            // 922337203 ticks at 11424.63x: a = 9223372030000000000, b = 60·1142463·100 = 6854778000, a + b − 1 > long.MaxValue.
+            long us = ProjectTiming.ClipOutputUs(0, 922337203, 11424.63, 0, 0.5);
+            Assert.Equal(ExactClipUs(0, 922337203, 11424.63, 0, 0.5), us);
+            Assert.Equal(1345539131L, us);
+        }
+
+        /// <summary>Exact clip output (µs, rounded up) of the documented model, in arbitrary precision.</summary>
+        static System.Numerics.BigInteger ExactClipUs(int trimIn, int trimOut, double speed, double seconds, double factor)
+        {
+            long length = (long)trimOut - trimIn;
+            long p = ProjectTiming.PercentFromRatio(speed);
+            if (length <= 0 || p <= 0) return 0;
+            long f = ProjectTiming.PercentFromRatio(factor);
+            long slow = ProjectTiming.TicksFromSeconds(seconds);
+            if (f <= 0 || slow <= 0)
+            {
+                f = 100;
+                slow = 0;
+            }
+            long s = Math.Min(slow, length);
+            var units = (System.Numerics.BigInteger)(length - s) * 100 * f + (System.Numerics.BigInteger)s * 10000;
+            var a = units * ProjectLimits.MicrosPerSecond;
+            var b = (System.Numerics.BigInteger)SimConstants.TickRate * p * f;
+            return (a + b - 1) / b;
+        }
+
+        /// <summary>
+        /// Property over absurd, unsanitized inputs: the result is never negative, equals the exact value whenever that fits
+        /// the integer path, and otherwise stays within 1 µs or 1e-9 of it (the floating-point estimate, saturating at long.MaxValue).
+        /// </summary>
+        [Fact]
+        public void ClipOutputMatchesExactModelOnExtremeInputs()
+        {
+            var rng = Rng.FromSeed(0xC1D1_0F10UL, 2);
+            for (int n = 0; n < 5000; n++)
+            {
+                int trimIn = rng.NextInt(0, 4) == 0 ? (int)rng.NextUInt() : rng.NextInt(-1000, 1000);
+                int trimOut = rng.NextInt(0, 3) == 0 ? int.MaxValue - rng.NextInt(0, 1000) : (int)rng.NextUInt();
+                double speed = Math.Pow(10, rng.NextDouble() * 9 - 2);
+                double seconds = rng.NextInt(0, 3) == 0 ? 0 : Math.Pow(10, rng.NextDouble() * 9 - 1);
+                double factor = Math.Pow(10, rng.NextDouble() * 9 - 2);
+                long us = ProjectTiming.ClipOutputUs(trimIn, trimOut, speed, seconds, factor);
+                var exact = ExactClipUs(trimIn, trimOut, speed, seconds, factor);
+                string where = "case " + n + ": " + trimIn + ".." + trimOut + " x" + speed + " slow " + seconds + " s x" + factor;
+                Assert.True(us >= 0, where + " gave " + us);
+                if (exact <= long.MaxValue && us == (long)exact) continue;
+                double diff = Math.Abs((double)(exact - us));
+                Assert.True(diff <= Math.Max(1.0, 1e-9 * (double)exact), where + ": " + us + " vs exact " + exact);
+            }
+        }
+
+        /// <summary>
+        /// Property aimed at the band the random generator above never reaches: a = units·10⁶ fits in a long but a + b − 1
+        /// does not (b = 60·p·f). Picks p, f and the slow-mo ticks first, then the length whose units land in that band; the
+        /// result must be exact (it stays on the integer path) and non-negative. The old (a + b − 1) / b fails every case.
+        /// </summary>
+        [Fact]
+        public void ClipOutputExactWhenUnitsFitButCeilingAdditionWouldOverflow()
+        {
+            var rng = Rng.FromSeed(0xC1D1_0F11UL, 3);
+            var max = (System.Numerics.BigInteger)long.MaxValue;
+            const long micros = ProjectLimits.MicrosPerSecond;
+            int hits = 0;
+            for (int attempt = 0; attempt < 20000 && hits < 2000; attempt++)
+            {
+                bool slowOn = rng.NextInt(0, 2) == 0;
+                long p = (long)Math.Pow(10, 4 + rng.NextDouble() * 5); // 10⁴..10⁹ hundredths: b must exceed the 10⁶ step of a
+                long f = slowOn ? (long)Math.Pow(10, 1.5 + rng.NextDouble() * 4) : 100;
+                long s = slowOn ? rng.NextInt(1, 1000000000) : 0;
+                long b = SimConstants.TickRate * p * f;
+                if (b <= 0 || (System.Numerics.BigInteger)b * micros > max) continue;
+
+                // units must lie in [uLo, uHi] so that a = units·10⁶ ∈ [Max − b + 2, Max] (a + b − 1 > Max).
+                var uLo = (max - b + 2 + micros - 1) / micros;
+                var uHi = max / micros;
+                var rest = uLo - (System.Numerics.BigInteger)s * 10000;
+                if (rest < 0) continue;
+                var n = (rest + 100 * f - 1) / (100 * f);
+                var units = n * 100 * f + (System.Numerics.BigInteger)s * 10000;
+                if (units > uHi) continue;
+                var length = n + s;
+                if (length > (System.Numerics.BigInteger)uint.MaxValue - 1) continue;
+
+                long len = (long)length;
+                int trimOut = len <= int.MaxValue ? (int)len : int.MaxValue;
+                int trimIn = (int)(trimOut - len);
+                double speed = p / 100.0, factor = slowOn ? f / 100.0 : 0.5, seconds = s / 60.0;
+                Assert.Equal(p, ProjectTiming.PercentFromRatio(speed));
+                if (slowOn)
+                {
+                    Assert.Equal(f, ProjectTiming.PercentFromRatio(factor));
+                    Assert.Equal(s, ProjectTiming.TicksFromSeconds(seconds));
+                }
+                var a = units * micros;
+                Assert.True(a <= max && a + b - 1 > max);
+
+                long us = ProjectTiming.ClipOutputUs(trimIn, trimOut, speed, seconds, factor);
+                var exact = ExactClipUs(trimIn, trimOut, speed, seconds, factor);
+                string where = "attempt " + attempt + ": " + trimIn + ".." + trimOut + " p=" + p + " f=" + f + " s=" + s;
+                Assert.True(us >= 0, where + " gave " + us);
+                Assert.True(exact == us, where + ": " + us + " vs exact " + exact);
+                hits++;
+            }
+            Assert.True(hits >= 1000, "only " + hits + " cases landed in the band");
+        }
+
+        [Fact]
+        public void ReelIncludesCoverLeadIn()
+        {
+            var d = Golden(); // 30 s clip + 2 s at 0.5x = 32 s
+            Assert.Equal(32000000, ProjectTiming.ContentDurationUs(d));
+            Assert.Equal(32000000, ProjectTiming.ReelDurationUs(d));
+            d.Output.Cover.PutFirst = true;
+            Assert.Equal(32000000, ProjectTiming.ContentDurationUs(d));
+            Assert.Equal(32100000, ProjectTiming.ReelDurationUs(d));
+            Assert.Equal(179900000, ProjectTiming.MaxContentUs(d));
+            d.Output.Cover = null;
+            Assert.Equal(32000000, ProjectTiming.ReelDurationUs(d));
+        }
+
+        // ---- validator: rounding ----
+
+        [Fact]
+        public void SanitizerRoundsSpeedFactorAndSlowMoLikeTheTimeline()
+        {
+            var d = Golden();
+            d.Clip.Speed = 1.234;
+            d.Clip.FinaleSlowMo.Seconds = 1.009;
+            d.Clip.FinaleSlowMo.Factor = 0.334;
+            var r = ProjectValidator.Sanitize(d);
+            Assert.Equal(1.23, r.Document.Clip.Speed);
+            Assert.Equal(61 / 60.0, r.Document.Clip.FinaleSlowMo.Seconds);
+            Assert.Equal(0.33, r.Document.Clip.FinaleSlowMo.Factor);
+            HasIssue(r, "clip.speed", IssueCode.OutOfRange);
+            HasIssue(r, "clip.finaleSlowMo.seconds", IssueCode.OutOfRange);
+            HasIssue(r, "clip.finaleSlowMo.factor", IssueCode.OutOfRange);
+            Assert.True(ProjectValidator.Sanitize(r.Document).IsClean);
+            Assert.True(ProjectValidator.Sanitize(Golden()).IsClean);
+        }
+
+        // ---- validator: 180 s cap with the cover lead-in and rounding ----
+
+        [Fact]
+        public void FullRunWithoutCoverStaysWhole()
+        {
+            var r = ProjectValidator.Sanitize(FullRun(1.0, false));
+            Assert.True(r.IsClean, string.Join("\n", r.Issues));
+            Assert.Equal(SimConstants.MaxDurationTicks, r.Document.Clip.TrimOutTick);
+            Assert.Equal(180000000, ProjectTiming.ReelDurationUs(r.Document));
+        }
+
+        [Fact]
+        public void FullRunWithCoverLeadInLeavesRoomForIt()
+        {
+            var r = ProjectValidator.Sanitize(FullRun(1.0, true));
+            HasIssue(r, "clip.trimOutTick", IssueCode.DurationTooLong);
+            Assert.Equal(10794, r.Document.Clip.TrimOutTick); // 179.9 s of content
+            Assert.Equal(179900000, ProjectTiming.ContentDurationUs(r.Document));
+            Assert.Equal(180000000, ProjectTiming.ReelDurationUs(r.Document));
+            Assert.Equal(10800, RefUnclampedFrames(r.Document, 60)); // timeline: 6 cover + 10794 clip frames, nothing cut
+            Assert.True(ProjectValidator.Sanitize(r.Document).IsClean);
+        }
+
+        [Theory]
+        [InlineData(0.994, 0.99, 10692)]   // 10692 ticks / 59.4 = 180 s exactly
+        [InlineData(0.5049, 0.5, 5400)]
+        public void FullRunAtUnroundedSpeedIsCappedOnTheRenderedSpeed(double speed, double rendered, int expectedTrimOut)
+        {
+            var r = ProjectValidator.Sanitize(FullRun(speed, false));
+            Assert.Equal(rendered, r.Document.Clip.Speed);
+            Assert.Equal(expectedTrimOut, r.Document.Clip.TrimOutTick);
+            Assert.True(ProjectTiming.ReelDurationUs(r.Document) <= ProjectLimits.MaxDurationUs);
+            Assert.True(ProjectTiming.ClipOutputUs(0, expectedTrimOut + 1, rendered, 0, 0.5) > ProjectLimits.MaxDurationUs);
+            Assert.True(RefUnclampedFrames(r.Document, 60) <= 10800);
+            Assert.True(RefUnclampedFrames(r.Document, 30) <= 5400);
+        }
+
+        [Fact]
+        public void ManualDurationLeavesRoomForCover()
+        {
+            var d = Golden();
+            d.Output.DurationMode = DurationMode.Manual;
+            d.Output.ManualDurationUs = ProjectLimits.MaxDurationUs;
+            Assert.True(ProjectValidator.Sanitize(d).IsClean);
+            d.Output.Cover.PutFirst = true;
+            var r = ProjectValidator.Sanitize(d);
+            HasIssue(r, "output.manualDurationUs", IssueCode.OutOfRange);
+            Assert.Equal(179900000, r.Document.Output.ManualDurationUs);
+            Assert.Equal(180000000, ProjectTiming.ReelDurationUs(r.Document));
+        }
+
+        [Fact]
+        public void MatchVideoLeavesRoomForCover()
+        {
+            var d = Golden();
+            d.Output.DurationMode = DurationMode.MatchVideo;
+            d.UserVideo.TrimInUs = 5000000;
+            d.UserVideo.TrimOutUs = 185000000;
+            Assert.True(ProjectValidator.Sanitize(d).IsClean);
+            d.Output.Cover.PutFirst = true;
+            var r = ProjectValidator.Sanitize(d);
+            HasIssue(r, "userVideo.trimOutUs", IssueCode.DurationTooLong);
+            Assert.Equal(5000000, r.Document.UserVideo.TrimInUs);
+            Assert.Equal(184900000, r.Document.UserVideo.TrimOutUs);
+            Assert.Equal(180000000, ProjectTiming.ReelDurationUs(r.Document));
+            Assert.True(ProjectValidator.Sanitize(r.Document).IsClean);
+        }
+
+        [Fact]
+        public void CoverFrameIsClampedToTheContent()
+        {
+            var d = Golden();
+            d.Output.Cover.PutFirst = true;
+            d.Output.Cover.AtUs = 32050000; // inside the reel (32.1 s) but past the content (32 s)
+            var r = ProjectValidator.Sanitize(d);
+            HasIssue(r, "output.cover.atUs", IssueCode.OutOfRange);
+            Assert.Equal(31999999, r.Document.Output.Cover.AtUs);
+        }
+
+        [Fact]
+        public void ProjectSummaryDurationIncludesCover()
+        {
+            var store = new InMemoryFileStore();
+            var repo = new ProjectRepository(store);
+            var d = Doc("p1");
+            d.Output.Cover.PutFirst = true;
+            repo.Save(d);
+            Assert.Equal(32100000, repo.List().Projects.Single().DurationUs);
+        }
+
+        /// <summary>
+        /// Property: after sanitizing, the timeline renders the reel without hitting the 180 s clamp (nothing is cut) and the
+        /// project duration equals the timeline duration within one frame, in every duration mode, with and without the cover.
+        /// </summary>
+        [Fact]
+        public void SanitizedReelMatchesTimelineWithinOneFrame()
+        {
+            var rng = Rng.FromSeed(0x7131E, 4);
+            for (int n = 0; n < 3000; n++)
+            {
+                var d = Golden();
+                d.Output.DurationMode = (DurationMode)rng.NextInt(0, 3);
+                d.Output.Cover.PutFirst = rng.NextBool();
+                d.Output.ManualDurationUs = rng.NextInt(0, 4) == 0 ? (long?)null : rng.NextInt(0, 200000) * 1000L + rng.NextInt(0, 1000);
+                d.Clip.Speed = 0.4 + rng.NextDouble() * 1.7;
+                d.Clip.FinaleSlowMo.Seconds = rng.NextInt(0, 3) == 0 ? 0 : rng.NextDouble() * 3.5;
+                d.Clip.FinaleSlowMo.Factor = 0.2 + rng.NextDouble() * 0.35;
+                d.Clip.TrimInTick = rng.NextInt(0, SimConstants.MaxDurationTicks);
+                d.Clip.TrimOutTick = rng.NextInt(0, SimConstants.MaxDurationTicks + 1);
+                d.UserVideo.TrimInUs = rng.NextInt(0, 60000) * 1000L;
+                d.UserVideo.TrimOutUs = d.UserVideo.TrimInUs + rng.NextInt(0, 200000) * 1000L + rng.NextInt(0, 1000);
+
+                var r = ProjectValidator.Sanitize(d);
+                var s = r.Document;
+                Assert.False(r.HasErrors);
+                Assert.Equal(RefPercent(s.Clip.Speed) / 100.0, s.Clip.Speed);
+                long reel = ProjectTiming.ReelDurationUs(s);
+                Assert.InRange(reel, ProjectLimits.MinDurationUs, ProjectLimits.MaxDurationUs);
+                foreach (int fps in new[] { 30, 60 })
+                {
+                    long frames = RefUnclampedFrames(s, fps);
+                    Assert.True(frames <= 180L * fps, "case " + n + " fps " + fps + ": timeline would cut " + (frames - 180L * fps) + " frames");
+                    Assert.True(frames >= fps);
+                    long timelineUs = (2L * frames * 1000000 + fps) / (2L * fps);
+                    Assert.True(Math.Abs(timelineUs - reel) <= 1000000 / fps,
+                        "case " + n + " fps " + fps + ": project " + reel + " us vs timeline " + timelineUs + " us");
+                }
+                Assert.True(ProjectValidator.Sanitize(s).IsClean, "case " + n + " not idempotent");
+            }
+        }
+    }
+}
