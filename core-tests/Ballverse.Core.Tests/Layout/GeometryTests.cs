@@ -188,6 +188,18 @@ namespace Ballverse.Core.Tests.Layout
         }
 
         [Fact]
+        public void FromReferencePixelsNormalizesAgainst1080x1920()
+        {
+            FloatRect n = FloatRect.FromReferencePixels(new FloatRect(54f, 232.5f, 540f, 96f));
+            Assert.True(n.ApproximatelyEquals(new FloatRect(0.05f, 232.5f / 1920f, 0.5f, 0.05f), 1e-7f));
+            Assert.Equal(FloatRect.FromPixels(new IntRect(40, 204, 600, 90), 1080, 1920),
+                FloatRect.FromReferencePixels(new IntRect(40, 204, 600, 90)));
+            Assert.Equal(new IntRect(40, 204, 600, 90), FloatRect.FromReferencePixels(new IntRect(40, 204, 600, 90)).ToPixels(1080, 1920));
+            Assert.Throws<ArgumentException>(() => FloatRect.FromReferencePixels(new FloatRect(0f, float.NaN, 1f, 1f)));
+            Assert.Throws<ArgumentException>(() => FloatRect.FromReferencePixels(new FloatRect(0f, 0f, float.PositiveInfinity, 1f)));
+        }
+
+        [Fact]
         public void ReturnedCollectionsAreReadOnly()
         {
             var src = new List<IntRect> { new IntRect(0, 0, 5, 5) };

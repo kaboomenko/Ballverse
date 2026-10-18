@@ -182,19 +182,61 @@ namespace Ballverse.Core.Tests.Layout
         }
 
         [Fact]
-        public void PlaceAtUsesTheGivenCornerOnAnyCanvas()
+        public void PlaceOnReferenceIsPlaceAt1080x1920()
+        {
+            RectUnion refMasks = PlatformUiMasks.Default.ToPixels(1080, 1920);
+            var occ = new[] { new IntRect(0, 200, 400, 300) };
+            WatermarkPlacement r = WatermarkLayout.PlaceOnReference(Aspect, refMasks, occ);
+            WatermarkPlacement p = WatermarkLayout.Place(1080, 1920, Aspect, refMasks, occ);
+            Assert.Equal(p.Corner, r.Corner);
+            Assert.Equal(p.Rect, r.Rect);
+            Assert.Equal(new IntRect(832, 186, 216, 48), r.Rect);
+            // Scaling the reference onto the reference canvas changes nothing.
+            WatermarkPlacement same = WatermarkLayout.PlaceAt(1080, 1920, Aspect, refMasks, occ, r);
+            Assert.Equal(r.Rect, same.Rect);
+            Assert.Equal(r.Corner, same.Corner);
+            Assert.Equal(r.OccupiedOverlap, same.OccupiedOverlap);
+            Assert.Equal(r.MaskOverlap, same.MaskOverlap);
+        }
+
+        [Fact]
+        public void PlaceAtScalesTheReferencePlacement()
         {
             RectUnion masks720 = PlatformUiMasks.Default.ToPixels(720, 1280);
-            // The corner is forced even though top-left would be clear here; overlaps are reported for this canvas.
-            WatermarkPlacement p = WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, null, WatermarkCorner.TopRight);
+            WatermarkPlacement refTr = new WatermarkPlacement(WatermarkCorner.TopRight, new IntRect(832, 186, 216, 48), 0, 0);
+            // The corner is forced even though top-left would be clear here; y = round(186 * 1280 / 1920) = 124.
+            WatermarkPlacement p = WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, null, refTr);
             Assert.Equal(WatermarkCorner.TopRight, p.Corner);
-            Assert.Equal(new IntRect(555, 123, 144, 32), p.Rect);
+            Assert.Equal(new IntRect(555, 124, 144, 32), p.Rect);
             Assert.True(p.IsClear);
-            WatermarkPlacement q = WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, new[] { new IntRect(0, 150, 50, 10) }, WatermarkCorner.TopLeft);
-            Assert.Equal(new IntRect(21, 123, 144, 32), q.Rect);
-            Assert.Equal(29L * 5, q.OccupiedOverlap);
-            Assert.Throws<ArgumentOutOfRangeException>(() => WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, null, (WatermarkCorner)5));
-            Assert.Throws<ArgumentNullException>(() => WatermarkLayout.PlaceAt(720, 1280, Aspect, null, null, WatermarkCorner.TopLeft));
+            // An unpushed reference stays at this canvas's safe top (21 at 720 width), whatever the masks here.
+            WatermarkPlacement refTl = new WatermarkPlacement(WatermarkCorner.TopLeft, new IntRect(32, 32, 216, 48), 0, 0);
+            WatermarkPlacement q = WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, new[] { new IntRect(0, 30, 50, 10) }, refTl);
+            Assert.Equal(new IntRect(21, 21, 144, 32), q.Rect);
+            Assert.Equal(29L * 10, q.OccupiedOverlap); // diagnostics are measured on this canvas
+            Assert.True(q.MaskOverlap > 0);
+            // A reference pushed to the bottom of the safe area is clamped into this canvas's safe area.
+            WatermarkPlacement low = new WatermarkPlacement(WatermarkCorner.TopLeft, new IntRect(32, 1840, 216, 48), 0, 0);
+            IntRect lowRect = WatermarkLayout.PlaceAt(393, 699, Aspect, RectUnion.Empty, null, low).Rect;
+            Assert.True(SafeArea.Rect(393, 699).Contains(lowRect));
+            Assert.Throws<ArgumentOutOfRangeException>(() => WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, null,
+                new WatermarkPlacement((WatermarkCorner)5, new IntRect(32, 32, 216, 48), 0, 0)));
+            Assert.Throws<ArgumentNullException>(() => WatermarkLayout.PlaceAt(720, 1280, Aspect, null, null, refTl));
+        }
+
+        [Fact]
+        public void PlaceAtDoesNotRerunMaskAvoidancePerCanvas()
+        {
+            // QA round 2: top bar + a second band whose top sits 1 px under the reference watermark bottom. At 1080 the
+            // watermark fits between them; re-running the push at 720 would slide it past the band (hundreds of px).
+            var norm = new[] { new FloatRect(0f, 0f, 1f, 0.08f), new FloatRect(0f, 0.1215f, 0.3f, 0.1f) };
+            WatermarkPlacement r = WatermarkLayout.PlaceOnReference(Aspect, RectUnion.FromNormalized(norm, 1080, 1920), null);
+            RectUnion masks720 = RectUnion.FromNormalized(norm, 720, 1280);
+            WatermarkPlacement perCanvas = WatermarkLayout.Place(720, 1280, Aspect, masks720, null);
+            WatermarkPlacement scaled = WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, null, r);
+            Assert.True(Math.Abs(r.Rect.Y * 2.0 / 3.0 - perCanvas.Rect.Y) > 100, "probe no longer reaches the flip: " + r.Rect + " vs " + perCanvas.Rect);
+            Assert.True(Math.Abs(r.Rect.Y * 2.0 / 3.0 - scaled.Rect.Y) <= 1.0, r.Rect + " vs " + scaled.Rect);
+            Assert.Equal(r.Corner, scaled.Corner);
         }
 
         [Fact]
@@ -202,6 +244,7 @@ namespace Ballverse.Core.Tests.Layout
         {
             Assert.Throws<ArgumentNullException>(() => WatermarkLayout.Place(1080, 1920, Aspect, null, null));
             Assert.Throws<ArgumentNullException>(() => WatermarkLayout.ChooseCorner(Aspect, null, null));
+            Assert.Throws<ArgumentNullException>(() => WatermarkLayout.PlaceOnReference(Aspect, null, null));
         }
     }
 }

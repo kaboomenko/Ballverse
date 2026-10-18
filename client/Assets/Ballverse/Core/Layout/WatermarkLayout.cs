@@ -20,12 +20,18 @@ namespace Ballverse.Core.Layout
     /// The user cannot move, scale or cover the watermark; the compositor draws it last.
     /// </para>
     /// <para>
-    /// Preview/export agreement (spec §3.3 acceptance, §3.10, §7.5): rule 3 is an exact pixel test, and rects rounded
-    /// separately per canvas can differ by 1 px, so deciding it per canvas could pick different corners for preview and
-    /// export when a PiP window or text box sits next to the watermark edge. The corner is therefore decided once on the
-    /// 1080x1920 reference canvas (<see cref="ChooseCorner"/>, with masks and occupied rects in reference pixels) and only
-    /// the rect is computed per canvas (<see cref="PlaceAt"/>). <see cref="FrameComposer"/> does exactly that;
-    /// <see cref="Place"/> decides on the given canvas alone and is meant for single-canvas callers and the reference itself.
+    /// Preview/export agreement (spec §3.3 acceptance, §3.10, §7.5): rules 2 and 3 are exact pixel tests, and rects rounded
+    /// separately per canvas can differ by 1 px, so running them per canvas could pick a different corner, or slide past a
+    /// second mask band on one canvas but not on another (hundreds of px apart), when a PiP window, text box or mask sits
+    /// next to a watermark edge. The whole placement (corner and vertical mask push) is therefore decided once on the
+    /// 1080x1920 reference canvas (<see cref="PlaceOnReference"/>, with masks and occupied rects in reference pixels) and
+    /// each canvas only scales that result (<see cref="PlaceAt"/>): x from this canvas's safe margin (left) or safe right
+    /// edge (right), size from <see cref="Size"/>, y = this canvas's safe top when the reference was not pushed, else
+    /// round_half_up(referenceY * canvasHeight / 1920), clamped into the safe area. Consistency wins over per-canvas
+    /// exactness: where the reference watermark just touches a mask edge, a scaled one may overlap it by one pixel row,
+    /// reported in <see cref="WatermarkPlacement.MaskOverlap"/>. <see cref="FrameComposer"/> does
+    /// exactly that; <see cref="Place"/> decides on the given canvas alone and is meant for single-canvas callers and the
+    /// reference itself.
     /// </para>
     /// </summary>
     public static class WatermarkLayout
@@ -92,27 +98,49 @@ namespace Ballverse.Core.Layout
         }
 
         /// <summary>
-        /// Decides the corner on the 1080x1920 reference canvas (see class remarks). <paramref name="referenceMasks"/> and
-        /// <paramref name="referenceOccupied"/> are in reference pixels (e.g. normalized rects through
-        /// <see cref="FloatRect.ToPixels"/> at 1080x1920, the PiP window computed at 1080x1920).
+        /// The placement (corner and rect after mask avoidance) on the 1080x1920 reference canvas (see class remarks).
+        /// <paramref name="referenceMasks"/> and <paramref name="referenceOccupied"/> are in reference pixels (e.g.
+        /// normalized rects through <see cref="FloatRect.ToPixels"/> at 1080x1920, the PiP window computed at 1080x1920).
+        /// Pass the result to <see cref="PlaceAt"/> for every canvas.
         /// </summary>
+        public static WatermarkPlacement PlaceOnReference(float logoAspect, RectUnion referenceMasks, IReadOnlyList<IntRect> referenceOccupied)
+        {
+            return Place(PixelMath.ReferenceWidth, PixelMath.ReferenceHeight, logoAspect, referenceMasks, referenceOccupied);
+        }
+
+        /// <summary>Corner of <see cref="PlaceOnReference"/>.</summary>
         public static WatermarkCorner ChooseCorner(float logoAspect, RectUnion referenceMasks, IReadOnlyList<IntRect> referenceOccupied)
         {
-            return Place(PixelMath.ReferenceWidth, PixelMath.ReferenceHeight, logoAspect, referenceMasks, referenceOccupied).Corner;
+            return PlaceOnReference(logoAspect, referenceMasks, referenceOccupied).Corner;
         }
 
         /// <summary>
-        /// Watermark at a fixed <paramref name="corner"/> (usually from <see cref="ChooseCorner"/>) on this canvas, with the
-        /// occupied and mask overlaps measured here for diagnostics. <paramref name="occupied"/> may be null.
+        /// Scales a reference placement (from <see cref="PlaceOnReference"/>, same <paramref name="logoAspect"/>) to this
+        /// canvas without re-running any pixel test (see class remarks), so every canvas shows the reference's corner and
+        /// vertical position within 1 px of proportional scaling. <paramref name="masks"/> and <paramref name="occupied"/>
+        /// (this canvas's pixels, occupied may be null) only feed the overlap diagnostics of the result. At 1080x1920 the
+        /// result equals the reference placement.
         /// </summary>
         public static WatermarkPlacement PlaceAt(int canvasWidth, int canvasHeight, float logoAspect, RectUnion masks,
-            IReadOnlyList<IntRect> occupied, WatermarkCorner corner)
+            IReadOnlyList<IntRect> occupied, WatermarkPlacement reference)
         {
             if (masks == null) throw new ArgumentNullException(nameof(masks));
+            WatermarkCorner corner = reference.Corner;
             if (corner != WatermarkCorner.TopLeft && corner != WatermarkCorner.TopRight)
-                throw new ArgumentOutOfRangeException(nameof(corner), corner, "unknown corner");
+                throw new ArgumentOutOfRangeException(nameof(reference), corner, "unknown corner");
+            IntVec2 size = Size(canvasWidth, canvasHeight, logoAspect);
+            IntRect safe = SafeArea.Rect(canvasWidth, canvasHeight);
+            IntRect refSafe = SafeArea.Rect(PixelMath.ReferenceWidth, PixelMath.ReferenceHeight);
+            int x = corner == WatermarkCorner.TopLeft ? safe.X : safe.Right - size.X;
+            int y = safe.Y;
+            if (reference.Rect.Y != refSafe.Y)
+            {
+                y = PixelMath.RoundDiv((long)reference.Rect.Y * canvasHeight, PixelMath.ReferenceHeight);
+                y = PixelMath.Clamp(y, safe.Y, Math.Max(safe.Y, safe.Bottom - size.Y));
+            }
+            var r = new IntRect(x, y, size.X, size.Y);
             var occ = new RectUnion(occupied ?? new IntRect[0]);
-            return Evaluate(canvasWidth, canvasHeight, logoAspect, corner, masks, occ);
+            return new WatermarkPlacement(corner, r, occ.IntersectionArea(r), masks.IntersectionArea(r));
         }
 
         static WatermarkPlacement Evaluate(int w, int h, float aspect, WatermarkCorner corner, RectUnion masks, RectUnion occupied)

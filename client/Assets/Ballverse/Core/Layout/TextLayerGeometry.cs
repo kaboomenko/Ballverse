@@ -5,7 +5,8 @@ namespace Ballverse.Core.Layout
     /// <summary>
     /// Text layer geometry (spec §3.5): normalized position -&gt; pixel anchor, reference sizes -&gt; canvas sizes. Text is
     /// measured and laid out by the Unity compositor; Core only does the anchor and scale math so preview and export agree
-    /// (spec §7.5). The anchor's meaning relative to the text box (center, alignment) is up to the renderer.
+    /// (spec §7.5). The anchor's meaning relative to the text box (center, alignment) is up to the renderer. Boxes handed to
+    /// the watermark rule (<see cref="FrameRequest.TextBounds"/>) are measured once at the 1080x1920 reference, not per canvas.
     /// </summary>
     public static class TextLayerGeometry
     {

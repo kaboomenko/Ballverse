@@ -17,9 +17,10 @@ namespace Ballverse.Core.Layout
     {
         /// <summary>
         /// Computes slots (<see cref="LayoutCalculator.ComputeSlots"/>), the video mapping (<see cref="ContentMapper.Map"/>)
-        /// and the watermark (spec §3.10): the corner is decided on the 1080x1920 reference canvas from the PiP window and
-        /// the text bounds (<see cref="WatermarkLayout.ChooseCorner"/>), so every canvas size picks the same corner, and the
-        /// rect is then placed on this canvas (<see cref="WatermarkLayout.PlaceAt"/>).
+        /// and the watermark (spec §3.10): corner and mask push are decided on the 1080x1920 reference canvas from the
+        /// reference masks, the PiP window and the text bounds (<see cref="WatermarkLayout.PlaceOnReference"/>), so every
+        /// canvas size shows the same corner and position, and that placement is then scaled to this canvas
+        /// (<see cref="WatermarkLayout.PlaceAt"/>).
         /// </summary>
         public static FramePlan Compose(FrameRequest request)
         {
@@ -55,8 +56,10 @@ namespace Ballverse.Core.Layout
                     occupied.Add(text[i].ToPixels(w, h));
                     if (!isReference) refOccupied.Add(text[i].ToPixels(refW, refH));
                 }
-                WatermarkCorner corner = WatermarkLayout.ChooseCorner(request.WatermarkLogoAspect, request.ReferenceMasks, refOccupied);
-                watermark = WatermarkLayout.PlaceAt(w, h, request.WatermarkLogoAspect, request.Masks, occupied, corner);
+                WatermarkPlacement reference = WatermarkLayout.PlaceOnReference(request.WatermarkLogoAspect, request.ReferenceMasks, refOccupied);
+                watermark = isReference
+                    ? reference
+                    : WatermarkLayout.PlaceAt(w, h, request.WatermarkLogoAspect, request.Masks, occupied, reference);
             }
             return new FramePlan(layout, mapping, videoDest, request.ShowWatermark, watermark);
         }

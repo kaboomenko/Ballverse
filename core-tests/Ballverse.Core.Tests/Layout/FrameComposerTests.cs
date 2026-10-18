@@ -62,7 +62,7 @@ namespace Ballverse.Core.Tests.Layout
         [Fact]
         public void TextBoundsAffectWatermark()
         {
-            var text = new[] { FloatRect.FromPixels(new IntRect(0, 140, 400, 120), 1080, 1920) };
+            var text = new[] { FloatRect.FromReferencePixels(new IntRect(0, 140, 400, 120)) };
             var req = new FrameRequest(1080, 1920, LayoutSpec.Default, textBounds: text);
             FramePlan plan = FrameComposer.Compose(req);
             Assert.Equal(WatermarkCorner.TopRight, plan.Watermark.Corner);
@@ -183,13 +183,114 @@ namespace Ballverse.Core.Tests.Layout
         public void QaCaseTextBoxScaledTo720KeepsTheCorner()
         {
             // 1080: [40,204 600x90]; the same box at 720 is [27,136 400x60].
-            FloatRect box = FloatRect.FromPixels(new IntRect(40, 204, 600, 90), 1080, 1920);
+            FloatRect box = FloatRect.FromReferencePixels(new IntRect(40, 204, 600, 90));
             FramePlan hi = FrameComposer.Compose(new FrameRequest(1080, 1920, LayoutSpec.Default, textBounds: new[] { box }));
             FramePlan lo = FrameComposer.Compose(new FrameRequest(720, 1280, LayoutSpec.Default, textBounds: new[] { box }));
             Assert.Equal(hi.Watermark.Corner, lo.Watermark.Corner);
             Assert.Equal(WatermarkCorner.TopRight, hi.Watermark.Corner);
             Assert.Equal(new IntRect(832, 186, 216, 48), hi.Watermark.Rect);
-            Assert.Equal(new IntRect(555, 123, 144, 32), lo.Watermark.Rect);
+            Assert.Equal(new IntRect(555, 124, 144, 32), lo.Watermark.Rect); // round(186 * 1280 / 1920)
+        }
+
+        static List<int[]> PreviewAndExportCanvases()
+        {
+            var list = new List<int[]>(s_canvases);
+            for (int w = 300; w <= 1000; w++)
+            {
+                IntVec2 c = OutputCanvas.FitPreview(w, 4000);
+                list.Add(new[] { c.X, c.Y });
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Every watermark edge of <paramref name="actual"/> (canvas w x h) within tolerance of the reference rect scaled by
+        /// w / 1080 horizontally and h / 1920 vertically. The anchored edges (top, and the corner's side) are held to 1 px;
+        /// the far edges also carry the rounding of <see cref="WatermarkLayout.Size"/> (height 2.5% then width = height x
+        /// aspect, i.e. up to 0.5 x 4.5 + 0.5 px plus the 0.5 px edge rounding) on non-exact 9:16 previews such as 326x580.
+        /// </summary>
+        static void AssertWatermarkScaled(WatermarkPlacement reference, WatermarkPlacement actual, int w, int h, string ctx)
+        {
+            double kx = w / 1080.0, ky = h / 1920.0;
+            IntRect a = reference.Rect, b = actual.Rect;
+            string msg = ctx + " " + w + "x" + h + ": " + a + " vs " + b;
+            Assert.True(reference.Corner == actual.Corner, msg);
+            Assert.True(Math.Abs(a.Y * ky - b.Y) <= 1.0, msg + " top");
+            Assert.True(Math.Abs(a.Bottom * ky - b.Bottom) <= 1.5, msg + " bottom");
+            bool left = reference.Corner == WatermarkCorner.TopLeft;
+            Assert.True(Math.Abs(a.X * kx - b.X) <= (left ? 1.0 : 3.5), msg + " left");
+            Assert.True(Math.Abs(a.Right * kx - b.Right) <= (left ? 3.5 : 1.0), msg + " right");
+        }
+
+        [Fact]
+        public void WatermarkPositionAgreesAcrossCanvasesWithRemoteConfigMasks()
+        {
+            // QA round 2: masks are Remote Config data (spec §3.3). A top bar plus a second band swept across the
+            // reference watermark bottom (234 px = 0.121875) must give the same corner and position on export and on every
+            // preview size; re-running the mask push per canvas moved it by hundreds of px.
+            List<int[]> canvases = PreviewAndExportCanvases();
+            int perCanvasJumps = 0;
+            var bands = new List<FloatRect[]>();
+            for (int i = 0; i <= 120; i++)
+            {
+                float top2 = 0.115f + i * 0.0001f;
+                bands.Add(new[] { new FloatRect(0f, 0f, 1f, 0.08f), new FloatRect(0f, top2, 0.3f, 0.1f) });
+            }
+            foreach (float top2 in new[] { 0.115f, 0.12f, 0.1225f, 0.125f, 0.13f })
+                bands.Add(new[] { new FloatRect(0f, 0f, 1f, 0.08f), new FloatRect(0f, top2, 1f, 0.05f) });
+            // Right-hand band too, so the top-right corner is also exercised (PiP blocks the top-left).
+            var pipSpec = LayoutSpec.Default.WithType(LayoutType.L3).WithPip(new PipSpec(SlotShape.RoundedRect, 0.35f, new FloatVec2(0.2f, 0.25f)));
+            foreach (FloatRect[] masks in bands)
+            {
+                foreach (LayoutSpec spec in new[] { LayoutSpec.Default, pipSpec })
+                {
+                    FramePlan hi = FrameComposer.Compose(new FrameRequest(1080, 1920, spec, masks: masks));
+                    string ctx = "band " + masks[1] + " " + spec.Type;
+                    for (int c = 1; c < canvases.Count; c++)
+                    {
+                        int w = canvases[c][0], h = canvases[c][1];
+                        FramePlan lo = FrameComposer.Compose(new FrameRequest(w, h, spec, masks: masks));
+                        AssertWatermarkScaled(hi.Watermark, lo.Watermark, w, h, ctx);
+                        // Scaling may let the watermark touch a mask edge by at most one pixel row on this canvas.
+                        if (hi.Watermark.MaskOverlap == 0) Assert.True(lo.Watermark.MaskOverlap <= lo.Watermark.Rect.Width, ctx + " mask overlap");
+                        // The old per-canvas push, to prove the sweep reaches the cases it got wrong.
+                        RectUnion canvasMasks = RectUnion.FromNormalized(masks, w, h);
+                        IntRect naive = WatermarkLayout.CornerRect(w, h, WatermarkLayout.DefaultLogoAspect, hi.Watermark.Corner, canvasMasks);
+                        if (Math.Abs(hi.Watermark.Rect.Y * (h / 1920.0) - naive.Y) > 50) perCanvasJumps++;
+                    }
+                }
+            }
+            Assert.True(perCanvasJumps > 0, "sweep should contain cases a per-canvas mask push gets wrong");
+        }
+
+        [Fact]
+        public void TextMeasuredOnceAtTheReferenceKeepsCornerAndPositionOnEveryCanvas()
+        {
+            // QA round 2: the supported path for text bounds is one measurement in the 1080x1920 reference layout
+            // (FloatRect.FromReferencePixels), the same list for every request. The text top slides across the reference
+            // watermark bottom (186 + 48 = 234) in 0.01 px steps.
+            int perCanvasMismatches = 0;
+            for (int i = 0; i <= 6000; i++)
+            {
+                float topRef = 200f + i * 0.01f;
+                var bounds = new[] { FloatRect.FromReferencePixels(new FloatRect(0f, topRef, 600f, 90f)) };
+                FramePlan hi = FrameComposer.Compose(new FrameRequest(1080, 1920, LayoutSpec.Default, textBounds: bounds));
+                foreach (int[] c in s_canvases)
+                {
+                    FramePlan lo = FrameComposer.Compose(new FrameRequest(c[0], c[1], LayoutSpec.Default, textBounds: bounds));
+                    Assert.True(hi.Watermark.Corner == lo.Watermark.Corner, "topRef " + topRef + " canvas " + c[0] + "x" + c[1]);
+                    AssertWatermarkScaled(hi.Watermark, lo.Watermark, c[0], c[1], "topRef " + topRef);
+
+                    // Unsupported path (documented on FrameRequest.TextBounds): measuring the box per canvas in integer
+                    // pixels quantizes it differently on each canvas and can flip the corner.
+                    double k = c[0] / 1080.0;
+                    var measured = new IntRect(0, PixelMath.RoundHalfUp(topRef * k), PixelMath.RoundHalfUp(600 * k), PixelMath.RoundHalfUp(90 * k));
+                    FramePlan perCanvas = FrameComposer.Compose(new FrameRequest(c[0], c[1], LayoutSpec.Default,
+                        textBounds: new[] { FloatRect.FromPixels(measured, c[0], c[1]) }));
+                    if (perCanvas.Watermark.Corner != hi.Watermark.Corner) perCanvasMismatches++;
+                }
+            }
+            Assert.True(perCanvasMismatches > 0, "per-canvas measurement should be shown to disagree");
         }
 
         [Fact]

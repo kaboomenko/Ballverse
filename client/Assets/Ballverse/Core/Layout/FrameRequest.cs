@@ -6,7 +6,8 @@ namespace Ballverse.Core.Layout
     /// <summary>
     /// Input of <see cref="FrameComposer.Compose"/>: the project's layout state plus per-canvas facts. Immutable (list
     /// inputs are copied). Preview and export build the same request from the same project and differ only in canvas size
-    /// (spec §7.5); masks and text bounds are therefore given in normalized, canvas-independent coordinates.
+    /// (spec §7.5); masks and text bounds are therefore given in normalized, canvas-independent coordinates, and text bounds
+    /// come from one measurement at the 1080x1920 reference (see <see cref="TextBounds"/>).
     /// </summary>
     public sealed class FrameRequest
     {
@@ -41,10 +42,13 @@ namespace Ballverse.Core.Layout
         public float WatermarkLogoAspect { get; }
 
         /// <summary>
-        /// Text layer boxes for watermark avoidance (spec §3.10), normalized to the canvas (measured by the Unity text
-        /// renderer; <see cref="FloatRect.FromPixels"/> converts a pixel box). Pass the boxes of every text layer of the
-        /// clip, whatever its show time, not only the layers visible at the current frame, so the watermark never jumps
-        /// corners mid-video. Read-only copy of the input.
+        /// Text layer boxes for watermark avoidance (spec §3.10), normalized (fractions of the canvas). Contract: measure
+        /// each text layer once in the 1080x1920 reference layout (Unity text renderer, float bounds) and convert it with
+        /// <see cref="FloatRect.FromReferencePixels(FloatRect)"/>; preview and export pass the very same list. Boxes measured
+        /// separately at each canvas size are quantized differently and may make preview and export pick different corners
+        /// (spec §3.3 acceptance, §7.5), so that path is not supported. Pass the boxes of every text layer of the clip,
+        /// whatever its show time, not only the layers visible at the current frame, so the watermark never jumps corners
+        /// mid-video. Read-only copy of the input.
         /// </summary>
         public IReadOnlyList<FloatRect> TextBounds { get; }
 

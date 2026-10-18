@@ -1,6 +1,6 @@
 namespace Ballverse.Core.Layout
 {
-    /// <summary>Result of <see cref="WatermarkLayout.Place"/> (spec §3.10).</summary>
+    /// <summary>Result of <see cref="WatermarkLayout.Place"/>, <see cref="WatermarkLayout.PlaceOnReference"/> and <see cref="WatermarkLayout.PlaceAt"/> (spec §3.10).</summary>
     public readonly struct WatermarkPlacement
     {
         public WatermarkCorner Corner { get; }
