@@ -612,14 +612,16 @@ namespace Ballverse.Core.Tests.Generation
             Assert.False(o.Interactive);
             Assert.Equal(1800, o.TargetDurationTicks);
 
-            var budgets = GenerationBudgetTable.Default.ApplyRemoteJson("{\"B\":{\"candidates\":3}}", out _);
+            var budgets = GenerationBudgetTable.Default.With(DeviceTier.B, new GenerationBudget(3, 2500));
             Assert.Equal(3, GenerationSessionOptions.ForMode(ModeCode.M03, DeviceTier.B, 1UL, null, null, budgets).Budget.Candidates);
         }
 
         [Fact]
         public void ModeWithoutWinnerRejectsForcedWinnerAndComeback()
         {
-            GenerationSessionOptions o = GenerationSessionOptions.ForMode(ModeCode.M01, DeviceTier.B, 1UL, 1800);
+            // M05 Helix Drop has a single ball and no winner (release-1 spec §2.9).
+            GenerationSessionOptions o = GenerationSessionOptions.ForMode(ModeCode.M05, DeviceTier.B, 1UL, 1800);
+            Assert.False(o.Interactive);
             o.ForcedWinner = 0;
             o.ParticipantCount = 3;
             Assert.Throws<ArgumentException>(() => new GenerationSession(o));

@@ -1,11 +1,12 @@
 using System;
-using Newtonsoft.Json;
 
 namespace Ballverse.Core.Timeline
 {
     /// <summary>
     /// Target VBR bitrates of the exported file (spec §3.8): 1080p60 16 Mbit/s, 1080p30 10, 720p60 10, 720p30 6;
-    /// audio AAC-LC 192 kbit/s. Immutable; <see cref="WithOverrides"/> applies Remote Config values.
+    /// audio AAC-LC 192 kbit/s. Immutable; <see cref="WithOverrides"/> applies typed overrides. The Remote Config key
+    /// <c>export_bitrates</c> (video only, kbps) is parsed by the Config module; <c>Ballverse.Core.Integration.RemoteConfigAdapters</c>
+    /// builds this table from it (the audio bitrate has no Remote Config key and stays <see cref="DefaultAudioBps"/>).
     /// </summary>
     public sealed class ExportBitrateTable
     {
@@ -67,33 +68,6 @@ namespace Ballverse.Core.Timeline
                 overrides.Video720p60Bps ?? Video720p60Bps,
                 overrides.Video720p30Bps ?? Video720p30Bps,
                 overrides.AudioBps ?? AudioBps);
-        }
-
-        /// <summary>
-        /// Applies a Remote Config JSON payload (<see cref="ExportBitrateOverrides"/>) onto <see cref="Default"/>.
-        /// Blank text, a <c>null</c> root, malformed JSON, non-integer values (strings, fractions) and out-of-range values
-        /// return false and the default table, so bad remote data never blocks export and can be reported. An empty object
-        /// is valid (no overrides).
-        /// </summary>
-        public static bool TryFromRemoteConfig(string json, out ExportBitrateTable table)
-        {
-            table = Default;
-            if (string.IsNullOrWhiteSpace(json)) return false;
-            try
-            {
-                var overrides = ExportBitrateOverrides.FromJson(json);
-                if (overrides == null) return false;
-                table = Default.WithOverrides(overrides);
-                return true;
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                return false;
-            }
         }
 
         static long Check(long bps, string name)

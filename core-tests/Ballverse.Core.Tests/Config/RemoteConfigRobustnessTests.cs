@@ -85,6 +85,25 @@ namespace Ballverse.Core.Tests.Config
             Assert.Empty(r.Values.ModesDisabled);
         }
 
+        [Theory]
+        [InlineData(RemoteConfigKeys.PlatformSafeZones)]
+        [InlineData(RemoteConfigKeys.TextTemplates)]
+        public void PerEntryErrorsAreCappedToo(string key)
+        {
+            // QA residual (config): one NoValidEntries Error per broken map entry used to grow without bound.
+            var sb = new StringBuilder("{");
+            for (int i = 0; i < 100000; i++) sb.Append(i == 0 ? "" : ",").Append("\"p").Append(i.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append("\":[1]");
+            sb.Append('}');
+            var r = Parse(key, sb.ToString());
+            Assert.True(r.Issues.Count <= 2 * RemoteConfigParser.MaxIssuesPerKey + 1, "issues=" + r.Issues.Count);
+            Assert.Equal(RemoteConfigParser.MaxIssuesPerKey, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.NoValidEntries));
+            var summary = Single(r, RemoteConfigIssueKind.IssuesSuppressed, RemoteConfigIssueSeverity.Error);
+            // 100000 warnings + 100000 errors, minus the listed ones.
+            Assert.Contains((200000 - 2 * RemoteConfigParser.MaxIssuesPerKey).ToString(System.Globalization.CultureInfo.InvariantCulture), summary.Message);
+            // The defaults are untouched: every broken entry kept its previous value (none existed for p*).
+            Assert.Equal(RawDictionary(RemoteConfigValues.Defaults)[key], Raw(r.Values, key));
+        }
+
         [Fact]
         public void UnknownKeysAreCapped()
         {
@@ -164,16 +183,35 @@ namespace Ballverse.Core.Tests.Config
         }
 
         [Fact]
-        public void PresetFractionsKeepDeliveredPrecision()
+        public void PresetFractionsKeepDoublePrecision()
         {
+            // QA residual: numbers are read as doubles, exactly as Params reads presets (the only consumer). Every value
+            // survives at double precision (the old decimal pass turned 1e-30 into 0 and fell back to double for all presets
+            // when one number exceeded the decimal range).
             const string raw = "[{\"seed\":12345678901234567.5,\"k\":0.1234567890123456789,\"e\":1.50}]";
             var r = Parse(RemoteConfigKeys.RemotePresets, raw);
             AssertNoIssues(r);
-            Assert.Equal("{\"seed\":12345678901234567.5,\"k\":0.1234567890123456789,\"e\":1.50}", r.Values.RemotePresets[0]);
+            Assert.Equal("{\"seed\":12345678901234568.0,\"k\":0.12345678901234568,\"e\":1.5}", r.Values.RemotePresets[0]);
             // Writer → parser → writer is stable, and the builder keeps the same text.
             var again = RemoteConfigParser.Parse(RawDictionary(r.Values));
             Assert.Equal(r.Values.RemotePresets, again.Values.RemotePresets);
             Assert.Equal(r.Values.RemotePresets, new RemoteConfigBuilder(r.Values).Build().RemotePresets);
+        }
+
+        [Fact]
+        public void PresetTinyNumbersSurviveAndPresetsAreIndependent()
+        {
+            // QA residual probes B1/B2: 1e-30 must not become 0, and a 1e30 in one preset must not change another preset's text.
+            var tiny = Parse(RemoteConfigKeys.RemotePresets, "[{\"eps\":1e-30,\"b\":1.5e-29}]");
+            AssertNoIssues(tiny);
+            Assert.Equal("{\"eps\":1E-30,\"b\":1.5E-29}", tiny.Values.RemotePresets[0]);
+
+            var alone = Parse(RemoteConfigKeys.RemotePresets, "[{\"k\":0.1234567890123456789}]").Values.RemotePresets[0];
+            var mixed = Parse(RemoteConfigKeys.RemotePresets, "[{\"k\":0.1234567890123456789},{\"big\":1e30},{\"x\":1e400}]");
+            Assert.Equal(alone, mixed.Values.RemotePresets[0]);
+            Assert.Equal("{\"big\":1E+30}", mixed.Values.RemotePresets[1]);
+            Assert.Equal(2, mixed.Values.RemotePresets.Count);
+            Single(mixed, RemoteConfigIssueKind.InvalidEntry, RemoteConfigIssueSeverity.Warning);
         }
 
         [Fact]

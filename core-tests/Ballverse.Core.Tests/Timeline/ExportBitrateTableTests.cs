@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using Ballverse.Core;
 using Ballverse.Core.Timeline;
 using Xunit;
@@ -8,11 +7,6 @@ namespace Ballverse.Core.Tests.Timeline
 {
     public class ExportBitrateTableTests
     {
-        static string ReadTestData(string name)
-        {
-            return File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TestData", "Timeline", name));
-        }
-
         [Fact]
         public void Default_MatchesSpecTable()
         {
@@ -71,71 +65,13 @@ namespace Ballverse.Core.Tests.Timeline
         }
 
         [Fact]
-        public void Overrides_JsonRoundTripIsCamelCaseAndSkipsNulls()
+        public void TableFeedsExportSettings()
         {
-            var o = new ExportBitrateOverrides { Video1080p60Bps = 14000000, AudioBps = 160000 };
-            string json = o.ToJson();
-            Assert.Equal("{\"video1080p60Bps\":14000000,\"audioBps\":160000}", json);
-            var back = ExportBitrateOverrides.FromJson(json);
-            Assert.Equal(14000000L, back.Video1080p60Bps);
-            Assert.Equal(160000L, back.AudioBps);
-            Assert.Null(back.Video720p30Bps);
-        }
-
-        [Fact]
-        public void TryFromRemoteConfig_AppliesTestDataFile()
-        {
-            Assert.True(ExportBitrateTable.TryFromRemoteConfig(ReadTestData("bitrate_overrides.json"), out var t));
-            Assert.Equal(14000000L, t.Video1080p60Bps);
-            Assert.Equal(10000000L, t.Video1080p30Bps);
-            Assert.Equal(10000000L, t.Video720p60Bps);
-            Assert.Equal(5000000L, t.Video720p30Bps);
-            Assert.Equal(160000L, t.AudioBps);
-
+            // Remote Config export_bitrates is parsed by the Config module and mapped by Integration.RemoteConfigAdapters.
+            var t = ExportBitrateTable.Default.WithOverrides(new ExportBitrateOverrides { Video720p30Bps = 5000000, AudioBps = 160000 });
             var s = new ExportSettings(ExportResolution.P720, 30, t);
             Assert.Equal(5000000L, s.VideoBitrateBps);
             Assert.Equal(160000L, s.AudioBitrateBps);
-        }
-
-        [Fact]
-        public void TryFromRemoteConfig_InvalidValuesFallBackToDefault()
-        {
-            Assert.False(ExportBitrateTable.TryFromRemoteConfig(ReadTestData("bitrate_overrides_invalid.json"), out var t));
-            Assert.Same(ExportBitrateTable.Default, t);
-        }
-
-        [Theory]
-        [InlineData(null)]
-        [InlineData("")]
-        [InlineData("{")]
-        [InlineData("[1,2]")]
-        [InlineData("{\"audioBps\":\"loud\"}")]
-        [InlineData("{\"audioBps\":1e40}")]
-        [InlineData("   ")]
-        [InlineData("null")]
-        [InlineData("{\"audioBps\":\"\"}")]
-        [InlineData("{\"audioBps\":\"160000\"}")]
-        [InlineData("{\"audioBps\":160000.7}")]
-        [InlineData("{\"audioBps\":160000.0}")]
-        [InlineData("{\"audioBps\":true}")]
-        [InlineData("{\"audioBps\":{}}")]
-        [InlineData("{\"audioBps\":99999999999999999999}")]
-        [InlineData("5")]
-        public void TryFromRemoteConfig_MalformedFallsBackToDefault(string json)
-        {
-            Assert.False(ExportBitrateTable.TryFromRemoteConfig(json, out var t));
-            Assert.Same(ExportBitrateTable.Default, t);
-        }
-
-        [Fact]
-        public void TryFromRemoteConfig_EmptyObjectKeepsDefaults()
-        {
-            Assert.True(ExportBitrateTable.TryFromRemoteConfig("{}", out var t));
-            Assert.Equal(16000000L, t.Video1080p60Bps);
-            Assert.True(ExportBitrateTable.TryFromRemoteConfig("{\"unknownKey\":5}", out t));
-            Assert.Equal(192000L, t.AudioBps);
-            Assert.True(ExportBitrateTable.TryFromRemoteConfig("{\"audioBps\":null}", out t));
-            Assert.Equal(192000L, t.AudioBps);
         }
     }
 }

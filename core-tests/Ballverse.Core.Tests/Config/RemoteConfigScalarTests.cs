@@ -181,7 +181,7 @@ namespace Ballverse.Core.Tests.Config
                 Assert.Equal(RemoteConfigIssueKind.UnknownKey, i.Kind);
                 Assert.Equal(RemoteConfigIssueSeverity.Info, i.Severity);
             });
-            Assert.Equal(Codes(1, 2, 3, 4, 5), r.Values.FreeModes);
+            Assert.Equal(DefaultFree(), r.Values.FreeModes);
         }
 
         [Fact]

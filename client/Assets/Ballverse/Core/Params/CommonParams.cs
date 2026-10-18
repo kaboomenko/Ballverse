@@ -103,11 +103,22 @@ namespace Ballverse.Core.Params
         public static ParamSchema Schema => s_schema.Value;
 
         /// <summary>
-        /// Builds the common schema. <paramref name="themes"/> / <paramref name="melodies"/> extend or replace the option
-        /// lists when content arrives as data (spec §2.10, §2.7); they must contain the defaults "Neon" / "ode_to_joy".
+        /// Builds the common schema. <paramref name="themes"/> / <paramref name="melodies"/> / <paramref name="soundPacks"/>
+        /// extend or replace the option lists when content arrives as data (spec §2.10, §2.7, §7.6 "звуковые пакеты"); they must
+        /// contain the defaults "Neon" / "ode_to_joy" / "Notes", and sound packs also "Melody" (the target of melody's visibleIf).
         /// </summary>
-        public static ParamSchema Build(IEnumerable<string> themes = null, IEnumerable<string> melodies = null)
+        /// <exception cref="ArgumentException">A list misses a required option (or is otherwise invalid for its parameter).</exception>
+        public static ParamSchema Build(IEnumerable<string> themes = null, IEnumerable<string> melodies = null,
+            IEnumerable<string> soundPacks = null)
         {
+            IReadOnlyList<string> packs = SoundPacks;
+            if (soundPacks != null)
+            {
+                var list = new List<string>(soundPacks);
+                if (!list.Contains("Notes") || !list.Contains("Melody"))
+                    throw new ArgumentException("Sound packs must contain \"Notes\" (the default) and \"Melody\"", nameof(soundPacks));
+                packs = list;
+            }
             var b = new ParamSchemaBuilder();
 
             // Basic
@@ -142,7 +153,7 @@ namespace Ballverse.Core.Params
             b.Add(new BoolParam(HudLeaders, false).InGroup(ParamGroup.Look, 94).AsLive().WithVisibleIf(VisibleIf.IsTrue(Hud)));
 
             // Sound (live)
-            b.Add(new EnumParam(SoundPack, SoundPacks, "Notes").InGroup(ParamGroup.Sound, 10).AsLive());
+            b.Add(new EnumParam(SoundPack, packs, "Notes").InGroup(ParamGroup.Sound, 10).AsLive());
             b.Add(new EnumParam(Melody, melodies ?? Melodies, "ode_to_joy")
                 .InGroup(ParamGroup.Sound, 20).AsLive().WithVisibleIf(VisibleIf.Is(SoundPack, "Melody")));
             b.Add(new IntParam(SfxVolume, 0, 100, 1, 80, "%").InGroup(ParamGroup.Sound, 30).AsLive());
@@ -161,8 +172,9 @@ namespace Ballverse.Core.Params
 
         /// <summary>
         /// Whether the director can force the winner of <paramref name="mode"/>: only the modes listed in spec §2.5, never
-        /// an interactive mode (§2.4). Narrower than <see cref="ModeInfo.HasWinner"/>, which also marks M10 / M14
-        /// (optional winner).
+        /// an interactive mode (§2.4). Narrower than <see cref="ModeInfo.HasWinner"/>, which also marks the modes whose winner
+        /// exists only in one variant (release 1: M01 "Соревнование", M02 "Открытая грань"; later M10 / M14): such a mode
+        /// layer adds its own forcedWinner parameter with a visibleIf on its variant parameter.
         /// </summary>
         public static bool SupportsForcedWinner(ModeInfo mode)
         {

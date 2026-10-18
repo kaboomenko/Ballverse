@@ -218,8 +218,8 @@ namespace Ballverse.Core.Generation
         {
             if (_status != GenerationStatus.AwaitingDecision) throw new InvalidOperationException("No decision is pending");
             _searchLongerCount++;
-            _countLimit = _evaluations.Count + _phaseBudget.Candidates;
-            _timeLimitMs = _lastElapsedMs + _phaseBudget.TimeMs;
+            _countLimit = SaturatingAdd(_evaluations.Count, _phaseBudget.Candidates);
+            _timeLimitMs = SaturatingAdd(_lastElapsedMs, _phaseBudget.TimeMs);
             _status = GenerationStatus.Running;
             _result = null;
         }
@@ -251,6 +251,19 @@ namespace Ballverse.Core.Generation
         }
 
         bool HasForcedWinner => _options.ForcedWinner >= 0;
+
+        /// <summary>a + b for non-negative operands, saturating at <see cref="int.MaxValue"/> (limits never wrap negative).</summary>
+        static int SaturatingAdd(int a, int b)
+        {
+            long sum = (long)a + b;
+            return sum > int.MaxValue ? int.MaxValue : (int)sum;
+        }
+
+        /// <summary>a + b for non-negative operands, saturating at <see cref="long.MaxValue"/>.</summary>
+        static long SaturatingAdd(long a, long b)
+        {
+            return a > long.MaxValue - b ? long.MaxValue : a + b;
+        }
 
         CandidateEvaluation Evaluate(int index, CandidateRunSummary summary)
         {
@@ -289,8 +302,8 @@ namespace Ballverse.Core.Generation
                 if (!_doubled && (!HasForcedWinner || bestMatching != null))
                 {
                     _doubled = true;
-                    _countLimit += _phaseBudget.Candidates;
-                    _timeLimitMs += _phaseBudget.TimeMs;
+                    _countLimit = SaturatingAdd(_countLimit, _phaseBudget.Candidates);
+                    _timeLimitMs = SaturatingAdd(_timeLimitMs, _phaseBudget.TimeMs);
                     if (_lastElapsedMs < _timeLimitMs) return; // keep running
                     continue; // the time already ran past the doubled budget
                 }

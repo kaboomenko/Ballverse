@@ -21,18 +21,6 @@ namespace Ballverse.Core.Config
             return TryParse(text, FloatParseHandling.Double, out token, out error);
         }
 
-        /// <summary>
-        /// Parses raw JSON that is stored for another module (remote presets, spec §2.3): fractional numbers are read as decimals so
-        /// up to 28 significant digits survive re-serialization as delivered. Falls back to doubles when a number exceeds the
-        /// decimal range (such values are then exact only to double precision; non-finite ones are rejected by the caller).
-        /// Never throws.
-        /// </summary>
-        public static bool TryParsePreservingNumbers(string text, out JToken token, out string error)
-        {
-            if (TryParse(text, FloatParseHandling.Decimal, out token, out error)) return true;
-            return TryParse(text, FloatParseHandling.Double, out token, out error);
-        }
-
         static bool TryParse(string text, FloatParseHandling floats, out JToken token, out string error)
         {
             token = null;

@@ -23,7 +23,7 @@ namespace Ballverse.Core.Config
         /// <c>free_modes</c> did not list every default free mode; they stay free anyway (spec §9.3 extension only, §5.1).
         /// </summary>
         NarrowedFreeModes = 8,
-        /// <summary><c>gallery_order</c> did not list every mode; missing modes appended in catalog order.</summary>
+        /// <summary><c>gallery_order</c> did not list every released mode; missing ones appended in catalog order.</summary>
         IncompleteGalleryOrder = 9,
         /// <summary>Unexpected failure while parsing; the key keeps its default.</summary>
         InternalError = 10,
@@ -32,7 +32,15 @@ namespace Ballverse.Core.Config
         /// default (or current) value is kept instead of an empty one. Only an explicit empty array clears an entry.
         /// </summary>
         NoValidEntries = 11,
-        /// <summary>More Info/Warning issues of this key were suppressed (cap per key); Errors are never suppressed.</summary>
+        /// <summary>
+        /// More issues of this key were suppressed (Info/Warning and Errors are each capped per key); the summary carries the
+        /// highest suppressed severity.
+        /// </summary>
         IssuesSuppressed = 12,
+        /// <summary>
+        /// A catalog mode that is not in this build's release (<see cref="ModeInfo.InRelease"/>) was listed in <c>free_modes</c>
+        /// or <c>gallery_order</c>; ignored (spec §9.3: "Режим из списка, которого нет в сборке, игнорируется").
+        /// </summary>
+        UnreleasedMode = 13,
     }
 }

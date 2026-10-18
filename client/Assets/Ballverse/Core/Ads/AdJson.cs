@@ -8,11 +8,15 @@ using Newtonsoft.Json.Linq;
 namespace Ballverse.Core.Ads
 {
     /// <summary>
-    /// Tolerant readers for the Ads JSON formats (state files, the config file). Once the text is parsed, a field of the
-    /// wrong type or out of range never throws: it is skipped or clamped by the caller. Text the reader rejects is
-    /// reported, always as <see cref="InvalidDataException"/> (like Foundation's VarInt): text that is not JSON, trailing
-    /// content, a root that is not an object, and also an integer literal longer than 380 characters, which Newtonsoft
-    /// refuses at the reader level (so one such field fails the whole document; this limit is not worked around).
+    /// Tolerant readers for the Ads' own persisted JSON formats (state files and the <see cref="AdPolicyConfig"/> file; never
+    /// Remote Config payloads, which the Config module owns). Once the text is parsed, a field of the wrong type or out of
+    /// range never throws: it is skipped or clamped by the caller. The reader is Newtonsoft's lenient JsonTextReader, so
+    /// comments, single quotes, unquoted property names, trailing commas, hex integers (<c>0x5</c>) and leading-zero integers
+    /// (read as octal: <c>010</c> is 8) are accepted as Newtonsoft reads them; files written by the ToJson methods never
+    /// contain these forms. Text the reader rejects is reported, always as <see cref="InvalidDataException"/> (like
+    /// Foundation's VarInt): text that is not JSON, trailing content, a root that is not an object, and two document-level
+    /// reader limits: an integer literal longer than 380 characters and nesting deeper than 64 levels (in any field, known or
+    /// not). Either fails the whole document; these limits are not worked around.
     /// Property names match case-insensitively, as Newtonsoft deserialization does.
     /// </summary>
     internal static class AdJson

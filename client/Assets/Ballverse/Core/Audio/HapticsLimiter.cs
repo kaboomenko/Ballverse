@@ -36,10 +36,21 @@ namespace Ballverse.Core.Audio
 
         public bool Enabled { get; set; } = true;
 
-        /// <summary>Haptic for an event at its tick time (tick × 800 frames).</summary>
+        /// <summary>
+        /// Haptic for an event at its tick time (tick × 800 frames): correct only for 1× playback. The 80 ms rule is about
+        /// what the user feels, so under realtime timeScale ≠ 1 (spec §2.2) the realtime adapter must use
+        /// <see cref="TryTrigger(in ScheduledSoundEvent, out float)"/> or <see cref="TryTrigger(long, float, out float)"/> with
+        /// the presentation frame from its <see cref="PlaybackTimeMap"/>; otherwise at 3× haptics fire every 26.7 ms.
+        /// </summary>
         public bool TryTrigger(in SoundEvent e, out float intensity)
         {
             return TryTrigger(AudioConstants.TickToFrame(e.Tick), e.Impulse, out intensity);
+        }
+
+        /// <summary>Haptic at the event's presentation frame (<see cref="ScheduledSoundEvent.Frame"/>), right at any playback speed.</summary>
+        public bool TryTrigger(in ScheduledSoundEvent e, out float intensity)
+        {
+            return TryTrigger(e.Frame, e.Event.Impulse, out intensity);
         }
 
         /// <summary>Haptic at <paramref name="frame"/> (48 kHz frames). Returns false when disabled, too soon or too weak.</summary>

@@ -103,7 +103,8 @@ namespace Ballverse.Core.Replay
         {
             EnsureOpen();
             int n = values == null ? 0 : values.Count;
-            if (n > BvrFormat.MaxInputValues)
+            // A negative Count (a broken collection) would be written as a huge varint and make the whole file unreadable.
+            if (n < 0 || n > BvrFormat.MaxInputValues)
                 throw new ArgumentException("Input payload has " + n + " values, limit is " + BvrFormat.MaxInputValues, nameof(values));
             _inputs.CheckTick(tick);
             int[] scratch = _inputScratch;

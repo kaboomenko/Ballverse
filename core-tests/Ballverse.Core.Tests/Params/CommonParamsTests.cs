@@ -232,8 +232,10 @@ namespace Ballverse.Core.Tests.Params
     public class BodyBudgetsTests
     {
         [Theory]
-        [InlineData(ModeCode.M01, BodyKind.Bodies, 300, 200, 120)]
-        [InlineData(ModeCode.M02, BodyKind.Balls, 600, 400, 200)]
+        // Release-1 cards (Р18/Р19, spec §2.9 "Физика и бюджет"): kinematic walls and VFX particles are not counted.
+        [InlineData(ModeCode.M01, BodyKind.Balls, 20, 12, 8)]
+        [InlineData(ModeCode.M02, BodyKind.Balls, 200, 120, 60)]
+        [InlineData(ModeCode.M05, BodyKind.Balls, 1, 1, 1)]
         [InlineData(ModeCode.M04, BodyKind.Balls, 2000, 1000, 400)]
         [InlineData(ModeCode.M08, BodyKind.Balls, 120, 80, 50)]
         [InlineData(ModeCode.M09, BodyKind.Balls, 2500, 1200, 500)]
@@ -260,11 +262,11 @@ namespace Ballverse.Core.Tests.Params
             Assert.Equal(new TierCap(16, 16, 16), BodyBudgets.AsTierCap(ModeCode.M03, BodyKind.Balls));
             Assert.Equal(new TierCap(60, 60, 60), BodyBudgets.AsTierCap(ModeCode.M03, BodyKind.Obstacles));
             Assert.Equal(76, BodyBudgets.Total(ModeCode.M03, DeviceTier.C));
-            // M05 "1 шар + до 30 видимых платформ + осколки 150 / 100 / 60"
+            // Release-1 M05 Helix Drop: "1 динамический шар"; platforms are kinematic and shards are VFX particles.
             Assert.Equal(1, BodyBudgets.Get(ModeCode.M05, DeviceTier.B, BodyKind.Balls));
-            Assert.Equal(30, BodyBudgets.Get(ModeCode.M05, DeviceTier.B, BodyKind.Platforms));
-            Assert.Equal(new TierCap(150, 100, 60), BodyBudgets.AsTierCap(ModeCode.M05, BodyKind.Shards));
-            Assert.Equal(131, BodyBudgets.Total(ModeCode.M05, DeviceTier.B));
+            Assert.Null(BodyBudgets.Get(ModeCode.M05, DeviceTier.B, BodyKind.Platforms));
+            Assert.False(BodyBudgets.Has(ModeCode.M05, BodyKind.Shards));
+            Assert.Equal(1, BodyBudgets.Total(ModeCode.M05, DeviceTier.B));
             // M06 "8 бойцов + оружие (сенсоры) + стрелы до 40"
             Assert.Equal(new TierCap(8, 8, 8), BodyBudgets.BallCap(ModeCode.M06));
             Assert.Equal(new TierCap(40, 40, 40), BodyBudgets.AsTierCap(ModeCode.M06, BodyKind.Projectiles));
@@ -279,15 +281,17 @@ namespace Ballverse.Core.Tests.Params
         [Fact]
         public void BallCapFallsBackToTheSharedBodyBudget()
         {
-            Assert.Equal(new TierCap(300, 200, 120), BodyBudgets.BallCap(ModeCode.M01));
+            Assert.Equal(new TierCap(400, 250, 150), BodyBudgets.BallCap(ModeCode.M12));
+            Assert.Equal(new TierCap(1000, 600, 300), BodyBudgets.BallCap(ModeCode.M14));
             Assert.Equal(new TierCap(2000, 1000, 400), BodyBudgets.BallCap(ModeCode.M04));
+            Assert.Equal(new TierCap(20, 12, 8), BodyBudgets.BallCap(ModeCode.M01));
             Assert.Throws<System.ArgumentException>(() => BodyBudgets.BallCap(ModeCode.M11));
         }
 
         [Fact]
         public void BudgetsApplyToCountParamsWhoseMaxIsBelowTheBudget()
         {
-            // M03 ballCount 2–16 with its 16-ball budget; M07 tiles param; common ballCount 1–100 with M01's 300 (no-op cap)
+            // M03 ballCount 2–16 with its 16-ball budget; M07 tiles param; common ballCount 1–100 with M14's 1000 (no-op cap)
             var m03 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M03)), new ParamSchemaBuilder()
                 .Add(new IntParam("ballCount", 2, 16, 1, 6).WithTierCap(BodyBudgets.BallCap(ModeCode.M03)))
                 .Add(new IntParam("obstacleCount", 0, 60, 1, 20).WithTierCap(BodyBudgets.AsTierCap(ModeCode.M03, BodyKind.Obstacles)))
@@ -309,12 +313,20 @@ namespace Ballverse.Core.Tests.Params
                 .BuildLayer());
             Assert.Equal(8, ((IntParam)m06.Get("ballCount")).EffectiveMax(DeviceTier.C));
 
-            var m01 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M01)), new ParamSchemaBuilder()
-                .Add(new IntParam("ballCount", 1, 100, 1, 1).WithTierCap(BodyBudgets.BallCap(ModeCode.M01)))
+            var m14 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M14)), new ParamSchemaBuilder()
+                .Add(new IntParam("ballCount", 1, 100, 1, 1).WithTierCap(BodyBudgets.BallCap(ModeCode.M14)))
                 .BuildLayer());
-            Assert.Equal(100, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.A));
-            Assert.Equal(100, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.B));
-            Assert.Equal(100, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.C));
+            Assert.Equal(100, ((IntParam)m14.Get("ballCount")).EffectiveMax(DeviceTier.A));
+            Assert.Equal(100, ((IntParam)m14.Get("ballCount")).EffectiveMax(DeviceTier.B));
+            Assert.Equal(100, ((IntParam)m14.Get("ballCount")).EffectiveMax(DeviceTier.C));
+
+            // Release-1 M01: ballCount 1–20 capped 20 / 12 / 8 (spec §2.9 "ограничение тира 20 / 12 / 8").
+            var m01 = ParamSchema.Merge(CommonParams.ForMode(ModeCatalog.Get(ModeCode.M01)), new ParamSchemaBuilder()
+                .Add(new IntParam("ballCount", 1, 20, 1, 1).WithTierCap(BodyBudgets.BallCap(ModeCode.M01)))
+                .BuildLayer());
+            Assert.Equal(20, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.A));
+            Assert.Equal(12, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.B));
+            Assert.Equal(8, ((IntParam)m01.Get("ballCount")).EffectiveMax(DeviceTier.C));
         }
 
         [Fact]

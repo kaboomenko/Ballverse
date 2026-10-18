@@ -313,9 +313,10 @@ namespace Ballverse.Core.Audio
             if (eventFrame < 0)
             {
                 // Started before output frame 0: join part-way, at the source position an untrimmed render has here.
-                long skip = -eventFrame;
-                if ((double)skip * step >= (double)sample.FrameCount * FixedOne) return; // already finished
-                pos = skip * step;
+                // The finished-check runs in double so even long.MinValue (whose negation overflows) is caught before any
+                // long arithmetic; past it, skip · step < FrameCount · 2^32 cannot overflow.
+                if (-(double)eventFrame * step >= (double)sample.FrameCount * FixedOne) return; // already finished
+                pos = -eventFrame * step;
             }
 
             int slot = -1;

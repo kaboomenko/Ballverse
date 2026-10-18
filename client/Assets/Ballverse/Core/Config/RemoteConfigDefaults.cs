@@ -34,7 +34,9 @@ namespace Ballverse.Core.Config
                 new GenerationBudgetConfig(8, 3500));
         }
 
-        /// <summary>Spec §5.1 / §9.3: M01–M05 (the catalog's FreeByDefault modes).</summary>
+        /// <summary>
+        /// Spec §5.1 / §9.3: the catalog's FreeByDefault modes, which are always released modes. Release 1 (Р18): M01, M02, M05.
+        /// </summary>
         public static List<ModeCode> FreeModes()
         {
             var list = new List<ModeCode>();
@@ -45,11 +47,11 @@ namespace Ballverse.Core.Config
             return list;
         }
 
-        /// <summary>Gallery order default: catalog order M01…M15.</summary>
+        /// <summary>Gallery order default: the released modes in catalog order (release 1: M01, M02, M05; spec §9.3).</summary>
         public static List<ModeCode> GalleryOrder()
         {
             var list = new List<ModeCode>();
-            foreach (var m in ModeCatalog.All) list.Add(m.Code);
+            foreach (var m in ModeCatalog.Released) list.Add(m.Code);
             return list;
         }
 

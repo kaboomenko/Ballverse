@@ -10,10 +10,13 @@ namespace Ballverse.Core.Config
     /// </summary>
     public sealed class RemoteConfigBuilder
     {
-        /// <summary>May omit M01–M05; <see cref="Build"/> appends them (spec §9.3: the free set can only be extended).</summary>
+        /// <summary>
+        /// May omit the default free modes; <see cref="Build"/> appends them (spec §9.3: the free set can only be extended).
+        /// Modes not in this build's release are dropped by <see cref="Build"/>.
+        /// </summary>
         public List<ModeCode> FreeModes { get; set; }
         public List<ModeCode> ModesDisabled { get; set; }
-        /// <summary>May be partial; <see cref="Build"/> appends missing modes in catalog order.</summary>
+        /// <summary>May be partial; <see cref="Build"/> drops unreleased modes and appends missing released modes in catalog order.</summary>
         public List<ModeCode> GalleryOrder { get; set; }
         public int InterstitialEveryNGames { get; set; }
         public int InterstitialMinIntervalSec { get; set; }
@@ -95,9 +98,10 @@ namespace Ballverse.Core.Config
         }
 
         /// <summary>
-        /// Validates and freezes the values. Normalization: mode lists de-duplicated (first wins); free modes completed with the
-        /// default free modes M01–M05 (spec §9.3 extension only, §5.1); gallery order completed to a
-        /// permutation of all 15 modes; map-like lists sorted by key (ordinal, ignoring case) so the snapshot never depends on
+        /// Validates and freezes the values. Normalization: mode lists de-duplicated (first wins); free modes and gallery order
+        /// keep only modes of this build's release (<see cref="ModeInfo.InRelease"/>, spec §9.3 "игнорируется"); free modes
+        /// completed with the default free modes (spec §9.3 extension only, §5.1); gallery order completed to a permutation of
+        /// the released modes; map-like lists sorted by key (ordinal, ignoring case) so the snapshot never depends on
         /// insertion order; presets re-serialized as compact JSON.
         /// </summary>
         /// <exception cref="ArgumentException">A value is out of range, null, duplicated or malformed.</exception>
@@ -107,14 +111,14 @@ namespace Ballverse.Core.Config
         }
 
         /// <summary>
-        /// Free modes with the catalog's FreeByDefault modes (M01–M05) guaranteed: given order first, missing defaults appended in
-        /// catalog order. Spec §9.3 "только расширение", §5.1 "Бесплатные режимы M01–M05 доступны всегда".
+        /// Released free modes with the catalog's FreeByDefault modes guaranteed: given order first (unreleased modes dropped),
+        /// missing defaults appended in catalog order. Spec §9.3 "только расширение", §5.1 (free modes are always available).
         /// </summary>
         internal static List<ModeCode> CompleteFreeModes(List<ModeCode> distinct)
         {
-            var result = new List<ModeCode>(distinct);
+            var result = ReleasedOnly(distinct);
             var seen = new bool[ModeCatalog.All.Count + 1];
-            foreach (var c in distinct) seen[(int)c] = true;
+            foreach (var c in result) seen[(int)c] = true;
             foreach (var m in ModeCatalog.All)
             {
                 if (m.FreeByDefault && !seen[(int)m.Code]) result.Add(m.Code);
@@ -122,15 +126,28 @@ namespace Ballverse.Core.Config
             return result;
         }
 
-        /// <summary>Gallery order completed to a permutation of all catalog modes: given order first, missing modes appended in catalog order.</summary>
+        /// <summary>
+        /// Gallery order completed to a permutation of the released modes: given order first (unreleased modes dropped), missing
+        /// released modes appended in catalog order.
+        /// </summary>
         internal static List<ModeCode> CompleteGalleryOrder(List<ModeCode> distinct)
         {
-            var result = new List<ModeCode>(distinct);
+            var result = ReleasedOnly(distinct);
             var seen = new bool[ModeCatalog.All.Count + 1];
-            foreach (var c in distinct) seen[(int)c] = true;
-            foreach (var m in ModeCatalog.All)
+            foreach (var c in result) seen[(int)c] = true;
+            foreach (var m in ModeCatalog.Released)
             {
                 if (!seen[(int)m.Code]) result.Add(m.Code);
+            }
+            return result;
+        }
+
+        static List<ModeCode> ReleasedOnly(List<ModeCode> modes)
+        {
+            var result = new List<ModeCode>(modes.Count);
+            foreach (var c in modes)
+            {
+                if (ModeCatalog.IsReleased(c)) result.Add(c);
             }
             return result;
         }
@@ -179,7 +196,7 @@ namespace Ballverse.Core.Config
             var list = new List<string>(presets.Count);
             foreach (var p in presets)
             {
-                if (!RemoteConfigJson.TryParsePreservingNumbers(p, out var token, out var error) || token.Type != Newtonsoft.Json.Linq.JTokenType.Object)
+                if (!RemoteConfigJson.TryParse(p, out var token, out var error) || token.Type != Newtonsoft.Json.Linq.JTokenType.Object)
                     throw new ArgumentException("preset must be a JSON object: " + (error ?? RemoteConfigJson.Excerpt(p)), nameof(RemotePresets));
                 if (RemoteConfigJson.ContainsNonFiniteNumber(token))
                     throw new ArgumentException("preset contains a number outside the double range", nameof(RemotePresets));

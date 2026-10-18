@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace Ballverse.Core.Params.Presets
 {
@@ -20,7 +21,7 @@ namespace Ballverse.Core.Params.Presets
 
         public override string ToString()
         {
-            return "#" + Index + " " + (PresetId ?? "?") + ": " + Reason;
+            return "#" + Index.ToString(CultureInfo.InvariantCulture) + " " + (PresetId ?? "?") + ": " + Reason;
         }
     }
 

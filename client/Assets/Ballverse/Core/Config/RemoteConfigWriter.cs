@@ -59,7 +59,19 @@ namespace Ballverse.Core.Config
                     foreach (var kv in v.GenerationWeights)
                     {
                         var w = kv.Value;
-                        o.Add(kv.Key.ToString(), new JObject { { "w1", w.W1 }, { "w2", w.W2 }, { "w3", w.W3 }, { "w4", w.W4 }, { "w5", w.W5 } });
+                        var entry = new JObject();
+                        if (w.HasWeights)
+                        {
+                            entry.Add("w1", w.W1);
+                            entry.Add("w2", w.W2);
+                            entry.Add("w3", w.W3);
+                            entry.Add("w4", w.W4);
+                            entry.Add("w5", w.W5);
+                        }
+                        if (w.DensityMin.HasValue) entry.Add("densityMin", w.DensityMin.Value);
+                        if (w.DensityMax.HasValue) entry.Add("densityMax", w.DensityMax.Value);
+                        if (w.QualityThreshold.HasValue) entry.Add("qualityThreshold", w.QualityThreshold.Value);
+                        o.Add(kv.Key.ToString(), entry);
                     }
                     return Compact(o);
                 }
@@ -90,7 +102,7 @@ namespace Ballverse.Core.Config
                     var arr = new JArray();
                     foreach (var p in v.RemotePresets)
                     {
-                        RemoteConfigJson.TryParsePreservingNumbers(p, out JToken token, out _);
+                        RemoteConfigJson.TryParse(p, out JToken token, out _);
                         arr.Add(token);
                     }
                     return Compact(arr);

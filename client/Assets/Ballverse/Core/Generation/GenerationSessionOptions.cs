@@ -11,6 +11,15 @@ namespace Ballverse.Core.Generation
         /// <summary>No forced winner (the "any" choice of <c>forcedWinner</c>, spec §2.2).</summary>
         public const int NoForcedWinner = -1;
 
+        /// <summary>
+        /// Largest accepted <see cref="Budget"/> candidate count. Far above any tier budget (Remote Config allows ≤ 64); it only keeps
+        /// the forced-winner multiplier (≤ ×4) and the limit updates far from <see cref="int"/> overflow.
+        /// </summary>
+        public const int MaxBudgetCandidates = 65536;
+
+        /// <summary>Largest accepted <see cref="Budget"/> time and <see cref="ForcedWinnerTimeMs"/>, 1 h (same purpose as <see cref="MaxBudgetCandidates"/>).</summary>
+        public const long MaxBudgetTimeMs = 3600000;
+
         /// <summary>Shortest target duration, 10 s (spec §2.2 <c>targetDuration</c> 10–180 s).</summary>
         public const int MinTargetDurationTicks = 10 * SimConstants.TickRate;
 
@@ -18,9 +27,10 @@ namespace Ballverse.Core.Generation
         public ulong SessionSeed { get; set; }
 
         /// <summary>
-        /// Optional mode. When set, the mode drives validation: an interactive mode (catalog) makes the session interactive even if
-        /// <see cref="Interactive"/> is false (spec §2.4); forced winner needs a mode with a winner; director goals are limited to
-        /// race and battle (<see cref="SupportsDirectorGoals"/>, spec §2.5).
+        /// Optional mode. When set, the mode drives validation: an interactive-only mode (catalog <see cref="ModeInfo.Interactive"/>
+        /// without <see cref="ModeInfo.HasAutoControl"/>) makes the session interactive even if <see cref="Interactive"/> is false
+        /// (spec §2.4); forced winner needs a mode with a winner; director goals are limited to race and battle
+        /// (<see cref="SupportsDirectorGoals"/>, spec §2.5).
         /// </summary>
         public ModeCode? Mode { get; set; }
 
@@ -42,8 +52,9 @@ namespace Ballverse.Core.Generation
         public DirectorGoal Goal { get; set; }
 
         /// <summary>
-        /// Interactive mode: only the arena is generated, duration and winner are not selected (spec §2.4). Implied by an interactive
-        /// <see cref="Mode"/>; setting it for a non-interactive mode is rejected.
+        /// Interactive session (a player controls the run): only the arena is generated, duration and winner are not selected
+        /// (spec §2.4). Implied by an interactive-only <see cref="Mode"/>; for a mode with both controls (M05) the caller sets it
+        /// when the player control is chosen. Setting it for a mode without an interactive control is rejected.
         /// </summary>
         public bool Interactive { get; set; }
 
@@ -76,7 +87,7 @@ namespace Ballverse.Core.Generation
                 Budget = (budgets ?? GenerationBudgetTable.Default).Get(tier),
                 QualityThreshold = profile.QualityThreshold,
                 TargetDurationTicks = targetDurationTicks,
-                Interactive = info.Interactive,
+                Interactive = info.Interactive && !info.HasAutoControl,
                 Weights = profile.Weights,
                 Density = profile.Density,
             };
@@ -88,8 +99,8 @@ namespace Ballverse.Core.Generation
             return mode == ModeCode.M03 || mode == ModeCode.M06;
         }
 
-        /// <summary>The session is interactive: <see cref="Interactive"/> or an interactive <see cref="Mode"/> (spec §2.4).</summary>
-        internal bool EffectiveInteractive => Interactive || (Mode.HasValue && ModeCatalog.Get(Mode.Value).Interactive);
+        /// <summary>The session is interactive: <see cref="Interactive"/> or an interactive-only <see cref="Mode"/> (spec §2.4).</summary>
+        internal bool EffectiveInteractive => Interactive || (Mode.HasValue && !ModeCatalog.Get(Mode.Value).HasAutoControl);
 
         internal GenerationSessionOptions Clone()
         {
@@ -99,6 +110,9 @@ namespace Ballverse.Core.Generation
         internal void Validate()
         {
             if (Budget.Candidates < 1 || Budget.TimeMs < 1) throw new ArgumentException("Budget must be at least 1 candidate and 1 ms", nameof(Budget));
+            // Upper bounds keep every limit update (doubling, forced-winner multiplier, "Search longer") far from overflow.
+            if (Budget.Candidates > MaxBudgetCandidates || Budget.TimeMs > MaxBudgetTimeMs)
+                throw new ArgumentException("Budget must be at most " + MaxBudgetCandidates + " candidates and " + MaxBudgetTimeMs + " ms", nameof(Budget));
             if (double.IsNaN(QualityThreshold) || double.IsInfinity(QualityThreshold))
                 throw new ArgumentException("Quality threshold must be finite", nameof(QualityThreshold));
             if (TargetDurationTicks.HasValue
@@ -107,8 +121,8 @@ namespace Ballverse.Core.Generation
             if (Weights == null) throw new ArgumentException("Weights are required", nameof(Weights));
             if (!DensityRange.IsValid(Density.MinPerSecond, Density.MaxPerSecond))
                 throw new ArgumentException("Density range is invalid", nameof(Density));
-            if (ForcedWinnerTimeMs.HasValue && ForcedWinnerTimeMs.Value < 1)
-                throw new ArgumentException("Forced-winner time budget must be at least 1 ms", nameof(ForcedWinnerTimeMs));
+            if (ForcedWinnerTimeMs.HasValue && (ForcedWinnerTimeMs.Value < 1 || ForcedWinnerTimeMs.Value > MaxBudgetTimeMs))
+                throw new ArgumentException("Forced-winner time budget must be 1.." + MaxBudgetTimeMs + " ms", nameof(ForcedWinnerTimeMs));
             if (Goal != DirectorGoal.None && Goal != DirectorGoal.LastSecond && Goal != DirectorGoal.Comeback)
                 throw new ArgumentException("Unknown director goal", nameof(Goal));
             if (ParticipantCount < 0) throw new ArgumentException("Participant count must be non-negative", nameof(ParticipantCount));
