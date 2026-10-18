@@ -8,14 +8,21 @@ namespace Ballverse.Core.Projects
     /// <summary>
     /// Validates a project document against the spec ranges (spec §3.2-§3.6, §3.8, §3.9, §7.4) and returns a repaired copy.
     /// Out-of-range numbers are clamped, invalid values replaced by defaults, unsafe paths and paths naming reserved project
-    /// files (<see cref="ProjectPaths.IsSafeMediaPath"/>) reset to safe defaults (or nulled where null is allowed), and each
-    /// change is reported as a <see cref="ValidationIssue"/>. A clean result is always a valid timeline input: user-video trims
+    /// files (<see cref="ProjectPaths.IsSafeMediaPath"/>) or another media reference (ignoring case: the user video never names
+    /// the replay, an export never names the replay or the user video) reset to safe defaults (or nulled where null is
+    /// allowed), and each change is reported as a <see cref="ValidationIssue"/>. A clean result is always a valid timeline input: user-video trims
     /// lie within the 10-min source (spec §3.2), the clip and slow-mo within the §3.4 ranges, the reel within 1-180 s.
     /// Only problems that need outside context (missing clip, bad mode id, bad project id without an expected id,
     /// wrong schema version) are <see cref="IssueSeverity.Error"/>.
     /// </summary>
     public static class ProjectValidator
     {
+        /// <summary>
+        /// User-video path used instead of <see cref="ProjectPaths.DefaultUserVideoFile"/> when the replay itself is stored
+        /// under that default name, so the reset reference still differs from the replay.
+        /// </summary>
+        const string AlternateUserVideoFile = "media/user-video.mp4";
+
         static readonly string[] s_isoFormats =
         {
             "yyyy-MM-dd'T'HH:mm:ss'Z'",
@@ -95,7 +102,11 @@ namespace Ballverse.Core.Projects
                     SanitizeClip(doc.Clip);
                 }
 
-                if (doc.UserVideo != null) SanitizeVideo(doc.UserVideo);
+                if (doc.UserVideo != null)
+                {
+                    SanitizeVideo(doc.UserVideo);
+                    SeparateUserVideoFromReplay(doc.UserVideo, doc.Clip?.Replay);
+                }
 
                 if (doc.Layout == null)
                 {
@@ -126,7 +137,24 @@ namespace Ballverse.Core.Projects
                 }
                 SanitizeOutput(doc);
 
-                doc.Exports = SanitizeExports(doc.Exports);
+                doc.Exports = SanitizeExports(doc.Exports, doc.Clip?.Replay, doc.UserVideo?.File);
+            }
+
+            /// <summary>
+            /// The replay is the one file that cannot be rebuilt (spec §3.9), so the user video must not share its path (ignoring
+            /// case, as names alias on case-insensitive file systems): re-importing or replacing the video would overwrite it.
+            /// </summary>
+            void SeparateUserVideoFromReplay(UserVideoSettings v, string replay)
+            {
+                if (replay == null || !SamePath(v.File, replay)) return;
+                string fallback = SamePath(ProjectPaths.DefaultUserVideoFile, replay) ? AlternateUserVideoFile : ProjectPaths.DefaultUserVideoFile;
+                Warn("userVideo.file", IssueCode.UnsafePath, "Path names the replay file; default used.");
+                v.File = fallback;
+            }
+
+            static bool SamePath(string a, string b)
+            {
+                return a != null && b != null && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
             }
 
             void SanitizeId(ProjectDocument doc, string expectedId)
@@ -536,7 +564,11 @@ namespace Ballverse.Core.Projects
                 return lo;
             }
 
-            List<ExportRecord> SanitizeExports(List<ExportRecord> exports)
+            /// <summary>
+            /// Drops invalid records and trims the history; an export file naming the replay or the user video (ignoring case)
+            /// is cleared, so export cleanup can never delete them (spec §3.9).
+            /// </summary>
+            List<ExportRecord> SanitizeExports(List<ExportRecord> exports, string replay, string userVideo)
             {
                 var result = new List<ExportRecord>();
                 if (exports == null)
@@ -555,6 +587,11 @@ namespace Ballverse.Core.Projects
                     }
                     e.Ms = ClampL(e.Ms, 0, long.MaxValue, p + ".ms");
                     e.File = SafePath(e.File, p + ".file", null, true);
+                    if (SamePath(e.File, replay) || SamePath(e.File, userVideo))
+                    {
+                        Warn(p + ".file", IssueCode.UnsafePath, "Path names the replay or the user video; cleared.");
+                        e.File = null;
+                    }
                     result.Add(e);
                 }
                 if (result.Count > ProjectLimits.MaxExportRecords)

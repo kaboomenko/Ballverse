@@ -38,8 +38,39 @@ namespace Ballverse.Core.Tests.Projects
         }
 
         [Theory]
+        [InlineData("project.json/user.mp4")]
+        [InlineData("project.json.bak/user.mp4")]
+        [InlineData("PROJECT.JSON.TMP/user.mp4")]
+        [InlineData("Project.Json.Bak/clip.bvr")]
+        [InlineData("project.json.bak.tmp/a/b.mp4")]
+        [InlineData("clip.bvs/x.bvr")]
+        [InlineData("CLIP.BVS/x.bvr")]
+        public void PathsInsideAFolderNamedLikeAReservedFileAreReserved(string path)
+        {
+            // QA finding: such a folder blocks writing the reserved file, and Duplicate skips it, dropping the referenced media.
+            Assert.True(ProjectPaths.IsSafeRelativePath(path));
+            Assert.True(ProjectPaths.IsReservedFileName(path));
+            Assert.False(ProjectPaths.IsSafeMediaPath(path));
+        }
+
+        [Theory]
+        [InlineData("project.json.")]
+        [InlineData("project.json.bak.")]
+        [InlineData("PROJECT.JSON.TMP.")]
+        [InlineData("clip.bvs.")]
+        [InlineData("project.json./user.mp4")]
+        public void ReservedNamesWithATrailingDotAreNotMediaPaths(string path)
+        {
+            // QA finding: Windows strips trailing dots, so these open the reserved files in the Windows editor.
+            Assert.False(ProjectPaths.IsSafeRelativePath(path));
+            Assert.False(ProjectPaths.IsSafeMediaPath(path));
+        }
+
+        [Theory]
         [InlineData("clip.bvr")]
         [InlineData("media/user.mp4")]
+        [InlineData("project.json2/user.mp4")]
+        [InlineData("media/clip.bvs/x.bvr")]
         [InlineData("media/project.json")]   // only the folder root is reserved
         [InlineData("project.json.bak2")]
         [InlineData("project.jso")]
@@ -97,6 +128,123 @@ namespace Ballverse.Core.Tests.Projects
             var r = Run(d => d.UserVideo.File = path);
             Assert.Equal(ProjectPaths.DefaultUserVideoFile, r.Document.UserVideo.File);
             HasUnsafePath(r, "userVideo.file");
+        }
+
+        [Theory]
+        [InlineData("project.json/user.mp4")]
+        [InlineData("project.json.bak/user.mp4")]
+        [InlineData("PROJECT.JSON.TMP/user.mp4")]
+        [InlineData("clip.bvs/user.mp4")]
+        public void UserVideoInsideAReservedFolderIsReset(string path)
+        {
+            var r = Run(d => d.UserVideo.File = path);
+            Assert.Equal(ProjectPaths.DefaultUserVideoFile, r.Document.UserVideo.File);
+            HasUnsafePath(r, "userVideo.file");
+        }
+
+        [Fact]
+        public void ReplayInsideAReservedFolderIsReset()
+        {
+            var r = Run(d => d.Clip.Replay = "Project.Json.Bak/clip.bvr");
+            Assert.Equal(ProjectPaths.ClipReplayFile, r.Document.Clip.Replay);
+            HasUnsafePath(r, "clip.replay");
+        }
+
+        [Theory]
+        [InlineData("project.json.")]
+        [InlineData("clip.bvs.")]
+        public void UserVideoWithATrailingDotIsReset(string path)
+        {
+            var r = Run(d => d.UserVideo.File = path);
+            Assert.Equal(ProjectPaths.DefaultUserVideoFile, r.Document.UserVideo.File);
+            Assert.Contains(r.Issues, i => i.Path == "userVideo.file" && i.Code == IssueCode.UnsafePath);
+        }
+
+        // ---- media references must not alias each other ----
+
+        static void HasAliasIssue(SanitizeResult r, string path)
+        {
+            Assert.Contains(r.Issues, i => i.Path == path && i.Code == IssueCode.UnsafePath && i.Severity == IssueSeverity.Warning);
+        }
+
+        [Theory]
+        [InlineData("clip.bvr", "clip.bvr")]
+        [InlineData("clip.bvr", "CLIP.BVR")]
+        [InlineData("media/replay.bvr", "Media/Replay.bvr")]
+        public void UserVideoNamingTheReplayIsReset(string replay, string video)
+        {
+            // QA finding: replacing the user video would overwrite the replay, the one file that cannot be rebuilt (spec §3.9).
+            var r = Run(d =>
+            {
+                d.Clip.Replay = replay;
+                d.UserVideo.File = video;
+            });
+            Assert.Equal(replay, r.Document.Clip.Replay);
+            Assert.Equal(ProjectPaths.DefaultUserVideoFile, r.Document.UserVideo.File);
+            HasAliasIssue(r, "userVideo.file");
+        }
+
+        [Fact]
+        public void UserVideoNamingAReplayStoredUnderTheDefaultVideoNameGetsAnotherName()
+        {
+            var r = Run(d =>
+            {
+                d.Clip.Replay = ProjectPaths.DefaultUserVideoFile;
+                d.UserVideo.File = "MEDIA/USER.MP4";
+            });
+            Assert.Equal(ProjectPaths.DefaultUserVideoFile, r.Document.Clip.Replay);
+            Assert.False(string.Equals(r.Document.Clip.Replay, r.Document.UserVideo.File, StringComparison.OrdinalIgnoreCase));
+            Assert.True(ProjectPaths.IsSafeMediaPath(r.Document.UserVideo.File));
+            HasAliasIssue(r, "userVideo.file");
+            var again = ProjectValidator.Sanitize(r.Document);
+            Assert.True(again.IsClean); // the repair is stable
+        }
+
+        [Theory]
+        [InlineData("clip.bvr")]
+        [InlineData("Clip.Bvr")]
+        [InlineData("media/user.mp4")]
+        [InlineData("MEDIA/user.mp4")]
+        public void ExportNamingTheReplayOrTheUserVideoIsCleared(string file)
+        {
+            var r = Run(d =>
+            {
+                d.Clip.Replay = "clip.bvr";
+                d.UserVideo.File = "media/user.mp4";
+                d.Exports[0].File = file;
+            });
+            Assert.Single(r.Document.Exports);
+            Assert.Null(r.Document.Exports[0].File);
+            Assert.Equal("clip.bvr", r.Document.Clip.Replay);
+            Assert.Equal("media/user.mp4", r.Document.UserVideo.File);
+            HasAliasIssue(r, "exports[0].file");
+        }
+
+        [Fact]
+        public void ExportNamingAResetUserVideoIsCleared()
+        {
+            // The user video is reset to the default first; an export naming that default must not survive either.
+            var r = Run(d =>
+            {
+                d.Clip.Replay = "clip.bvr";
+                d.UserVideo.File = "clip.bvr";
+                d.Exports[0].File = ProjectPaths.DefaultUserVideoFile;
+            });
+            Assert.Equal(ProjectPaths.DefaultUserVideoFile, r.Document.UserVideo.File);
+            Assert.Null(r.Document.Exports[0].File);
+        }
+
+        [Fact]
+        public void DistinctMediaReferencesAreKept()
+        {
+            var r = Run(d =>
+            {
+                d.Clip.Replay = "clip.bvr";
+                d.UserVideo.File = "media/user.mp4";
+                d.Exports[0].File = "exports/out_1.mp4";
+            });
+            Assert.True(r.IsClean);
+            Assert.Equal("exports/out_1.mp4", r.Document.Exports[0].File);
         }
 
         [Fact]
@@ -162,6 +310,42 @@ namespace Ballverse.Core.Tests.Projects
             Assert.False(store.FileExists("projects/p2/project.json.bak"));
             Assert.Equal(new byte[] { 7 }, store.ReadAllBytes("projects/p2/clip.bvr"));
             Assert.Equal("p2", ProjectJson.Deserialize(store.ReadAllText("projects/p2/project.json")).Id);
+        }
+
+        /// <summary>Asserts every file the saved copy references exists in the copy's folder.</summary>
+        static void CopyReferencesExist(InMemoryFileStore store, string id)
+        {
+            var doc = ProjectJson.Deserialize(store.ReadAllText("projects/" + id + "/project.json"));
+            Assert.True(store.FileExists("projects/" + id + "/" + doc.Clip.Replay), "replay " + doc.Clip.Replay);
+            if (doc.UserVideo != null)
+            {
+                Assert.True(store.FileExists("projects/" + id + "/" + doc.UserVideo.File), "user video " + doc.UserVideo.File);
+            }
+        }
+
+        [Theory]
+        [InlineData("project.json/user.mp4")]
+        [InlineData("project.json.bak/user.mp4")]
+        [InlineData("PROJECT.JSON.TMP/user.mp4")]
+        public void DuplicateCopiesEveryReferenceWhenAVideoSitsInAReservedFolder(string path)
+        {
+            // QA finding: the reference passed as clean, CopyTree skipped the folder, and the copy referenced a missing video.
+            var (store, repo) = SourceWithHandEdit(d => d.UserVideo.File = path);
+            store.WriteAllBytes("projects/p1/" + path, new byte[] { 9 });
+            var copy = repo.Duplicate("p1", "p2", Later);
+            Assert.Equal(ProjectPaths.DefaultUserVideoFile, copy.UserVideo.File);
+            CopyReferencesExist(store, "p2");
+            Assert.Equal(LoadSource.Main, repo.Load("p2").Source);
+        }
+
+        [Fact]
+        public void DuplicateCopiesEveryReferenceWhenTheReplaySitsInAReservedFolder()
+        {
+            var (store, repo) = SourceWithHandEdit(d => d.Clip.Replay = "Project.Json.Bak/clip.bvr");
+            store.WriteAllBytes("projects/p1/Project.Json.Bak/clip.bvr", new byte[] { 3 });
+            var copy = repo.Duplicate("p1", "p2", Later);
+            Assert.Equal(ProjectPaths.ClipReplayFile, copy.Clip.Replay);
+            CopyReferencesExist(store, "p2");
         }
 
         [Fact]

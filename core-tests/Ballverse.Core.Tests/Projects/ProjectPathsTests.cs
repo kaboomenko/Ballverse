@@ -79,6 +79,10 @@ namespace Ballverse.Core.Tests.Projects
         [InlineData("media/user.mp4\0.txt")]
         [InlineData("%2e%2e/x")]
         [InlineData("медиа/x.mp4")]
+        [InlineData("clip.bvr.")]          // Win32 strips trailing dots, so these alias other names
+        [InlineData("media./user.mp4")]
+        [InlineData("media/user.mp4.")]
+        [InlineData("...")]
         public void UnsafePaths(string path)
         {
             Assert.False(ProjectPaths.IsSafeRelativePath(path));

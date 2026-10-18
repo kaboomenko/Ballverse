@@ -143,6 +143,61 @@ namespace Ballverse.Core.Tests.Projects
             }
         }
 
+        /// <summary>
+        /// Property aimed at the band the random generator above never reaches: a = units·10⁶ fits in a long but a + b − 1
+        /// does not (b = 60·p·f). Picks p, f and the slow-mo ticks first, then the length whose units land in that band; the
+        /// result must be exact (it stays on the integer path) and non-negative. The old (a + b − 1) / b fails every case.
+        /// </summary>
+        [Fact]
+        public void ClipOutputExactWhenUnitsFitButCeilingAdditionWouldOverflow()
+        {
+            var rng = Rng.FromSeed(0xC1D1_0F11UL, 3);
+            var max = (System.Numerics.BigInteger)long.MaxValue;
+            const long micros = ProjectLimits.MicrosPerSecond;
+            int hits = 0;
+            for (int attempt = 0; attempt < 20000 && hits < 2000; attempt++)
+            {
+                bool slowOn = rng.NextInt(0, 2) == 0;
+                long p = (long)Math.Pow(10, 4 + rng.NextDouble() * 5); // 10⁴..10⁹ hundredths: b must exceed the 10⁶ step of a
+                long f = slowOn ? (long)Math.Pow(10, 1.5 + rng.NextDouble() * 4) : 100;
+                long s = slowOn ? rng.NextInt(1, 1000000000) : 0;
+                long b = SimConstants.TickRate * p * f;
+                if (b <= 0 || (System.Numerics.BigInteger)b * micros > max) continue;
+
+                // units must lie in [uLo, uHi] so that a = units·10⁶ ∈ [Max − b + 2, Max] (a + b − 1 > Max).
+                var uLo = (max - b + 2 + micros - 1) / micros;
+                var uHi = max / micros;
+                var rest = uLo - (System.Numerics.BigInteger)s * 10000;
+                if (rest < 0) continue;
+                var n = (rest + 100 * f - 1) / (100 * f);
+                var units = n * 100 * f + (System.Numerics.BigInteger)s * 10000;
+                if (units > uHi) continue;
+                var length = n + s;
+                if (length > (System.Numerics.BigInteger)uint.MaxValue - 1) continue;
+
+                long len = (long)length;
+                int trimOut = len <= int.MaxValue ? (int)len : int.MaxValue;
+                int trimIn = (int)(trimOut - len);
+                double speed = p / 100.0, factor = slowOn ? f / 100.0 : 0.5, seconds = s / 60.0;
+                Assert.Equal(p, ProjectTiming.PercentFromRatio(speed));
+                if (slowOn)
+                {
+                    Assert.Equal(f, ProjectTiming.PercentFromRatio(factor));
+                    Assert.Equal(s, ProjectTiming.TicksFromSeconds(seconds));
+                }
+                var a = units * micros;
+                Assert.True(a <= max && a + b - 1 > max);
+
+                long us = ProjectTiming.ClipOutputUs(trimIn, trimOut, speed, seconds, factor);
+                var exact = ExactClipUs(trimIn, trimOut, speed, seconds, factor);
+                string where = "attempt " + attempt + ": " + trimIn + ".." + trimOut + " p=" + p + " f=" + f + " s=" + s;
+                Assert.True(us >= 0, where + " gave " + us);
+                Assert.True(exact == us, where + ": " + us + " vs exact " + exact);
+                hits++;
+            }
+            Assert.True(hits >= 1000, "only " + hits + " cases landed in the band");
+        }
+
         [Fact]
         public void ReelIncludesCoverLeadIn()
         {

@@ -5,7 +5,8 @@ namespace Ballverse.Core.Projects
     /// <summary>
     /// Project folder layout (spec §7.4) and path safety rules. All store paths use '/' and are relative to the store root.
     /// Paths taken from project.json are untrusted: they must be relative, use only [A-Za-z0-9._-] segments separated by '/',
-    /// and never contain '.'/'..' segments, backslashes, drive letters, schemes or absolute roots (security relevant).
+    /// and never contain '.'/'..' segments, segments ending in '.', backslashes, drive letters, schemes or absolute roots
+    /// (security relevant).
     /// </summary>
     public static class ProjectPaths
     {
@@ -38,7 +39,9 @@ namespace Ballverse.Core.Projects
 
         /// <summary>
         /// True for a path that stays inside the project folder: relative, '/'-separated, every segment non-empty,
-        /// not "." or "..", made of [A-Za-z0-9._-]; total length at most 255.
+        /// not "." or "..", not ending in '.', made of [A-Za-z0-9._-]; total length at most 255.
+        /// A trailing dot is rejected because Windows strips it ("project.json." opens project.json in the Windows editor),
+        /// so such a segment would alias another name; no legitimate media name needs one.
         /// </summary>
         public static bool IsSafeRelativePath(string path)
         {
@@ -52,6 +55,7 @@ namespace Ballverse.Core.Projects
                     if (len == 0) return false; // leading '/', trailing '/', or '//'
                     if (len == 1 && path[segStart] == '.') return false;
                     if (len == 2 && path[segStart] == '.' && path[segStart + 1] == '.') return false;
+                    if (path[i - 1] == '.') return false; // Win32 strips trailing dots: "a." aliases "a"
                     segStart = i + 1;
                     continue;
                 }
@@ -94,13 +98,18 @@ namespace Ballverse.Core.Projects
         }
 
         /// <summary>
-        /// True for root-level names a media reference must not use (ignoring case): the project files
-        /// (<see cref="IsProjectFileName"/>) and the rebuildable render stream <see cref="ClipRenderFile"/>. A reference to them
-        /// would let media import, export cleanup or cache rebuilding overwrite or delete the project itself.
+        /// True when <paramref name="relativePath"/> names, or lies inside a folder named like, one of the root-level names a
+        /// media reference must not use (ignoring case): the project files (<see cref="IsProjectFileName"/>) and the
+        /// rebuildable render stream <see cref="ClipRenderFile"/>. A reference to them would let media import, export cleanup
+        /// or cache rebuilding overwrite or delete the project itself; a file inside such a folder would block writing that
+        /// file, and Duplicate does not copy those folders (spec §7.4, §3.9).
         /// </summary>
         public static bool IsReservedFileName(string relativePath)
         {
-            return IsProjectFileName(relativePath) || EqualsIgnoreCase(relativePath, ClipRenderFile);
+            if (relativePath == null) return false;
+            int slash = relativePath.IndexOf('/');
+            string first = slash < 0 ? relativePath : relativePath.Substring(0, slash);
+            return IsProjectFileName(first) || EqualsIgnoreCase(first, ClipRenderFile);
         }
 
         /// <summary>

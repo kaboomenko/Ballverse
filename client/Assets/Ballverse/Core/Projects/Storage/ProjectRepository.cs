@@ -271,7 +271,8 @@ namespace Ballverse.Core.Projects
                 if (e.File != null) skip.Add(e.File);
             }
             // Files the copy still references are always copied, even if a (hand-edited) history entry names them.
-            // The sanitizer never lets a reference name a project file (ProjectPaths.IsSafeMediaPath).
+            // The sanitizer never lets a reference name a project file or lie inside a folder CopyTree skips
+            // (ProjectPaths.IsSafeMediaPath), so every referenced file is reached.
             if (doc.Clip?.Replay != null) skip.Remove(doc.Clip.Replay);
             if (doc.UserVideo?.File != null) skip.Remove(doc.UserVideo.File);
             try
