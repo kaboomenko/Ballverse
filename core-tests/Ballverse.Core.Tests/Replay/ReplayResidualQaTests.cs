@@ -92,22 +92,35 @@ namespace Ballverse.Core.Tests.Replay
         }
 
         [Fact]
-        public void PhysicsBackendNumberingMatchesTheReleaseOneSpec()
+        public void PhysicsBackendNumberingMatchesTheSpec()
         {
-            // Release-1 spec §7.4: "physicsBackend u8 (1 = Core.Sim, 2 = Box2D v3 — резерв)". QA (core-integration round 1):
-            // the code had Box2DV3 = 1 and CoreSim = 2. The numbering is persisted in every .bvr, so it is pinned here.
+            // Spec §7.4 (docs/tz/07_architecture.md): "physicsBackend u8 (0 = нет, 1 = Box2D v3 — резерв волны 3, 2 = Core.Sim)";
+            // the values "никогда не перенумеровываются": Box2DV3 = 1 is the value of the accepted Replay module, CoreSim = 2 was
+            // added for release 1, release-1 replays write 2. §8.5: "байт physicsBackend 0 / 1 / 2 зафиксирован". QA round 2 of
+            // core-integration: round 1 had renumbered these from a superseded spec draft; this test pins the bytes.
             Assert.Equal(0, (int)PhysicsBackend.None);
-            Assert.Equal(1, (int)PhysicsBackend.CoreSim);
-            Assert.Equal(2, (int)PhysicsBackend.Box2DV3);
-            foreach (var backend in new[] { PhysicsBackend.CoreSim, PhysicsBackend.Box2DV3 })
+            Assert.Equal(1, (int)PhysicsBackend.Box2DV3);
+            Assert.Equal(2, (int)PhysicsBackend.CoreSim);
+            var pinned = new[] { (PhysicsBackend.None, (byte)0), (PhysicsBackend.Box2DV3, (byte)1), (PhysicsBackend.CoreSim, (byte)2) };
+            foreach (var (backend, value) in pinned)
             {
                 var ms = new MemoryStream();
                 new ReplayWriter(ms, new ReplayHeader("m", 1, "", backend, 0, "{}")).Finish(0);
                 byte[] b = ms.ToArray();
                 // magic 4 + formatVersion 2 + modeId (1 + 1) + modeSimVersion 2 + appVersion (1 + 0) = offset 11.
-                Assert.Equal((byte)backend, b[11]);
+                Assert.Equal(value, b[11]);
                 Assert.Equal(backend, ReplayReader.Read(b).Header.PhysicsBackend);
             }
+            // A header byte written by another build reads as the pinned enum value.
+            var raw = new MemoryStream();
+            new ReplayWriter(raw, new ReplayHeader("m", 1, "", PhysicsBackend.None, 0, "{}")).Finish(0);
+            byte[] bytes = raw.ToArray();
+            bytes[11] = 2;
+            Assert.Equal(PhysicsBackend.CoreSim, ReplayReader.Read(bytes).Header.PhysicsBackend);
+            bytes[11] = 1;
+            Assert.Equal(PhysicsBackend.Box2DV3, ReplayReader.Read(bytes).Header.PhysicsBackend);
+            // The accepted module's golden file (written from ReplayTestUtil.Header) keeps byte 1 = Box2D v3.
+            Assert.Equal(PhysicsBackend.Box2DV3, ReplayTestUtil.Header().PhysicsBackend);
         }
     }
 }

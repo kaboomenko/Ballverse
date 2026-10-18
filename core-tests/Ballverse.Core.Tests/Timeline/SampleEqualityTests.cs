@@ -5,6 +5,7 @@ using Xunit;
 
 namespace Ballverse.Core.Tests.Timeline
 {
+    [Collection(SerialMeasurementCollection.Name)] // zero-allocation check; see SerialMeasurementCollection
     public class SampleEqualityTests
     {
         [Fact]

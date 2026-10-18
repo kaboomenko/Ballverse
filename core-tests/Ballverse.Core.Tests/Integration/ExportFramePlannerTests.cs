@@ -10,6 +10,7 @@ using Xunit;
 namespace Ballverse.Core.Tests.Integration
 {
     /// <summary>Timeline + Layout + export settings → per-frame export plan, and the matching sound schedule.</summary>
+    [Collection(SerialMeasurementCollection.Name)] // zero-allocation check; see SerialMeasurementCollection
     public class ExportFramePlannerTests
     {
         static readonly LayoutSpec PipTopLeft = LayoutSpec.Default.WithType(LayoutType.L5)
@@ -110,7 +111,10 @@ namespace Ballverse.Core.Tests.Integration
             Assert.Equal(10800, planner.FrameCount);
             Assert.Equal(90, planner.Plan.SegmentCount);
 
-            planner.GetFrame(0); // warm-up (JIT)
+            // Warm-up: one full pass, so JIT, tier-up and any first-use initialization along every path (segment starts, the
+            // ExpandSim tail after 120 s) happen before the measured pass. QA round 2 saw one unreproduced non-zero count with
+            // a single-frame warm-up.
+            for (int i = 0; i < planner.FrameCount; i++) planner.GetFrame(i);
             long checksum = 0;
             int keyframes = 0, segments = 0, expanded = 0;
             long before = GC.GetAllocatedBytesForCurrentThread();

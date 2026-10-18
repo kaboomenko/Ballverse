@@ -68,9 +68,13 @@ Config ignores unreleased modes in `free_modes` / `gallery_order`; see `REMOTE_C
 
 ## Replay header `physicsBackend`
 
-`PhysicsBackend`: 0 = none, **1 = Core.Sim, 2 = Box2D v3** (reserved), as in the release-1 spec §7.4. QA round 1 found the
-opposite numbering in code; it was renumbered before anything shipped. The golden file `TestData/Replay/sample_v1.bvr` is
-byte-identical: its header byte 1 now reads as Core.Sim, and `ReplayTestUtil.Header` uses `CoreSim`.
+`PhysicsBackend` follows spec §7.4 on main: 0 = none, **1 = Box2D v3** (reserved for wave-3 roadmap modes; the value of the
+accepted Replay module), **2 = Core.Sim** (added for release 1). The values are persisted and never renumbered. Release-1
+replays write 2 (`PhysicsBackend.CoreSim`); clip recompute selects the solver by this byte.
+`ReplayResidualQaTests.PhysicsBackendNumberingMatchesTheSpec` pins bytes 0 / 1 / 2 in the written header (§8.5), and
+`ReplayWriterTests.HeaderLayoutMatchesSpec` expects byte 2 for a release-1 header. The golden file
+`TestData/Replay/sample_v1.bvr` is unchanged: its header byte 1 means Box2D v3, and `ReplayTestUtil.Header` uses `Box2DV3`.
+(QA round 2: round 1 had briefly renumbered to 1 = Core.Sim from a superseded spec draft; reverted.)
 
 ## Replay ↔ Params (`ReplayParams`)
 

@@ -14,7 +14,7 @@ namespace Ballverse.Core.Tests.Replay
 
         internal static ReplayHeader Header(uint duration = 0)
         {
-            return new ReplayHeader("ring_escape", 3, "1.0.0 (42)", PhysicsBackend.CoreSim, 0x0123456789ABCDEFUL, ParamsJson, duration);
+            return new ReplayHeader("ring_escape", 3, "1.0.0 (42)", PhysicsBackend.Box2DV3, 0x0123456789ABCDEFUL, ParamsJson, duration);
         }
 
         /// <summary>A small replay that uses every record type, with negative values, equal ticks and edge values.</summary>

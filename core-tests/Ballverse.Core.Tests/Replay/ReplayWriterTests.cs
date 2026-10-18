@@ -11,7 +11,7 @@ namespace Ballverse.Core.Tests.Replay
         [Fact]
         public void HeaderLayoutMatchesSpec()
         {
-            var header = new ReplayHeader("ab", 0x0102, "v", PhysicsBackend.CoreSim, 0x1122334455667788UL, "{}");
+            var header = new ReplayHeader("ab", 0x0102, "v", PhysicsBackend.CoreSim, 0x1122334455667788UL, "{}"); // a release-1 replay
             var ms = new MemoryStream();
             new ReplayWriter(ms, header).Finish(0x0A0B0C0D);
             byte[] b = ms.ToArray();
@@ -22,7 +22,7 @@ namespace Ballverse.Core.Tests.Replay
             expected.Write(new byte[] { 2, (byte)'a', (byte)'b' }, 0, 3);    // modeId
             expected.Write(new byte[] { 0x02, 0x01 }, 0, 2);                 // modeSimVersion
             expected.Write(new byte[] { 1, (byte)'v' }, 0, 2);               // appVersion
-            expected.WriteByte(1);                                           // physicsBackend: 1 = Core.Sim
+            expected.WriteByte(2);                                           // physicsBackend: 2 = Core.Sim (spec §7.4)
             expected.Write(new byte[] { 60, 0 }, 0, 2);                      // tickRate
             expected.Write(new byte[] { 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11 }, 0, 8);
             expected.Write(new byte[] { 2, (byte)'{', (byte)'}' }, 0, 3);    // paramsJson
