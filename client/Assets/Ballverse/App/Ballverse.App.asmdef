@@ -1,0 +1,16 @@
+{
+    "name": "Ballverse.App",
+    "rootNamespace": "Ballverse.App",
+    "references": [
+        "Ballverse.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
