@@ -14,15 +14,15 @@ namespace Ballverse.Core.Config
         /// <summary>Display name (trimmed, non-empty).</summary>
         public string Name { get; }
         /// <summary>At least one note.</summary>
-        public IReadOnlyList<MelodyNote> Notes { get; }
+        public IReadOnlyList<RemoteMelodyNote> Notes { get; }
 
         /// <exception cref="ArgumentException">Empty id/name, no notes or a null note.</exception>
-        public RemoteMelody(string id, string name, IEnumerable<MelodyNote> notes)
+        public RemoteMelody(string id, string name, IEnumerable<RemoteMelodyNote> notes)
         {
             if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("id must be non-empty", nameof(id));
             if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name must be non-empty", nameof(name));
             if (notes == null) throw new ArgumentNullException(nameof(notes));
-            var list = new List<MelodyNote>(notes);
+            var list = new List<RemoteMelodyNote>(notes);
             if (list.Count == 0) throw new ArgumentException("a melody needs at least one note", nameof(notes));
             foreach (var n in list)
             {

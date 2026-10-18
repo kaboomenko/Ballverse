@@ -16,6 +16,12 @@ namespace Ballverse.Core.Config
     /// defaults. Open maps (<c>generation_weights</c>, <c>tier_overrides</c>, <c>platform_safe_zones</c>, <c>text_templates</c>)
     /// merge entry by entry: a delivered entry replaces the default entry with the same key, other default entries stay
     /// (so a payload that only adds "de" templates does not delete "en"/"ru"; send an empty list to clear an entry).</para>
+    /// <para>A non-empty mode list, or a non-empty safe-zone / text-template entry, in which no element is valid keeps the default
+    /// (Error <see cref="RemoteConfigIssueKind.NoValidEntries"/>): a typo must not wipe built-in data. Only an explicit empty
+    /// array clears a value.</para>
+    /// <para><c>free_modes</c> can only extend the free set (spec §9.3, §5.1): M01–M05 stay free even when omitted.</para>
+    /// <para>Info and Warning issues are capped at <see cref="MaxIssuesPerKey"/> per key plus one summary issue; Errors are
+    /// never dropped.</para>
     /// <para>JSON objects with duplicate property names are rejected as invalid JSON (ambiguous).</para>
     /// Never throws; output and issue order are deterministic and independent of the dictionary's enumeration order.
     /// </summary>
@@ -31,8 +37,17 @@ namespace Ballverse.Core.Config
 
         static readonly HashSet<string> s_known = new HashSet<string>(RemoteConfigKeys.All, StringComparer.Ordinal);
 
+        /// <summary>Maximum Info/Warning issues recorded per key (and for unknown keys); the rest are summarized in one issue.</summary>
+        public const int MaxIssuesPerKey = 20;
+
         /// <summary>Parses raw key → string values (spec §9.3). <paramref name="raw"/> may be null (→ defaults).</summary>
         public static RemoteConfigParseResult Parse(IReadOnlyDictionary<string, string> raw)
+        {
+            return Parse(raw, b => b.Build());
+        }
+
+        /// <summary>Test seam: <paramref name="build"/> replaces <see cref="RemoteConfigBuilder.Build"/>.</summary>
+        internal static RemoteConfigParseResult Parse(IReadOnlyDictionary<string, string> raw, Func<RemoteConfigBuilder, RemoteConfigValues> build)
         {
             var issues = new List<RemoteConfigIssue>();
             var builder = new RemoteConfigBuilder();
@@ -64,6 +79,7 @@ namespace Ballverse.Core.Config
                     {
                         ctx.Error(RemoteConfigIssueKind.InternalError, "unexpected failure, default kept: " + e.Message);
                     }
+                    ctx.Flush();
                 }
                 ReportUnknownKeys(raw, issues);
             }
@@ -71,7 +87,8 @@ namespace Ballverse.Core.Config
             RemoteConfigValues values;
             try
             {
-                values = builder.Build();
+                values = build(builder);
+                if (values == null) throw new InvalidOperationException("no snapshot");
             }
             catch (Exception e)
             {
@@ -99,9 +116,15 @@ namespace Ballverse.Core.Config
             }
             // Ordinal sort: the issue list must not depend on dictionary enumeration order.
             unknown.Sort(StringComparer.Ordinal);
-            foreach (var key in unknown)
+            int shown = Math.Min(unknown.Count, MaxIssuesPerKey);
+            for (int i = 0; i < shown; i++)
             {
-                issues.Add(new RemoteConfigIssue(key, RemoteConfigIssueSeverity.Info, RemoteConfigIssueKind.UnknownKey, "unknown key ignored"));
+                issues.Add(new RemoteConfigIssue(unknown[i], RemoteConfigIssueSeverity.Info, RemoteConfigIssueKind.UnknownKey, "unknown key ignored"));
+            }
+            if (unknown.Count > shown)
+            {
+                issues.Add(new RemoteConfigIssue(string.Empty, RemoteConfigIssueSeverity.Info, RemoteConfigIssueKind.IssuesSuppressed,
+                    (unknown.Count - shown) + " more unknown keys ignored"));
             }
         }
 
@@ -122,8 +145,9 @@ namespace Ballverse.Core.Config
                     }
                     if (missing.Count > 0)
                     {
+                        // Spec §9.3 "только расширение", §5.1 "M01–M05 доступны всегда": the defaults stay free (appended by Build).
                         ctx.Warning(RemoteConfigIssueKind.NarrowedFreeModes,
-                            "free set narrowed (spec §5.1 intends extension only), not free: " + string.Join(",", missing));
+                            "free_modes can only extend the free set (spec §9.3, §5.1); still free: " + string.Join(",", missing));
                     }
                     b.FreeModes = list;
                     return;
@@ -289,9 +313,14 @@ namespace Ballverse.Core.Config
 
         // ---- JSON shells ----
 
-        static JToken ParseJson(string text, JTokenType expected, Context ctx)
+        static JToken ParseJson(string text, JTokenType expected, Context ctx, bool preserveNumbers = false)
         {
-            if (!RemoteConfigJson.TryParse(text, out JToken token, out string error))
+            JToken token;
+            string error;
+            bool ok = preserveNumbers
+                ? RemoteConfigJson.TryParsePreservingNumbers(text, out token, out error)
+                : RemoteConfigJson.TryParse(text, out token, out error);
+            if (!ok)
             {
                 ctx.Error(RemoteConfigIssueKind.InvalidJson, "malformed JSON, default kept: " + error);
                 return null;
@@ -305,14 +334,36 @@ namespace Ballverse.Core.Config
             return token;
         }
 
-        /// <summary>Accepts a catalog code ("M01") or a stable mode id ("ring_escape"), surrounding whitespace ignored.</summary>
+        /// <summary>
+        /// Accepts a catalog code ("M01"; case-insensitive, leading zero optional: "m01", "M1") or a stable mode id ("ring_escape",
+        /// case-insensitive); surrounding whitespace ignored.
+        /// </summary>
         internal static bool TryResolveMode(string s, out ModeCode code)
         {
             code = default;
             if (s == null) return false;
             string t = s.Trim();
             if (ModeCatalog.TryParseCode(t, out code)) return true;
-            if (ModeCatalog.TryGetById(t, out var info))
+            if (t.Length >= 2 && t.Length <= 3 && (t[0] == 'M' || t[0] == 'm'))
+            {
+                int n = 0;
+                bool digits = true;
+                for (int i = 1; i < t.Length; i++)
+                {
+                    if (t[i] < '0' || t[i] > '9')
+                    {
+                        digits = false;
+                        break;
+                    }
+                    n = n * 10 + (t[i] - '0');
+                }
+                if (digits && n >= 1 && n <= ModeCatalog.All.Count)
+                {
+                    code = (ModeCode)n;
+                    return true;
+                }
+            }
+            if (ModeCatalog.TryGetById(t, out var info) || ModeCatalog.TryGetById(t.ToLowerInvariant(), out info))
             {
                 code = info.Code;
                 return true;
@@ -363,6 +414,11 @@ namespace Ballverse.Core.Config
                     result.Add(code);
                 }
                 index++;
+            }
+            if (index > 0 && result.Count == 0)
+            {
+                ctx.Error(RemoteConfigIssueKind.NoValidEntries, "none of the " + index + " elements is a known mode; default kept");
+                return null;
             }
             return result;
         }
@@ -428,7 +484,7 @@ namespace Ballverse.Core.Config
             return result;
         }
 
-        static TierValues<GenerationBudget> ParseBudget(string text, TierValues<GenerationBudget> current, Context ctx)
+        static TierValues<GenerationBudgetConfig> ParseBudget(string text, TierValues<GenerationBudgetConfig> current, Context ctx)
         {
             var obj = (JObject)ParseJson(text, JTokenType.Object, ctx);
             if (obj == null) return null;
@@ -473,7 +529,7 @@ namespace Ballverse.Core.Config
                     if (isCandidates) candidates = Clamp(n, RemoteConfigLimits.BudgetCandidatesMin, RemoteConfigLimits.BudgetCandidatesMax, ctx, "tier " + tier + " candidates");
                     else ms = Clamp(n, RemoteConfigLimits.BudgetMsMin, RemoteConfigLimits.BudgetMsMax, ctx, "tier " + tier + " ms");
                 }
-                result = result.With(tier, new GenerationBudget(candidates, ms));
+                result = result.With(tier, new GenerationBudgetConfig(candidates, ms));
             }
             return result;
         }
@@ -561,6 +617,7 @@ namespace Ballverse.Core.Config
             var obj = (JObject)ParseJson(text, JTokenType.Object, ctx);
             if (obj == null) return null;
             var delivered = new List<TierOverride>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var prop in obj.Properties())
             {
                 string model = prop.Name.Trim();
@@ -569,7 +626,7 @@ namespace Ballverse.Core.Config
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "empty device model ignored");
                     continue;
                 }
-                if (delivered.Exists(o => string.Equals(o.DeviceModel, model, StringComparison.OrdinalIgnoreCase)))
+                if (!seen.Add(model))
                 {
                     ctx.Warning(RemoteConfigIssueKind.DuplicateEntry, "duplicate device model " + RemoteConfigJson.Excerpt(model) + " ignored");
                     continue;
@@ -589,6 +646,7 @@ namespace Ballverse.Core.Config
             var obj = (JObject)ParseJson(text, JTokenType.Object, ctx);
             if (obj == null) return null;
             var delivered = new List<PlatformSafeZone>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var prop in obj.Properties())
             {
                 string platform = prop.Name.Trim();
@@ -597,7 +655,7 @@ namespace Ballverse.Core.Config
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "empty platform id ignored");
                     continue;
                 }
-                if (delivered.Exists(p => string.Equals(p.Platform, platform, StringComparison.OrdinalIgnoreCase)))
+                if (!seen.Add(platform))
                 {
                     ctx.Warning(RemoteConfigIssueKind.DuplicateEntry, "duplicate platform " + RemoteConfigJson.Excerpt(platform) + " ignored");
                     continue;
@@ -614,6 +672,12 @@ namespace Ballverse.Core.Config
                     var r = ParseRect(el, platform + " #" + index, ctx);
                     if (r != null) rects.Add(r);
                     index++;
+                }
+                if (index > 0 && rects.Count == 0)
+                {
+                    ctx.Error(RemoteConfigIssueKind.NoValidEntries, "platform " + RemoteConfigJson.Excerpt(platform)
+                        + ": none of the " + index + " rects is valid; previous masks kept");
+                    continue;
                 }
                 delivered.Add(new PlatformSafeZone(platform, rects));
             }
@@ -685,6 +749,7 @@ namespace Ballverse.Core.Config
             var obj = (JObject)ParseJson(text, JTokenType.Object, ctx);
             if (obj == null) return null;
             var delivered = new List<TextTemplateSet>();
+            var seenLanguages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var prop in obj.Properties())
             {
                 string language = prop.Name.Trim();
@@ -693,7 +758,7 @@ namespace Ballverse.Core.Config
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "empty language tag ignored");
                     continue;
                 }
-                if (delivered.Exists(s => string.Equals(s.Language, language, StringComparison.OrdinalIgnoreCase)))
+                if (!seenLanguages.Add(language))
                 {
                     ctx.Warning(RemoteConfigIssueKind.DuplicateEntry, "duplicate language " + RemoteConfigJson.Excerpt(language) + " ignored");
                     continue;
@@ -704,6 +769,7 @@ namespace Ballverse.Core.Config
                     continue;
                 }
                 var templates = new List<TextTemplate>();
+                var ids = new HashSet<string>(StringComparer.Ordinal);
                 int index = 0;
                 foreach (var el in (JArray)prop.Value)
                 {
@@ -717,12 +783,18 @@ namespace Ballverse.Core.Config
                         continue;
                     }
                     string trimmedId = id.Trim();
-                    if (templates.Exists(t => t.Id == trimmedId))
+                    if (!ids.Add(trimmedId))
                     {
                         ctx.Warning(RemoteConfigIssueKind.DuplicateEntry, "template " + where + ": duplicate id " + RemoteConfigJson.Excerpt(trimmedId) + " ignored");
                         continue;
                     }
                     templates.Add(new TextTemplate(trimmedId, body));
+                }
+                if (index > 0 && templates.Count == 0)
+                {
+                    ctx.Error(RemoteConfigIssueKind.NoValidEntries, "language " + RemoteConfigJson.Excerpt(language)
+                        + ": none of the " + index + " templates is valid; previous templates kept");
+                    continue;
                 }
                 delivered.Add(new TextTemplateSet(language, templates));
             }
@@ -733,26 +805,32 @@ namespace Ballverse.Core.Config
         static List<T> MergeByKey<T>(List<T> delivered, List<T> current, Func<T, string> key)
         {
             var result = new List<T>(delivered);
+            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in delivered) keys.Add(key(d));
             foreach (var c in current)
             {
-                string k = key(c);
-                if (!delivered.Exists(d => string.Equals(key(d), k, StringComparison.OrdinalIgnoreCase))) result.Add(c);
+                if (!keys.Contains(key(c))) result.Add(c);
             }
             return result;
         }
 
         // ---- lists (whole replacement) ----
 
+        /// <summary>Each preset is kept as compact JSON with its numbers as delivered (see <see cref="RemoteConfigJson.TryParsePreservingNumbers"/>).</summary>
         static List<string> ParsePresets(string text, Context ctx)
         {
-            var token = ParseJson(text, JTokenType.Array, ctx);
+            var token = ParseJson(text, JTokenType.Array, ctx, preserveNumbers: true);
             if (token == null) return null;
             var result = new List<string>();
             int index = 0;
             foreach (var el in (JArray)token)
             {
-                if (el.Type == JTokenType.Object) result.Add(RemoteConfigJson.Compact(el));
-                else ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "preset #" + index + " is not a JSON object, ignored");
+                if (el.Type != JTokenType.Object)
+                    ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "preset #" + index + " is not a JSON object, ignored");
+                else if (RemoteConfigJson.ContainsNonFiniteNumber(el))
+                    ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "preset #" + index + " contains a number outside the double range, ignored");
+                else
+                    result.Add(RemoteConfigJson.Compact(el));
                 index++;
             }
             return result;
@@ -763,13 +841,14 @@ namespace Ballverse.Core.Config
             var token = ParseJson(text, JTokenType.Array, ctx);
             if (token == null) return null;
             var result = new List<RemoteMelody>();
+            var ids = new HashSet<string>(StringComparer.Ordinal);
             int index = 0;
             foreach (var el in (JArray)token)
             {
                 var m = ParseMelody(el, index, ctx);
                 if (m != null)
                 {
-                    if (result.Exists(x => x.Id == m.Id))
+                    if (!ids.Add(m.Id))
                         ctx.Warning(RemoteConfigIssueKind.DuplicateEntry, "melody #" + index + ": duplicate id " + RemoteConfigJson.Excerpt(m.Id) + " ignored");
                     else
                         result.Add(m);
@@ -802,30 +881,34 @@ namespace Ballverse.Core.Config
                 ctx.Warning(RemoteConfigIssueKind.InvalidEntry, where + " needs a non-empty notes array; ignored");
                 return null;
             }
-            var notes = new List<MelodyNote>();
+            var notes = new List<RemoteMelodyNote>();
             int noteIndex = 0;
             foreach (var n in (JArray)notesToken)
             {
                 if (n.Type != JTokenType.Object
                     || !RemoteConfigJson.TryGetInteger(n["pitch"], out long pitch)
                     || pitch < RemoteConfigLimits.PitchMin || pitch > RemoteConfigLimits.PitchMax
-                    || !RemoteConfigJson.TryGetNumber(n["durWeight"], out double dur) || !MelodyNote.IsValidDurWeight(dur)
-                    || !RemoteConfigJson.TryGetNumber(n["velocity"], out double vel) || !MelodyNote.IsValidVelocity(vel))
+                    || !RemoteConfigJson.TryGetNumber(n["durWeight"], out double dur) || !RemoteMelodyNote.IsValidDurWeight(dur)
+                    || !RemoteConfigJson.TryGetNumber(n["velocity"], out double vel) || !RemoteMelodyNote.IsValidVelocity(vel))
                 {
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, where + " note #" + noteIndex
                         + " needs integer pitch 0-127, durWeight > 0, velocity 0-1; melody ignored");
                     return null;
                 }
-                notes.Add(new MelodyNote((int)pitch, (float)dur, (float)vel));
+                notes.Add(new RemoteMelodyNote((int)pitch, (float)dur, (float)vel));
                 noteIndex++;
             }
             return new RemoteMelody(id, name, notes);
         }
 
+        /// <summary>Issue sink of one key. Info/Warning are capped at <see cref="MaxIssuesPerKey"/>; Errors always recorded.</summary>
         sealed class Context
         {
             readonly string _key;
             readonly List<RemoteConfigIssue> _issues;
+            int _advisory;
+            int _suppressed;
+            RemoteConfigIssueSeverity _suppressedSeverity;
 
             public Context(string key, List<RemoteConfigIssue> issues)
             {
@@ -835,12 +918,33 @@ namespace Ballverse.Core.Config
 
             public void Info(RemoteConfigIssueKind kind, string message)
             {
-                _issues.Add(new RemoteConfigIssue(_key, RemoteConfigIssueSeverity.Info, kind, message));
+                Advisory(RemoteConfigIssueSeverity.Info, kind, message);
             }
 
             public void Warning(RemoteConfigIssueKind kind, string message)
             {
-                _issues.Add(new RemoteConfigIssue(_key, RemoteConfigIssueSeverity.Warning, kind, message));
+                Advisory(RemoteConfigIssueSeverity.Warning, kind, message);
+            }
+
+            void Advisory(RemoteConfigIssueSeverity severity, RemoteConfigIssueKind kind, string message)
+            {
+                if (_advisory < MaxIssuesPerKey)
+                {
+                    _advisory++;
+                    _issues.Add(new RemoteConfigIssue(_key, severity, kind, message));
+                    return;
+                }
+                _suppressed++;
+                if (severity > _suppressedSeverity) _suppressedSeverity = severity;
+            }
+
+            /// <summary>Adds the summary of suppressed issues, if any. Called once after the key is parsed.</summary>
+            public void Flush()
+            {
+                if (_suppressed == 0) return;
+                _issues.Add(new RemoteConfigIssue(_key, _suppressedSeverity, RemoteConfigIssueKind.IssuesSuppressed,
+                    _suppressed + " more issues of this key not listed"));
+                _suppressed = 0;
             }
 
             public void Error(RemoteConfigIssueKind kind, string message)

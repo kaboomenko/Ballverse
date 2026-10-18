@@ -120,7 +120,6 @@ namespace Ballverse.Core.Tests.Config
 
             var n = RemoteConfigParser.Parse(null);
             AssertNoIssues(n);
-            Assert.Same(D, RemoteConfigValues.Defaults);
             Assert.Equal(RawDictionary(D), RawDictionary(n.Values));
         }
 

@@ -28,17 +28,65 @@ namespace Ballverse.Core.Tests.Config
         }
 
         [Fact]
-        public void FreeModesNarrowingIsAcceptedWithWarning()
+        public void FreeModesCannotNarrowDefaultsStayFree()
         {
+            // Spec §9.3 "только расширение", §5.1 "M01–M05 доступны всегда".
             var r = Parse(RemoteConfigKeys.FreeModes, "[\"M01\",\"M02\"]");
-            Assert.Equal(Codes(1, 2), r.Values.FreeModes);
+            Assert.Equal(Codes(1, 2, 3, 4, 5), r.Values.FreeModes);
             var issue = Single(r, RemoteConfigIssueKind.NarrowedFreeModes, RemoteConfigIssueSeverity.Warning);
             Assert.Contains("M03,M04,M05", issue.Message);
 
             var empty = Parse(RemoteConfigKeys.FreeModes, "[]");
-            Assert.Empty(empty.Values.FreeModes);
-            Assert.Empty(empty.Values.EffectiveFreeModes);
+            Assert.Equal(Codes(1, 2, 3, 4, 5), empty.Values.FreeModes);
+            Assert.Equal(Codes(1, 2, 3, 4, 5), empty.Values.EffectiveFreeModes);
             Single(empty, RemoteConfigIssueKind.NarrowedFreeModes, RemoteConfigIssueSeverity.Warning);
+
+            var replaced = Parse(RemoteConfigKeys.FreeModes, "[\"M06\"]");
+            Assert.Equal(Codes(6, 1, 2, 3, 4, 5), replaced.Values.FreeModes);
+            foreach (var m in ModeCatalog.All)
+            {
+                Assert.Equal(m.FreeByDefault || m.Code == ModeCode.M06, replaced.Values.IsEffectivelyFree(m.Code));
+            }
+        }
+
+        [Fact]
+        public void FreeModesAllUnrecognisedKeepsDefaultWithError()
+        {
+            foreach (var text in new[] { "[\"M16\",\"free\",\"M00\"]", "[1,2,3]", "[null]", "[\"M016\",\"mm1\"]" })
+            {
+                var r = Parse(RemoteConfigKeys.FreeModes, text);
+                Assert.Equal(Codes(1, 2, 3, 4, 5), r.Values.FreeModes);
+                Assert.Equal(Codes(1, 2, 3, 4, 5), r.Values.EffectiveFreeModes);
+                Single(r, RemoteConfigIssueKind.NoValidEntries, RemoteConfigIssueSeverity.Error);
+                Assert.DoesNotContain(r.Issues, i => i.Kind == RemoteConfigIssueKind.NarrowedFreeModes);
+            }
+        }
+
+        [Fact]
+        public void FreeModesLowercaseAndUnpaddedCodesAccepted()
+        {
+            var lower = Parse(RemoteConfigKeys.FreeModes, "[\"m01\",\"m02\",\"m03\",\"m04\",\"m05\",\"m06\"]");
+            AssertNoIssues(lower);
+            Assert.Equal(Codes(1, 2, 3, 4, 5, 6), lower.Values.FreeModes);
+
+            var unpadded = Parse(RemoteConfigKeys.FreeModes, "[\"M1\",\"M2\",\"M3\",\"M4\",\"M5\",\"M9\",\"m15\"]");
+            AssertNoIssues(unpadded);
+            Assert.Equal(Codes(1, 2, 3, 4, 5, 9, 15), unpadded.Values.FreeModes);
+
+            var ids = Parse(RemoteConfigKeys.FreeModes, "[\"RING_ESCAPE\",\"M02\",\"M03\",\"M04\",\"M05\"]");
+            AssertNoIssues(ids);
+            Assert.Equal(Codes(1, 2, 3, 4, 5), ids.Values.FreeModes);
+        }
+
+        [Theory]
+        [InlineData(RemoteConfigKeys.ModesDisabled)]
+        [InlineData(RemoteConfigKeys.GalleryOrder)]
+        public void ModeListAllUnrecognisedKeepsDefaultWithError(string key)
+        {
+            var r = Parse(key, "[\"M16\",\"zz\",7]");
+            Single(r, RemoteConfigIssueKind.NoValidEntries, RemoteConfigIssueSeverity.Error);
+            Assert.DoesNotContain(r.Issues, i => i.Kind == RemoteConfigIssueKind.IncompleteGalleryOrder);
+            Assert.Equal(RawDictionary(RemoteConfigValues.Defaults), RawDictionary(r.Values));
         }
 
         [Fact]
@@ -46,9 +94,9 @@ namespace Ballverse.Core.Tests.Config
         {
             var r = Parse(RemoteConfigKeys.ModesDisabled, "[\"M07\",\"M16\",\"m08\",\"nope\",7,null,{},\"M07\",\"last_standing\",\"M08\"]");
             Assert.Equal(Codes(7, 8), r.Values.ModesDisabled);
-            Assert.Equal(3, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.UnknownMode));
+            Assert.Equal(2, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.UnknownMode));
             Assert.Equal(3, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.InvalidEntry));
-            Assert.Equal(2, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.DuplicateEntry));
+            Assert.Equal(3, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.DuplicateEntry));
             Assert.All(r.Issues, i => Assert.Equal(RemoteConfigIssueSeverity.Warning, i.Severity));
         }
 

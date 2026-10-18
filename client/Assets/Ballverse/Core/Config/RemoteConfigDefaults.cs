@@ -26,12 +26,12 @@ namespace Ballverse.Core.Config
         }
 
         /// <summary>Spec §2.4 budget table: A 24 / 1.5 s, B 16 / 2.5 s, C 8 / 3.5 s.</summary>
-        public static TierValues<GenerationBudget> GenerationBudgetByTier()
+        public static TierValues<GenerationBudgetConfig> GenerationBudgetByTier()
         {
-            return new TierValues<GenerationBudget>(
-                new GenerationBudget(24, 1500),
-                new GenerationBudget(16, 2500),
-                new GenerationBudget(8, 3500));
+            return new TierValues<GenerationBudgetConfig>(
+                new GenerationBudgetConfig(24, 1500),
+                new GenerationBudgetConfig(16, 2500),
+                new GenerationBudgetConfig(8, 3500));
         }
 
         /// <summary>Spec §5.1 / §9.3: M01–M05 (the catalog's FreeByDefault modes).</summary>

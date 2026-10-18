@@ -96,6 +96,10 @@ namespace Ballverse.Core.Tests.Config
             Assert.NotNull(v);
             Assert.Equal(AllCodes(), v.GalleryOrder.OrderBy(c => (int)c));
             Assert.Equal(v.FreeModes.Count, v.FreeModes.Distinct().Count());
+            foreach (var m in ModeCatalog.All)
+            {
+                if (m.FreeByDefault) Assert.Contains(m.Code, v.FreeModes);
+            }
             Assert.InRange(v.InterstitialEveryNGames, 1, 20);
             Assert.InRange(v.InterstitialMinIntervalSec, 0, 600);
             Assert.InRange(v.InterstitialGraceGames, 0, 50);
@@ -143,8 +147,8 @@ namespace Ballverse.Core.Tests.Config
                 var raw = RawDictionary(first);
                 var second = RemoteConfigParser.Parse(raw);
                 Assert.Equal(raw, RawDictionary(second.Values));
-                // Only the advisory narrowing warning may reappear; everything else was normalized away.
-                Assert.All(second.Issues, i => Assert.Equal(RemoteConfigIssueKind.NarrowedFreeModes, i.Kind));
+                // Everything was normalized away (free_modes always contains M01–M05, so not even a narrowing warning).
+                Assert.Empty(second.Issues);
             }
         }
 

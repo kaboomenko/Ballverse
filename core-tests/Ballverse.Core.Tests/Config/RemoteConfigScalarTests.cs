@@ -73,23 +73,30 @@ namespace Ballverse.Core.Tests.Config
 
             var huge = Parse(key, "99999999999999999999999");
             Assert.Equal(max, s_ints[key](huge.Values));
+            Single(huge, RemoteConfigIssueKind.OutOfRange, RemoteConfigIssueSeverity.Warning);
             var negHuge = Parse(key, "-99999999999999999999999");
             Assert.Equal(min, s_ints[key](negHuge.Values));
-            Assert.NotEqual(int.MinValue, def);
+            Single(negHuge, RemoteConfigIssueKind.OutOfRange, RemoteConfigIssueSeverity.Warning);
+
+            var blank = Parse(key, " \t ");
+            Assert.Equal(def, s_ints[key](blank.Values));
+            Single(blank, RemoteConfigIssueKind.EmptyValue, RemoteConfigIssueSeverity.Info);
         }
 
         [Theory]
         [MemberData(nameof(IntRanges))]
         public void IntInvalidKeepsDefault(string key, int min, int max, int def)
         {
-            foreach (var bad in new[] { "abc", "3.5", "1,5", "NaN", "Infinity", "1e400", "0x10", "[3]", "\"3\"", "true", "3 4" })
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var fractions = new[] { min.ToString(inv) + ".5", max.ToString(inv) + ".5" };
+            foreach (var bad in new[] { "abc", "3.5", "1,5", "NaN", "Infinity", "1e400", "0x10", "[3]", "\"3\"", "true", "3 4" }.Concat(fractions))
             {
                 var r = Parse(key, bad);
                 Assert.Equal(def, s_ints[key](r.Values));
                 var issue = Single(r, RemoteConfigIssueKind.InvalidType, RemoteConfigIssueSeverity.Error);
                 Assert.Equal(key, issue.Key);
+                Assert.Contains("default kept", issue.Message);
             }
-            Assert.True(min <= def && def <= max);
         }
 
         [Theory]

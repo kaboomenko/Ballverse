@@ -10,6 +10,7 @@ namespace Ballverse.Core.Config
     /// </summary>
     public sealed class RemoteConfigBuilder
     {
+        /// <summary>May omit M01–M05; <see cref="Build"/> appends them (spec §9.3: the free set can only be extended).</summary>
         public List<ModeCode> FreeModes { get; set; }
         public List<ModeCode> ModesDisabled { get; set; }
         /// <summary>May be partial; <see cref="Build"/> appends missing modes in catalog order.</summary>
@@ -27,7 +28,7 @@ namespace Ballverse.Core.Config
         public TierValues<int> ExportDefaultFpsByTier { get; set; }
         /// <summary>Per-mode weight overrides; modes absent here use the mode's built-in weights.</summary>
         public Dictionary<ModeCode, GenerationWeights> GenerationWeights { get; set; }
-        public TierValues<GenerationBudget> GenerationBudgetByTier { get; set; }
+        public TierValues<GenerationBudgetConfig> GenerationBudgetByTier { get; set; }
         public List<TierOverride> TierOverrides { get; set; }
         public List<PlatformSafeZone> PlatformSafeZones { get; set; }
         /// <summary>Raw JSON objects, one per preset; validated by the Params module later.</summary>
@@ -94,48 +95,31 @@ namespace Ballverse.Core.Config
         }
 
         /// <summary>
-        /// Validates and freezes the values. Normalization: mode lists de-duplicated (first wins); gallery order completed to a
+        /// Validates and freezes the values. Normalization: mode lists de-duplicated (first wins); free modes completed with the
+        /// default free modes M01–M05 (spec §9.3 extension only, §5.1); gallery order completed to a
         /// permutation of all 15 modes; map-like lists sorted by key (ordinal, ignoring case) so the snapshot never depends on
         /// insertion order; presets re-serialized as compact JSON.
         /// </summary>
         /// <exception cref="ArgumentException">A value is out of range, null, duplicated or malformed.</exception>
         public RemoteConfigValues Build()
         {
-            var v = new RemoteConfigValues();
-            v.FreeModesList = Array.AsReadOnly(DistinctModes(FreeModes, nameof(FreeModes)).ToArray());
-            v.ModesDisabledList = Array.AsReadOnly(DistinctModes(ModesDisabled, nameof(ModesDisabled)).ToArray());
-            v.GalleryOrderList = Array.AsReadOnly(CompleteGalleryOrder(DistinctModes(GalleryOrder, nameof(GalleryOrder))).ToArray());
+            return new RemoteConfigValues(this);
+        }
 
-            v.InterstitialEveryNGames = Range(InterstitialEveryNGames, RemoteConfigLimits.InterstitialEveryNGamesMin, RemoteConfigLimits.InterstitialEveryNGamesMax, nameof(InterstitialEveryNGames));
-            v.InterstitialMinIntervalSec = Range(InterstitialMinIntervalSec, RemoteConfigLimits.InterstitialMinIntervalSecMin, RemoteConfigLimits.InterstitialMinIntervalSecMax, nameof(InterstitialMinIntervalSec));
-            v.InterstitialGraceGames = Range(InterstitialGraceGames, RemoteConfigLimits.InterstitialGraceGamesMin, RemoteConfigLimits.InterstitialGraceGamesMax, nameof(InterstitialGraceGames));
-            v.RewardedExportEnabled = RewardedExportEnabled;
-            v.RewardedWaitTimeoutSec = Range(RewardedWaitTimeoutSec, RemoteConfigLimits.RewardedWaitTimeoutSecMin, RemoteConfigLimits.RewardedWaitTimeoutSecMax, nameof(RewardedWaitTimeoutSec));
-            v.RewardedRetryWindowMin = Range(RewardedRetryWindowMin, RemoteConfigLimits.RewardedRetryWindowMinMin, RemoteConfigLimits.RewardedRetryWindowMinMax, nameof(RewardedRetryWindowMin));
-            v.PaidModeTrialEnabled = PaidModeTrialEnabled;
-            v.PaidModeTrialSeconds = Range(PaidModeTrialSeconds, RemoteConfigLimits.PaidModeTrialSecondsMin, RemoteConfigLimits.PaidModeTrialSecondsMax, nameof(PaidModeTrialSeconds));
-            v.ExportBitrates = ExportBitrates ?? throw new ArgumentNullException(nameof(ExportBitrates));
-
-            var fps = ExportDefaultFpsByTier ?? throw new ArgumentNullException(nameof(ExportDefaultFpsByTier));
-            if (!RemoteConfigLimits.IsValidFps(fps.A) || !RemoteConfigLimits.IsValidFps(fps.B) || !RemoteConfigLimits.IsValidFps(fps.C))
-                throw new ArgumentException("export fps must be 30 or 60", nameof(ExportDefaultFpsByTier));
-            v.ExportDefaultFpsByTier = fps;
-
-            v.GenerationWeightsList = BuildWeights();
-            var budget = GenerationBudgetByTier ?? throw new ArgumentNullException(nameof(GenerationBudgetByTier));
-            if (budget.A == null || budget.B == null || budget.C == null)
-                throw new ArgumentException("budget per tier must be set", nameof(GenerationBudgetByTier));
-            v.GenerationBudgetByTier = budget;
-
-            v.TierOverridesList = SortedUnique(TierOverrides, t => t.DeviceModel, nameof(TierOverrides));
-            v.PlatformSafeZonesList = SortedUnique(PlatformSafeZones, p => p.Platform, nameof(PlatformSafeZones));
-            v.RemotePresetsList = BuildPresets();
-            v.RemoteMelodiesList = BuildMelodies();
-            v.TextTemplatesList = SortedUnique(TextTemplates, t => t.Language, nameof(TextTemplates));
-            v.WatermarkEnabled = WatermarkEnabled;
-            v.RatePromptAfterExports = Range(RatePromptAfterExports, RemoteConfigLimits.RatePromptAfterExportsMin, RemoteConfigLimits.RatePromptAfterExportsMax, nameof(RatePromptAfterExports));
-            v.Freeze();
-            return v;
+        /// <summary>
+        /// Free modes with the catalog's FreeByDefault modes (M01–M05) guaranteed: given order first, missing defaults appended in
+        /// catalog order. Spec §9.3 "только расширение", §5.1 "Бесплатные режимы M01–M05 доступны всегда".
+        /// </summary>
+        internal static List<ModeCode> CompleteFreeModes(List<ModeCode> distinct)
+        {
+            var result = new List<ModeCode>(distinct);
+            var seen = new bool[ModeCatalog.All.Count + 1];
+            foreach (var c in distinct) seen[(int)c] = true;
+            foreach (var m in ModeCatalog.All)
+            {
+                if (m.FreeByDefault && !seen[(int)m.Code]) result.Add(m.Code);
+            }
+            return result;
         }
 
         /// <summary>Gallery order completed to a permutation of all catalog modes: given order first, missing modes appended in catalog order.</summary>
@@ -151,7 +135,7 @@ namespace Ballverse.Core.Config
             return result;
         }
 
-        static List<ModeCode> DistinctModes(List<ModeCode> modes, string name)
+        internal static List<ModeCode> DistinctModes(List<ModeCode> modes, string name)
         {
             if (modes == null) throw new ArgumentNullException(name);
             var seen = new bool[ModeCatalog.All.Count + 1];
@@ -167,54 +151,56 @@ namespace Ballverse.Core.Config
             return result;
         }
 
-        static int Range(int value, int min, int max, string name)
+        internal static int Range(int value, int min, int max, string name)
         {
             if (value < min || value > max) throw new ArgumentOutOfRangeException(name, value, "must be " + min + "–" + max);
             return value;
         }
 
-        IReadOnlyList<KeyValuePair<ModeCode, GenerationWeights>> BuildWeights()
+        internal static IReadOnlyList<KeyValuePair<ModeCode, GenerationWeights>> BuildWeights(Dictionary<ModeCode, GenerationWeights> weights)
         {
-            if (GenerationWeights == null) throw new ArgumentNullException(nameof(GenerationWeights));
+            if (weights == null) throw new ArgumentNullException(nameof(GenerationWeights));
             var list = new List<KeyValuePair<ModeCode, GenerationWeights>>();
             foreach (var m in ModeCatalog.All)
             {
-                if (GenerationWeights.TryGetValue(m.Code, out var w))
+                if (weights.TryGetValue(m.Code, out var w))
                 {
                     if (w == null) throw new ArgumentException("null weights for " + m.Code, nameof(GenerationWeights));
                     list.Add(new KeyValuePair<ModeCode, GenerationWeights>(m.Code, w));
                 }
             }
-            if (list.Count != GenerationWeights.Count) throw new ArgumentException("unknown mode code in weights", nameof(GenerationWeights));
+            if (list.Count != weights.Count) throw new ArgumentException("unknown mode code in weights", nameof(GenerationWeights));
             return list.AsReadOnly();
         }
 
-        IReadOnlyList<string> BuildPresets()
+        internal static IReadOnlyList<string> BuildPresets(List<string> presets)
         {
-            if (RemotePresets == null) throw new ArgumentNullException(nameof(RemotePresets));
-            var list = new List<string>(RemotePresets.Count);
-            foreach (var p in RemotePresets)
+            if (presets == null) throw new ArgumentNullException(nameof(RemotePresets));
+            var list = new List<string>(presets.Count);
+            foreach (var p in presets)
             {
-                if (!RemoteConfigJson.TryParse(p, out var token, out var error) || token.Type != Newtonsoft.Json.Linq.JTokenType.Object)
+                if (!RemoteConfigJson.TryParsePreservingNumbers(p, out var token, out var error) || token.Type != Newtonsoft.Json.Linq.JTokenType.Object)
                     throw new ArgumentException("preset must be a JSON object: " + (error ?? RemoteConfigJson.Excerpt(p)), nameof(RemotePresets));
+                if (RemoteConfigJson.ContainsNonFiniteNumber(token))
+                    throw new ArgumentException("preset contains a number outside the double range", nameof(RemotePresets));
                 list.Add(RemoteConfigJson.Compact(token));
             }
             return list.AsReadOnly();
         }
 
-        IReadOnlyList<RemoteMelody> BuildMelodies()
+        internal static IReadOnlyList<RemoteMelody> BuildMelodies(List<RemoteMelody> melodies)
         {
-            if (RemoteMelodies == null) throw new ArgumentNullException(nameof(RemoteMelodies));
+            if (melodies == null) throw new ArgumentNullException(nameof(RemoteMelodies));
             var ids = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var m in RemoteMelodies)
+            foreach (var m in melodies)
             {
                 if (m == null) throw new ArgumentException("null melody", nameof(RemoteMelodies));
                 if (!ids.Add(m.Id)) throw new ArgumentException("duplicate melody id " + m.Id, nameof(RemoteMelodies));
             }
-            return new List<RemoteMelody>(RemoteMelodies).AsReadOnly();
+            return new List<RemoteMelody>(melodies).AsReadOnly();
         }
 
-        static IReadOnlyList<T> SortedUnique<T>(List<T> items, Func<T, string> key, string name) where T : class
+        internal static IReadOnlyList<T> SortedUnique<T>(List<T> items, Func<T, string> key, string name) where T : class
         {
             if (items == null) throw new ArgumentNullException(name);
             var list = new List<T>(items.Count);

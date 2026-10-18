@@ -90,7 +90,7 @@ namespace Ballverse.Core.Config
                     var arr = new JArray();
                     foreach (var p in v.RemotePresets)
                     {
-                        RemoteConfigJson.TryParse(p, out JToken token, out _);
+                        RemoteConfigJson.TryParsePreservingNumbers(p, out JToken token, out _);
                         arr.Add(token);
                     }
                     return Compact(arr);
@@ -123,7 +123,7 @@ namespace Ballverse.Core.Config
             }
         }
 
-        static JObject Budget(GenerationBudget b)
+        static JObject Budget(GenerationBudgetConfig b)
         {
             return new JObject { { "candidates", b.Candidates }, { "ms", b.Milliseconds } };
         }

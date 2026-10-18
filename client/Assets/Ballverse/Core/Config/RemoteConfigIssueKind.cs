@@ -19,11 +19,20 @@ namespace Ballverse.Core.Config
         UnknownMode = 6,
         /// <summary>Repeated mode, id, model, platform or language; the first occurrence wins.</summary>
         DuplicateEntry = 7,
-        /// <summary><c>free_modes</c> does not contain every default free mode (spec §5.1: only extension is intended).</summary>
+        /// <summary>
+        /// <c>free_modes</c> did not list every default free mode; they stay free anyway (spec §9.3 extension only, §5.1).
+        /// </summary>
         NarrowedFreeModes = 8,
         /// <summary><c>gallery_order</c> did not list every mode; missing modes appended in catalog order.</summary>
         IncompleteGalleryOrder = 9,
         /// <summary>Unexpected failure while parsing; the key keeps its default.</summary>
         InternalError = 10,
+        /// <summary>
+        /// A non-empty list (mode list) or map entry (safe-zone platform, text-template language) had no valid element; the
+        /// default (or current) value is kept instead of an empty one. Only an explicit empty array clears an entry.
+        /// </summary>
+        NoValidEntries = 11,
+        /// <summary>More Info/Warning issues of this key were suppressed (cap per key); Errors are never suppressed.</summary>
+        IssuesSuppressed = 12,
     }
 }

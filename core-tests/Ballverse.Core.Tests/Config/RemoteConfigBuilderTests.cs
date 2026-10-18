@@ -42,7 +42,7 @@ namespace Ballverse.Core.Tests.Config
             b.GenerationWeights[ModeCode.M09] = new GenerationWeights(1, 1, 1, 1, 1);
             b.GenerationWeights[ModeCode.M02] = new GenerationWeights(2, 2, 2, 2, 2);
             var v = b.Build();
-            Assert.Equal(Codes(3, 1), v.FreeModes);
+            Assert.Equal(Codes(3, 1, 2, 4, 5), v.FreeModes);
             Assert.Equal(ModeCode.M15, v.GalleryOrder[0]);
             Assert.Equal(15, v.GalleryOrder.Count);
             Assert.Equal(new[] { "A", "b" }, v.TierOverrides.Select(o => o.DeviceModel));
@@ -78,7 +78,7 @@ namespace Ballverse.Core.Tests.Config
             yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.RatePromptAfterExports = 21) };
             yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.ExportDefaultFpsByTier = new TierValues<int>(60, 50, 30)) };
             yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.ExportBitrates = null) };
-            yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.GenerationBudgetByTier = new TierValues<GenerationBudget>(null, null, null)) };
+            yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.GenerationBudgetByTier = new TierValues<GenerationBudgetConfig>(null, null, null)) };
             yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.FreeModes = null) };
             yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.FreeModes.Add((ModeCode)16)) };
             yield return new object[] { (Action<RemoteConfigBuilder>)(b => b.ModesDisabled.Add((ModeCode)0)) };
@@ -96,7 +96,7 @@ namespace Ballverse.Core.Tests.Config
 
         static RemoteMelody Melody(string id)
         {
-            return new RemoteMelody(id, "Name", new[] { new MelodyNote(60, 1f, 1f) });
+            return new RemoteMelody(id, "Name", new[] { new RemoteMelodyNote(60, 1f, 1f) });
         }
 
         [Theory]
@@ -117,10 +117,10 @@ namespace Ballverse.Core.Tests.Config
             Assert.Throws<ArgumentOutOfRangeException>(() => ExportBitrates.Defaults.GetKbps((ExportResolution)480, 30));
             Assert.Equal("1080p60", ExportBitrates.KeyOf(ExportResolution.P1080, 60));
 
-            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudget(0, 1000));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudget(65, 1000));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudget(8, 99));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudget(8, 10001));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudgetConfig(0, 1000));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudgetConfig(65, 1000));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudgetConfig(8, 99));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationBudgetConfig(8, 10001));
 
             Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationWeights(-1, 0, 0, 0, 0));
             Assert.Throws<ArgumentOutOfRangeException>(() => new GenerationWeights(0, float.NaN, 0, 0, 0));
@@ -132,17 +132,17 @@ namespace Ballverse.Core.Tests.Config
             Assert.Throws<ArgumentOutOfRangeException>(() => new NormalizedRect(0, float.NaN, 0.5f, 0.1f));
             Assert.NotNull(new NormalizedRect(0, 0, 1, 1));
 
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MelodyNote(128, 1, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MelodyNote(-1, 1, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MelodyNote(60, 0, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MelodyNote(60, float.PositiveInfinity, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MelodyNote(60, 1, 1.5f));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new MelodyNote(60, 1, float.NaN));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RemoteMelodyNote(128, 1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RemoteMelodyNote(-1, 1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RemoteMelodyNote(60, 0, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RemoteMelodyNote(60, float.PositiveInfinity, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RemoteMelodyNote(60, 1, 1.5f));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RemoteMelodyNote(60, 1, float.NaN));
 
-            Assert.Throws<ArgumentException>(() => new RemoteMelody(" ", "n", new[] { new MelodyNote(1, 1, 1) }));
-            Assert.Throws<ArgumentException>(() => new RemoteMelody("i", "", new[] { new MelodyNote(1, 1, 1) }));
-            Assert.Throws<ArgumentException>(() => new RemoteMelody("i", "n", new MelodyNote[0]));
-            Assert.Throws<ArgumentException>(() => new RemoteMelody("i", "n", new MelodyNote[] { null }));
+            Assert.Throws<ArgumentException>(() => new RemoteMelody(" ", "n", new[] { new RemoteMelodyNote(1, 1, 1) }));
+            Assert.Throws<ArgumentException>(() => new RemoteMelody("i", "", new[] { new RemoteMelodyNote(1, 1, 1) }));
+            Assert.Throws<ArgumentException>(() => new RemoteMelody("i", "n", new RemoteMelodyNote[0]));
+            Assert.Throws<ArgumentException>(() => new RemoteMelody("i", "n", new RemoteMelodyNote[] { null }));
             Assert.Throws<ArgumentNullException>(() => new RemoteMelody("i", "n", null));
 
             Assert.Throws<ArgumentException>(() => new TextTemplate("", "t"));

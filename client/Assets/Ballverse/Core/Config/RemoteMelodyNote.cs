@@ -6,7 +6,7 @@ namespace Ballverse.Core.Config
     /// One note of a melody for the Melody sound pack (spec §2.7: pitch, duration weight, volume).
     /// JSON form: <c>{"pitch":64,"durWeight":1,"velocity":0.8}</c>.
     /// </summary>
-    public sealed class MelodyNote
+    public sealed class RemoteMelodyNote
     {
         /// <summary>MIDI note number 0–127.</summary>
         public int Pitch { get; }
@@ -16,7 +16,7 @@ namespace Ballverse.Core.Config
         public float Velocity { get; }
 
         /// <exception cref="ArgumentOutOfRangeException">A value is outside its range.</exception>
-        public MelodyNote(int pitch, float durWeight, float velocity)
+        public RemoteMelodyNote(int pitch, float durWeight, float velocity)
         {
             if (pitch < RemoteConfigLimits.PitchMin || pitch > RemoteConfigLimits.PitchMax)
                 throw new ArgumentOutOfRangeException(nameof(pitch), pitch, "pitch must be 0–127");
