@@ -24,7 +24,7 @@
 │ AVAssetReader · AVAssetWriter/VideoToolbox ·        │ (релиз 1: Java)          │
 │ PHPicker · PHPhotoLibrary · UIActivityVC ·          │ MediaExtractor, MediaCodec│
 │ сигналы: thermal, reduce transparency/motion        │ MediaMuxer, EGL14/GLES,  │
-│ кадры BGRA (Р24)                                    │ Photo Picker, MediaStore,│
+│ кадры RGBA → BGRA внутри (Р24)                      │ Photo Picker, MediaStore,│
 │                                                     │ share, сигналы; RGBA     │
 └─────────────────────────────────────────────────────┴─────────────────────────┘
       Firebase (Analytics, Crashlytics, Remote Config) · AdMob + UMP · StoreKit 2 / Play Billing
@@ -51,7 +51,7 @@ Ballverse/
   client/                       Unity-проект
     Assets/Ballverse/
       Core/                     asmdef Ballverse.Core (noEngineReferences = true)
-        Sim/                    Ballverse.Core.Sim: решатель, IPhysicsWorld, SimRunner, ModeRegistry
+        Sim/                    Ballverse.Core.Sim: решатель PhysicsWorld, SimRunner, IModeRules, ModeRegistry
         Modes/                  логика режимов релиза 1: RingEscape/, GeometryBounce/, HelixDrop/
         …                       остальные модули ядра (Foundation, Params, Generation, Replay, …)
       Sim/                      Ballverse.Sim — Unity-раннер поверх Core.Sim
@@ -78,9 +78,9 @@ Ballverse/
 | Сборка (asmdef) | Отвечает за | Зависит от |
 |---|---|---|
 | `Ballverse.Core` | Модели (параметры, схема параметров, пресеты, проект, таймлайн), ГСЧ (PCG32), оценка зрелищности, права и правила рекламы (`Entitlements`, `AdPolicy`), формат реплея и потока рендера, миграции схем, значения Remote Config, геометрия кадра студии (раскладки, Cover/Fit, PiP, водяной знак, зоны площадок), детерминированный звуковой микшер и нормализация громкости. В той же сборке — **`Core.Sim`** и **`Core.Modes`** (строки ниже) | — (только BCL + Newtonsoft.Json) |
-| `Ballverse.Core` → `Core/Sim` (пространство имён `Ballverse.Core.Sim`) | **Решатель релиза 1** (§6.5): тела, формы (круг, отрезок, контур, дуга), кинематика, контакты, непрерывные столкновения, события; `IPhysicsWorld` и его реализация на решателе; `SimClock` (тик 1/60 с, подшаги); `SimRunner` (тик: ввод → правила режима → физика → события → запись реплея и потока рендера); `ModeRegistry` (явная регистрация режимов); headless-прогоны кандидатов для генерации (§2.4). Однопоточный на мир | Остальной Core |
-| `Ballverse.Core` → `Core/Modes` (`Ballverse.Core.Modes.*`) | Логика режимов релиза 1: схема параметров, пресеты, генератор, правила (`IModeRuntime`), оценка зрелищности, режиссёр, автопилот — для M01, M02, M05. Тестируется headless в контейнере | Core, Core.Sim |
-| `Ballverse.Sim` (Unity) | Тонкий раннер поверх `Core.Sim`: число тиков за кадр по `timeScale`, ввод касаний → квантованный `TickInput`, запуск кандидатов генерации в фоновых потоках, передача событий в Render и Audio. Позже — реализация `IPhysicsWorld` на `LowLevelPhysics2D` (Box2D v3, волна 3) | Core |
+| `Ballverse.Core` → `Core/Sim` (пространство имён `Ballverse.Core.Sim`) | **Решатель релиза 1** (§6.5): `PhysicsWorld` (конкретный класс; интерфейс `IPhysicsWorld` выделяется к волне 3) — тела, коллайдеры (капсула, цепочка, кольцо с прорезями, диск, платформа башни M05), кинематика, контакты, непрерывные столкновения, события; `SimSettings` (подшаги, `maxSpeed`, гравитация); `SimRunner` (тик 1/60 с: ввод → `IModeRules.Tick` → физика → `IModeRules.AfterPhysics` → события → хэш; предел 180 с → `OnTimeLimit`); `IModeRules` — контракт правил режима; `ModeRegistry` (явная регистрация режимов); headless-прогоны кандидатов для генерации (§2.4). Цилиндрическая модель M05 — вид коллайдера `SpinPlatform` плюс правила режима, отдельного интегратора нет. Однопоточный на мир | Остальной Core |
+| `Ballverse.Core` → `Core/Modes` (`Ballverse.Core.Modes.*`) | Логика режимов релиза 1: схема параметров с валидацией (§2.9), пресеты, генератор, правила (`IModeRules`), запись кадра потока рендера, оценка зрелищности, режиссёр, автопилот — для M01, M02, M05. Тестируется headless в контейнере | Core, Core.Sim |
+| `Ballverse.Sim` (Unity) | Тонкий раннер поверх `Core.Sim`: число тиков за кадр по `timeScale`, ввод касаний → квантованный `SimInput`, запуск кандидатов генерации в фоновых потоках, передача событий в Render и Audio. Позже — реализация `IPhysicsWorld` на `LowLevelPhysics2D` (Box2D v3, волна 3; интерфейс выделяется из `PhysicsWorld` тогда же) | Core |
 | `Ballverse.Modes.Mxx` (Unity) | Вид режима (`IModeView`): как рисовать формы потока рендера (например, псевдо-3D платформы M05), HUD режима. Режимы roadmap с Box2D — также привязка к бэкенду | Core, Sim, Render (только API) |
 | `Ballverse.Render` | Пакетный рендер из потока рендера, темы, VFX, пост-эффекты, офлайн-рендер в `RenderTexture` | Core |
 | `Ballverse.Audio` | Банк сэмплов (декодирование OGG в PCM), мост к аудиопотоку Unity (`OnAudioFilterRead`); сам микшер и нормализация — чистый C# в `Core/Audio` | Core |
@@ -111,7 +111,16 @@ Ballverse/
 ### Поток рендера: формат
 
 - Запись идёт во время живого запуска, на диск во временный файл с фоновой записью (write-behind), чтобы не держать всё в памяти.
-- Позиции квантуются в 16-битные координаты в диапазоне ±16 м (шаг ≈ 0,5 мм — визуально неотличимо; запас за пределами арены нужен для вылетающих тел), углы — 16 бит, масштаб — 16 бит в диапазоне 0–8 м, цвета — индексы палитры.
+- Позиции квантуются в 16-битные координаты в диапазоне ±`PositionRange` (по умолчанию ±16 м, шаг ≈ 0,5 мм — визуально неотличимо; запас за пределами арены нужен для вылетающих тел), углы — 16 бит, масштаб и длины форм — 16 бит в диапазоне 0–`ScaleMax` (по умолчанию 8 м), цвета — индексы палитры. Параметры квантования (`RenderQuantization`) записываются в заголовок `.bvs` и **выбираются режимом на каждый поток** по протяжённости сцены из проверенных параметров:
+  - `PositionRange = max(16 м; 2^⌈log₂(наибольшая |координата| + запас)⌉)`, `ScaleMax = max(8 м; 2^⌈log₂(наибольший радиус или длина формы · 1,1)⌉)`;
+  - шаг позиции (`PositionRange / 32768`) не крупнее 1 пикселя кадра 1080p при самом мелком масштабе камеры режима;
+  - значения за пределами диапазона писатель обрезает молча, поэтому режим гарантирует их отсутствие: тела, ушедшие за `PositionRange − 1 м`, удаляются из потока. Тест round-trip каждого режима на предельных параметрах (§8.5).
+
+  | Режим | Протяжённость | `PositionRange` | `ScaleMax` |
+  |---|---|---|---|
+  | M01 | Кольца в потоке ≤ 12 м (§2.9) | 16 м | 16 м |
+  | M02 | Фигура ≤ 4,2 м; при «Эволюции» описанная окружность до 8,6 м | 16 м | 16 м |
+  | M05 | Башня до `platformCount · platformSpacing` ≤ 300 м по высоте | 16–512 м по формуле (по умолчанию 64 м) | 8 м |
 - Геометрия тел статична в локальных координатах и хранится один раз в **таблице форм** (круг, многоугольник, ломаная/цепочка, дуга/кольцо с прорезями, капсула); в кадре — только преобразование (позиция, угол, равномерный масштаб). Дополнительно: **слой сетки** (палитровые индексы клеток для M08, ключевой кадр + изменённые клетки) и **таблица строк** для подписей на шарах (имена, номера).
 - Между опорными кадрами — дельты от линейного прогноза, затем сжатие LZ4 по блокам.
 - Кольцевой буфер последних 5 запусков хранит потоки рендера, пока их суммарный размер ≤ 500 МБ (вытесняются старые потоки, реплеи остаются).
@@ -136,7 +145,7 @@ Chunks (TLV: tag[4] · length u32 · payload):
 1. Только фиксированный шаг 1/60 с и целочисленный тик. Никакого `Time.deltaTime` в логике.
 2. Только собственный ГСЧ `Core.Rng` (PCG32), отдельный поток ГСЧ на подсистему (генерация, правила, VFX), выводимый из сида. `UnityEngine.Random` и `System.Random` в логике запрещены (анализатор Roslyn в CI).
 3. Порядок итерации стабилен: списки и массивы, а не `Dictionary`/`HashSet` без сортировки.
-4. Контакты и события обрабатываются в стабильном порядке: решатель `Core.Sim` — по (bodyIdA, bodyIdB); будущий бэкенд Box2D — после сортировки по тем же ключам.
+4. Контакты и события обрабатываются в стабильном порядке: решатель `Core.Sim` сортирует события тика по (вид события, A, B), где A и B — id шара и коллайдера или двух шаров (A < B); будущий бэкенд Box2D — после сортировки по тем же ключам.
 5. Мир решателя однопоточный; параллельно идут только независимые миры (кандидаты генерации). Параллельные вычисления в логике режима — только без зависимости от порядка (никаких параллельных сумм `float`). Тригонометрия в логике — только `SimMath` (§6.5), не `System.Math.Sin/Cos`.
 6. Ввод применяется только на границе тика.
 7. Косметика (частицы, тряска камеры) использует свой поток ГСЧ, засеянный от (тик, id события), чтобы экспорт совпадал с предпросмотром.
@@ -199,11 +208,12 @@ projects/{uuid}/
            │    (релиз 1; позже NV12/P010 → текстуры Y/UV → шейдер YUV→RGB)    │
            │ c. Компоновщик: раскладка, разделитель, текст, водяной знак → RT  │
            │    кадра 1080×1920 (или 720×1280)                                 │
-           │ d. Релиз 1: без преобразования (RGBA/BGRA, Р24); позже —          │
+           │ d. Релиз 1: без преобразования (RGBA, Р24); позже —               │
            │    compute-шейдер RGB→NV12 (BT.709, limited range)                │
-           │ e. AsyncGPUReadback → NativeArray → IVideoWriter.AppendVideo(pts) │
-           │    (не более 3 кадров «в полёте»; обратное давление)               │
-           │ f. Каждые 2 с (граница GOP, IDR) — закрытие сегмента на диске     │
+           │ e. AsyncGPUReadback → NativeArray → IVideoWriter.TryAppend…/      │
+           │    AppendVideoFrame(pts) (≤ 3 кадров в полёте; обратное давление) │
+           │ f. Каждые 2 с (граница GOP) — финализация писателя сегмента       │
+           │    (отдельный файл, начинается с IDR) и запись состояния экспорта │
            └──────────────────────────────────────────────────────────────────┘
                          │
            ┌──────────────── финализация ─────────────────────────────────────┐
@@ -214,15 +224,14 @@ projects/{uuid}/
 ```
 
 - Звук кодируется **одной дорожкой целиком** до видеоцикла: офлайн-микс быстрый, а склейка AAC-сегментов давала бы щелчки из-за «priming»-сэмплов кодера.
-- Видео пишется **сегментами по 2 с**, каждый начинается с IDR-кадра. Это даёт паузу и возобновление экспорта (§3.8) и ограничивает потерю работы при сбое.
-- **Релиз 1 (минимум):** допускается запись одним файлом без сегментов. Тогда при уходе приложения в фон экспорт отменяется и после возврата запускается заново с начала; rewarded-просмотр сохраняется (RW4). Сегменты и возобновление — после релиза 1.
+- Видео пишется **сегментами по 2 с** (входит в релиз 1, §1.5). Сегмент — отдельный MP4-файл своего писателя `IVideoWriter` (каждый начинается с IDR-кадра); после закрытия сегмента C#-сторона атомарно записывает **состояние экспорта** (`ExportResumeState` в `Core`: снимок проекта, список готовых сегментов, индекс следующего кадра, путь AAC). При уходе в фон текущий незаконченный сегмент отбрасывается, по возвращении экспорт продолжается со следующего кадра после последнего готового сегмента; после выгрузки приложения — по предложению «Продолжить экспорт» (§3.8). Склейка — `ConcatSegmentsAsync` (ремультиплексирование без перекодирования). Нативному писателю сегменты не нужны: он остаётся простым кодером одного файла; к мосту добавляются только режим «без звука» в `VideoWriterOptions` и `ConcatSegmentsAsync`.
 - Цикл рендера не привязан к частоте экрана: за один кадр Unity обрабатывается столько кадров экспорта, сколько успевает в бюджет ~25 мс, затем обновляется индикатор прогресса. Камеры рендерятся вручную (`Camera.Render()` / рендер-граф URP в `RenderTexture`).
 - Экспорт использует **профиль качества «Экспорт»**: максимальное свечение, полные следы, сглаживание — независимо от тира (офлайн-рендер не ограничен FPS).
 - Предпросмотр в студии использует тот же компоновщик (шаг c), но видео пользователя берёт из потокового декодера в реальном времени, а симуляцию — из того же потока рендера.
 
 ### Релиз 1: формат кадров (Р24)
 
-Кадры через границу Unity ↔ нативный код в релизе 1 — RGBA/BGRA 8 бит (подробно — §6.4): iOS — `BGRA32` в `CVPixelBuffer` для `AVAssetWriter`; Android — `RGBA32` в прямом буфере → текстура GLES → входная `Surface` кодера `MediaCodec`. Импорт видео — декодер отдаёт RGBA в размере слота. Цена — ≈ 8,3 МБ на кадр 1080p против ≈ 3,1 МБ у NV12; NV12 на GPU — более поздняя оптимизация.
+Кадры через границу Unity ↔ нативный код в релизе 1 — `RGBA32` 8 бит, строки сверху вниз (подробно — §6.4): iOS — перестановка RGBA→BGRA в нативном коде и `CVPixelBuffer` для `AVAssetWriter`; Android — прямой буфер → текстура GLES → входная `Surface` кодера `MediaCodec`. Импорт видео — декодер отдаёт RGBA в размере слота (Android — CPU-преобразование из `ImageReader`). Цена — ≈ 8,3 МБ на кадр 1080p против ≈ 3,1 МБ у NV12; NV12 на GPU — более поздняя оптимизация.
 
 ### Оптимизация «нулевое копирование» (после релиза 1, при необходимости — раньше)
 
@@ -238,10 +247,11 @@ public interface IMediaBridge
 {
     Task<PickResult> PickVideoAsync(CancellationToken ct);                 // системный выбор + копирование в песочницу
     Task<MediaInfo> ProbeAsync(string path);                               // длительность, размер, fps, поворот, HDR, кодеки, наличие звука
-    IVideoReader OpenVideoReader(string path, VideoReaderOptions o);       // целевой размер, формат (релиз 1: RGBA32; позже NV12/P010), запрос SDR-тонмаппинга
+    IVideoReader OpenVideoReader(string path, VideoReaderOptions o);       // целевой размер, запрос SDR-тонмаппинга; релиз 1 — RGBA32 (позже NV12/P010)
     Task<PcmBuffer> DecodeAudioAsync(string path, int sampleRate, int channels, CancellationToken ct);
-    IVideoWriter OpenWriter(string outDir, VideoWriterOptions o);          // w, h, fps, bitrate, gop, профиль, формат кадра (RGBA32/BGRA32), flipY, сегмент 2 с
-    Task<string> FinalizeAsync(IVideoWriter w, string aacPath, string outFile);  // склейка, moov в начале
+    IVideoWriter OpenWriter(string outputPath, VideoWriterOptions o);      // w, h, fps, bitrate, gop, профиль, звук (для сегмента — без звука); один MP4
+    Task<VideoWriterResult> FinalizeAsync(IVideoWriter w, CancellationToken ct);  // закрыть файл, moov в начале
+    Task<string> ConcatSegmentsAsync(IReadOnlyList<string> segments, string aacPath, string outFile, CancellationToken ct);  // склейка без перекодирования + единая AAC-дорожка
     Task<GallerySaveResult> SaveToGalleryAsync(string file, string album);
     void Share(string file, string caption);
     DeviceSignals Signals { get; }                                         // thermal, lowPower, reduceMotion, reduceTransparency, freeSpace
@@ -251,20 +261,31 @@ public interface IVideoReader : IDisposable
 {
     // Оптимизирован для последовательного чтения вперёд; переход назад — через ближайший ключевой кадр.
     bool TryReadFrameAt(long ptsUs, out NativeFrame frame);                // релиз 1: RGBA, stride; позже Y/UV-плоскости, colorspace
+    bool ToneMappedToSdr { get; }                                          // HDR-источник приведён к SDR (системой или своим тонмаппингом)
 }
 
 public interface IVideoWriter : IDisposable
 {
-    void AppendVideo(NativeArray<byte> pixels, long ptsUs);                // релиз 1: RGBA32/BGRA32; позже NV12
+    bool TryAppendVideoFrame(NativeArray<byte> rgba, long ptsUs);          // релиз 1: RGBA32 сверху вниз; false — 3 кадра уже в полёте
+    void AppendVideoFrame(NativeArray<byte> rgba, long ptsUs);             // то же с ожиданием свободного места (тайм-аут)
     int  FramesInFlight { get; }
-    void CloseSegment();                                                   // на границе 2 с
-    ExportResumeState GetResumeState();
+    int  MaxFramesInFlight { get; }                                        // 3
 }
+// Состояние возобновления (ExportResumeState) хранит Core, а не нативный писатель.
 ```
 
 - **Релиз 1:** iOS — C ABI (`[DllImport("__Internal")]`) к функциям ObjC++ (`extern "C"`). Android — Java-классы плагина; управление через `AndroidJavaObject`, а кадры — **без поэлементного копирования через JNI**: C# передаёт прямой `ByteBuffer`, созданный над памятью `NativeArray` (`AndroidJNI.NewDirectByteBuffer`), и Java читает кадр из него.
 - **После релиза 1:** горячий путь Android переносится на C++ поверх NDK Media (`AMediaExtractor`, `AMediaCodec`, `AMediaMuxer`) с C ABI (`DllImport("mediabridge")`), Kotlin — только для системного UI (Photo Picker, MediaStore, «Поделиться») и сигналов; iOS — Swift.
-- Тонмаппинг HDR→SDR — по возможности системный (iOS: вывод через видеокомпозицию в SDR BT.709; Android 13+: запрос SDR-передачи у декодера), иначе собственный шейдер на P010.
+- **Тонмаппинг HDR→SDR** (`ProbeAsync` определяет передачу PQ / HLG / Dolby Vision; DV читается через совместимый базовый слой):
+
+  | Платформа | Путь |
+  |---|---|
+  | iOS 16+ | Системный: `AVAssetReader` с видеокомпозицией в SDR BT.709 |
+  | Android 13+ (API 33+) | Системный: запрос SDR-передачи у декодера (`KEY_COLOR_TRANSFER_REQUEST`); если декодер отказал — путь ниже |
+  | Android 12+ (API 31+) | Декодер отдаёт 10-битные кадры `YCBCR_P010` в `ImageReader`; собственный тонмаппинг при CPU-преобразовании: EOTF (PQ/HLG) → матрица BT.2020→BT.709 → тоновая кривая (Reinhard по max-RGB, белый 203 кд/м², пик 1000 кд/м²) → гамма BT.709 |
+  | Android 8–11 (API 26–30) | Если декодер отдаёт в `YUV_420_888` 16-битные отсчёты — тот же собственный тонмаппинг. Иначе кадры 8 бит без тонмаппинга: `ToneMappedToSdr = false`, студия показывает предупреждение при импорте (§3.2). Если декодер не может отдать кадры вовсе — ошибка `HdrUnsupported` с понятным сообщением |
+
+  Проверка — на телефонах владельца по чек-листу §8.6 (ролик HLG с iPhone).
 - Нативные библиотеки на Android собираются с выравниванием страниц **16 КБ** (требование Google Play для приложений под Android 15+). В релизе 1 своих `.so` нет (плагин на Java); требование касается библиотек Unity и SDK.
 - В редакторе Unity и в тестах работает фейковая реализация (декод через `VideoPlayer`, запись PNG-последовательности + WAV), чтобы студию можно было разрабатывать без устройства.
 
@@ -283,8 +304,9 @@ public interface IModeDefinition       // Ballverse.Core (чистый C#)
     ParamSchema Schema { get; }              // параметры режима поверх общих (§2.2)
     IReadOnlyList<Preset> BuiltInPresets { get; }
 
-    SceneSpec Generate(ParamSet p, Rng rng, GenerationStyle style);           // арена, тела, участники
-    IModeRuntime CreateRuntime(SceneSpec s, IPhysicsWorld w, SimContext ctx);  // правила
+    SceneSpec Generate(ParamSet p, Rng rng, GenerationStyle style);           // арена, тела, участники (только допустимые сочетания, §2.9)
+    IModeRules CreateRules(SceneSpec s, PhysicsWorld w);                     // правила (Core.Sim); релиз 1 — конкретный PhysicsWorld
+    IRenderMapper RenderMapper { get; }      // кадр потока рендера и HUD из состояния мира и правил; RenderQuantization потока (§7.4)
     ISpectacleScorer Scorer { get; }          // метрики §2.4
     IDirector Director { get; }               // кандидаты победителя, цели драматургии (может быть null)
     IAutopilot Autopilot { get; }             // для интерактивных (может быть null)
@@ -296,21 +318,25 @@ public interface IModeViewFactory       // Unity: Ballverse.Modes.Mxx
     IModeView CreateView(RenderContext rc);   // что и как рисовать из потока рендера
 }
 
-public interface IModeRuntime
+public interface IModeRules              // Ballverse.Core.Sim; вызывает SimRunner
 {
-    void Tick(in TickInput input);            // логика одного шага поверх физики
-    SimPhase Phase { get; }                   // Running / Finale / Finished
-    void WriteRenderState(RenderStateWriter w);
-    void DrainEvents(EventSink sink);         // для звука, VFX, HUD, реплея
+    void Start(SimRunner runner);                                    // сцена уже построена в runner.World
+    void Tick(SimRunner runner, ReadOnlySpan<SimInput> inputs);      // до шага физики: ввод, кинематика, рождение и рост шаров
+    void AfterPhysics(SimRunner runner);                             // после шага: события мира, разрушения, счёт, фаза
+    void OnTimeLimit(SimRunner runner);                              // предел 180 с: Finale по очкам или Finished
+    SimPhase Phase { get; }                                          // Running / Finale / Finished
     SimResult Result { get; }
-    ulong StateHash();
+    void AppendStateHash(XxHash64 hash);                             // счёт, счётчики, состояние ГСЧ правил
 }
+// События мира (PhysicsWorld.Events, порядок §7.4 правило 4) и события правил SimRunner передаёт в звук, VFX, HUD и реплей.
+// В волне 3 CreateRules принимает IPhysicsWorld (интерфейс выделяется из PhysicsWorld, §6.5).
 ```
 
 ### Схема параметров
 
 - Типы: `Float(min, max, step, unit)`, `Int`, `Bool`, `Enum`, `Color`, `ColorList`, `StringList(maxItems, maxLen)`, `Seed`, `Template` (выбор шаблона арены/трассы).
 - Атрибуты: группа, порядок, `live` (можно менять во время запуска), условие видимости (`visibleIf`), ограничения по тиру (`tierCap`), значение по умолчанию.
+- **Межпараметрические правила** (`Constraint`): ограничения, связывающие несколько параметров, — проходимость прорезей и конверт скоростей M01, предел упаковки M02, высота отскока и ширина просвета M05 (§2.9). Одна функция валидации применяется к панели (сужает диапазон зависимого ползунка и показывает подсказку), пресетам, Remote Config и импорту проектов (приводит к ближайшему допустимому и пишет в журнал) и генератору (строит только допустимое).
 - Панель настроек, сериализация пресетов, валидация и миграция параметров строятся **автоматически** по схеме. Новый режим не требует правок UI.
 
 ### Регистрация
@@ -375,7 +401,15 @@ public interface IModeRuntime
 
 - **Кэш прав** — локальный JSON, подписанный HMAC ключом устройства (Keychain / Android Keystore). Это не защита от взлома, а защита от случайной порчи и простого редактирования; источник истины — магазин.
 - Все сервисы имеют фейки: в редакторе и в автотестах реклама «показывается» мгновенно, покупки управляются тестовым конфигом.
-- **Релиз 1, до создания приложений в сторах:** тестовые сборки для владельца используют фейковую реализацию `IPurchases` (покупка, отмена, восстановление и возврат имитируются из меню разработчика) и тестовые рекламные блоки Google; после создания приложений в App Store Connect и Google Play — sandbox и лицензионные тестеры (§5.5). Релизная сборка фейков не содержит (§8.9).
+- **Варианты сборки** (символы компиляции; CI проверяет каждый, §8.5):
+
+  | Вариант | Оптимизация | Реклама | Покупки | Меню разработчика | Куда |
+  |---|---|---|---|---|---|
+  | `Dev` | отладочная | тестовые блоки Google | фейковый магазин | да | CI-артефакты для разработки |
+  | `OwnerTest` | релизная (IL2CPP, без отладки) | тестовые блоки Google | фейковый магазин до создания приложений в сторах, затем sandbox и лицензионные тестеры (§5.5) | скрытое (жест), для имитации покупок и возвратов | телефоны владельца: сборки дней 2–7 и RC1 (§11.1) |
+  | `Store` | релизная | боевые блоки AdMob | StoreKit 2 / Play Billing | нет | App Store и Google Play (этап П1) |
+
+  Фейки и тестовые ID физически отсутствуют только в `Store` (§8.9); требования к «релизной сборке» в разделах о безопасности и рекламе относятся к варианту `Store`.
 
 ## 7.10. Бэкенд
 
