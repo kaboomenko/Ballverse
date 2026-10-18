@@ -17,8 +17,9 @@ namespace Ballverse.Core.Generation
         /// <summary>
         /// Generation time (ms since the session started, the clock of <see cref="GenerationSession.Report"/>) at which the current
         /// budget runs out (spec §2.4 "time budget"). A run still going at that moment should be aborted and reported with
-        /// <c>finished = false</c>, <c>endedByLimit = false</c>: it then counts as <see cref="RejectReason.Incomplete"/> and its
-        /// report ends the phase. A later doubling or "Search longer" may extend the deadline; re-read it from the next step.
+        /// <c>finished = false</c>, <c>endedByLimit = false</c>: it then counts as <see cref="RejectReason.Incomplete"/>. A phase
+        /// that ran out of time ends only once every handed-out run has reported, so every in-flight run must be reported (aborted
+        /// or not). A later doubling or "Search longer" may extend the deadline; re-read it from the next step.
         /// </summary>
         public long DeadlineMs { get; }
 

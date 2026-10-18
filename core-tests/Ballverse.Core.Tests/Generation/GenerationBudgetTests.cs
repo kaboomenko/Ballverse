@@ -89,6 +89,29 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Equal(new GenerationBudget(5, 2500), t.Get(DeviceTier.B));
         }
 
+        [Theory]
+        [InlineData("{\"A\":{\"candidates\":2.5}}")]
+        [InlineData("{\"A\":{\"candidates\":24.7}}")]
+        [InlineData("{\"A\":{\"candidates\":12.0}}")]
+        [InlineData("{\"A\":{\"timeMs\":1500.9}}")]
+        [InlineData("{\"A\":{\"candidates\":\"12\"}}")]
+        [InlineData("{\"A\":{\"TimeMs\":\"1500\"}}")]
+        [InlineData("{\"A\":{\"candidates\":true}}")]
+        public void RemoteBudgetRejectsNonIntegerNumbersInsteadOfRounding(string json)
+        {
+            // QA round 1 #6: per-entry conversion used to round 2.5 -> 2 and 24.7 -> 25 silently.
+            var t = GenerationBudgetTable.Default.ApplyRemoteJson(json, out IReadOnlyList<string> warnings);
+            Assert.Single(warnings);
+            Assert.StartsWith("generation_budget_by_tier.A: invalid entry", warnings[0]);
+            Assert.Equal(GenerationBudget.TierA, t.Get(DeviceTier.A));
+
+            t = GenerationBudgetTable.Default.ApplyRemoteJson("{\"A\":{\"candidates\":12,\"timeMs\":null},\"B\":{\"candidates\":2.5}}",
+                out warnings);
+            Assert.Single(warnings);
+            Assert.Equal(new GenerationBudget(12, 1500), t.Get(DeviceTier.A));
+            Assert.Equal(GenerationBudget.TierB, t.Get(DeviceTier.B));
+        }
+
         [Fact]
         public void EmptyRemoteJsonKeepsTable()
         {

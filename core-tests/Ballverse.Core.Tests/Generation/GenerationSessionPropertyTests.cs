@@ -178,6 +178,118 @@ namespace Ballverse.Core.Tests.Generation
             Assert.True(outcomes[(int)GenerationOutcome.NearestWinner] > 0);
         }
 
+        /// <summary>Order in which reports sharing one elapsed time reach the session.</summary>
+        enum TieOrder
+        {
+            Ascending,
+            Descending,
+            Shuffled,
+        }
+
+        /// <summary>
+        /// Event-driven parallel driver: <paramref name="workers"/> headless runs at once, candidate k takes a quantized time, a run
+        /// still going at its <see cref="GenerationStep.DeadlineMs"/> is aborted and reported at the deadline (spec §2.4 time
+        /// budget). Reports sharing one timestamp are delivered in <paramref name="order"/>. Decisions: Search longer once, then
+        /// Take nearest.
+        /// </summary>
+        static GenerationSession RunParallel(GenerationSessionOptions o, ulong scenarioSeed, int workers, TieOrder order, ref Rng shuffle)
+        {
+            var session = new GenerationSession(o);
+            var inFlight = new List<KeyValuePair<int, long>>(); // index, report time
+            var aborted = new Dictionary<int, bool>();
+            long now = 0;
+            for (int guard = 0; guard < 100000; guard++)
+            {
+                while (inFlight.Count < workers)
+                {
+                    GenerationStep step = session.NextRequest();
+                    if (!step.IsRun) break;
+                    long runMs = 100L * Rng.FromSeed(scenarioSeed, 7000UL + (ulong)step.CandidateIndex).NextInt(1, 6);
+                    long end = Math.Min(now + runMs, Math.Max(now, step.DeadlineMs));
+                    aborted[step.CandidateIndex] = now + runMs > step.DeadlineMs;
+                    inFlight.Add(new KeyValuePair<int, long>(step.CandidateIndex, end));
+                }
+                if (inFlight.Count == 0)
+                {
+                    GenerationStep step = session.NextRequest();
+                    if (step.Kind == GenerationStepKind.Done) return session;
+                    Assert.Equal(GenerationStepKind.AwaitDecision, step.Kind);
+                    CheckInvariants(session, o);
+                    if (session.Result.SearchLongerCount == 0) session.SearchLonger();
+                    else session.TakeNearest();
+                    continue;
+                }
+                long t = long.MaxValue;
+                foreach (KeyValuePair<int, long> f in inFlight) t = Math.Min(t, f.Value);
+                var due = new List<int>();
+                for (int i = inFlight.Count - 1; i >= 0; i--)
+                {
+                    if (inFlight[i].Value != t) continue;
+                    due.Add(inFlight[i].Key);
+                    inFlight.RemoveAt(i);
+                }
+                due.Sort();
+                if (order == TieOrder.Descending) due.Reverse();
+                if (order == TieOrder.Shuffled)
+                {
+                    for (int i = due.Count - 1; i > 0; i--)
+                    {
+                        int j = shuffle.NextInt(0, i + 1);
+                        int tmp = due[i];
+                        due[i] = due[j];
+                        due[j] = tmp;
+                    }
+                }
+                now = t;
+                foreach (int k in due)
+                {
+                    CandidateRunSummary summary = aborted[k]
+                        ? new CandidateRunSummary(60, false, false, new int[0], 0, 0.0, 0.0, -1, o.ParticipantCount, null, false)
+                        : RandomCandidate(scenarioSeed, k, o.ParticipantCount, session.MaxTicks);
+                    Assert.True(session.Report(k, summary, now));
+                }
+            }
+            throw new InvalidOperationException("Session did not finish");
+        }
+
+        [Fact]
+        public void ParallelRunsWithSharedDeadlineTimestampsAreOrderIndependent()
+        {
+            // QA round 1 #1 / #3: reports at the same elapsed time (normal finishes and aborts at the deadline) arrive in an
+            // order set by thread timing; the outcome must not depend on it.
+            var outer = Rng.FromSeed(2024UL, 9);
+            int deadlineHits = 0;
+            for (int n = 0; n < 200; n++)
+            {
+                ulong sessionSeed = outer.NextULong();
+                ulong scenarioSeed = outer.NextULong();
+                GenerationSessionOptions o = RandomOptions(ref outer, sessionSeed);
+                o.Budget = new GenerationBudget(outer.NextInt(2, 16), 100L * outer.NextInt(2, 10));
+                int workers = outer.NextInt(1, 5);
+                var shuffle = Rng.FromSeed(outer.NextULong());
+
+                GenerationSession asc = RunParallel(o, scenarioSeed, workers, TieOrder.Ascending, ref shuffle);
+                GenerationSession desc = RunParallel(o, scenarioSeed, workers, TieOrder.Descending, ref shuffle);
+                GenerationSession mixed = RunParallel(o, scenarioSeed, workers, TieOrder.Shuffled, ref shuffle);
+                foreach (GenerationSession other in new[] { desc, mixed })
+                {
+                    Assert.Equal(asc.Result.Outcome, other.Result.Outcome);
+                    Assert.Equal(asc.Result.SelectedIndex, other.Result.SelectedIndex);
+                    Assert.Equal(asc.Result.CandidatesEvaluated, other.Result.CandidatesEvaluated);
+                    Assert.Equal(asc.Result.BudgetDoubled, other.Result.BudgetDoubled);
+                    Assert.Equal(asc.Result.ElapsedMs, other.Result.ElapsedMs);
+                    Assert.Equal(asc.Result.SearchLongerCount, other.Result.SearchLongerCount);
+                }
+                CheckInvariants(mixed, o);
+                Assert.Equal(0, mixed.OutstandingCount);
+                foreach (CandidateEvaluation e in asc.Evaluations)
+                {
+                    if (e.Breakdown.Rejected == RejectReason.Incomplete) deadlineHits++;
+                }
+            }
+            Assert.True(deadlineHits > 50); // the time budget, not only the count, ends many phases
+        }
+
         [Fact]
         public void CandidateOrderOfEqualScoresDecidesByIndex()
         {

@@ -186,16 +186,17 @@ namespace Ballverse.Core.Tests.Generation
         public void ForcedWinnerMultipliesBudgetUpToFour(int participants, int multiplier)
         {
             var session = new GenerationSession(Forced(0, participants));
-            Assert.Equal(new GenerationBudget(4 * multiplier, 1000L * multiplier), session.PhaseBudget);
+            // Spec §2.5: only the candidate budget is multiplied; the time budget stays the tier's (QA round 1 #2).
+            Assert.Equal(new GenerationBudget(4 * multiplier, 1000L), session.PhaseBudget);
             Assert.Equal(multiplier, GenerationSession.BudgetMultiplier(0, participants));
         }
 
         [Fact]
-        public void ForcedWinnerTimeCanBeCappedExplicitly()
+        public void ForcedWinnerTimeCanBeSetExplicitly()
         {
             GenerationSessionOptions o = Forced(0, 4);
-            o.ForcedWinnerTimeMs = 1500;
-            Assert.Equal(new GenerationBudget(16, 1500), new GenerationSession(o).PhaseBudget);
+            o.ForcedWinnerTimeMs = 4000;
+            Assert.Equal(new GenerationBudget(16, 4000), new GenerationSession(o).PhaseBudget);
             GenerationSessionOptions plain = Runs.Options();
             plain.ForcedWinnerTimeMs = 1500; // ignored without a forced winner
             Assert.Equal(new GenerationBudget(4, 1000), new GenerationSession(plain).PhaseBudget);
@@ -204,39 +205,41 @@ namespace Ballverse.Core.Tests.Generation
         [Fact]
         public void ForcedWinnerNotFoundIsOfferedAfterTheFirstPhase()
         {
-            // QA probe P16: M03, tier B, 8 participants, 150 ms per candidate. Previously 128 candidates / 19.2 s before the prompt.
+            // QA probes P16 / V7: M03, tier B, 8 participants, 150 ms per sequential candidate. The phase keeps the tier B time
+            // budget (2.5 s, spec §2.4 table and acceptance); only the candidate count is ×4 (spec §2.5).
             GenerationSessionOptions o = GenerationSessionOptions.ForMode(ModeCode.M03, DeviceTier.B, 5UL, Runs.Target);
             o.ForcedWinner = 7;
             o.ParticipantCount = 8;
             var session = new GenerationSession(o);
-            Assert.Equal(new GenerationBudget(64, 10000), session.PhaseBudget);
+            Assert.Equal(new GenerationBudget(64, 2500), session.PhaseBudget);
             Runs.Drive(session, k => Runs.Good(winner: k % 7, participants: 8), k => 150L * (k + 1));
             Assert.Equal(GenerationOutcome.WinnerNotFound, session.Result.Outcome);
-            Assert.Equal(64, session.Result.CandidatesEvaluated);
-            Assert.Equal(9600, session.Result.ElapsedMs);
+            Assert.Equal(17, session.Result.CandidatesEvaluated);
+            Assert.Equal(2550, session.Result.ElapsedMs);
             Assert.False(session.Result.BudgetDoubled);
 
-            o.ForcedWinnerTimeMs = 2500;
-            var capped = new GenerationSession(o);
-            Runs.Drive(capped, k => Runs.Good(winner: k % 7, participants: 8), k => 150L * (k + 1));
-            Assert.Equal(GenerationOutcome.WinnerNotFound, capped.Result.Outcome);
-            Assert.Equal(17, capped.Result.CandidatesEvaluated);
-            Assert.Equal(2550, capped.Result.ElapsedMs);
+            o.ForcedWinnerTimeMs = 10000; // opt-in longer forced-winner phase
+            var longer = new GenerationSession(o);
+            Assert.Equal(new GenerationBudget(64, 10000), longer.PhaseBudget);
+            Runs.Drive(longer, k => Runs.Good(winner: k % 7, participants: 8), k => 150L * (k + 1));
+            Assert.Equal(GenerationOutcome.WinnerNotFound, longer.Result.Outcome);
+            Assert.Equal(64, longer.Result.CandidatesEvaluated);
+            Assert.Equal(9600, longer.Result.ElapsedMs);
         }
 
         [Fact]
         public void SearchLongerAfterTimeLimitedPhaseAddsExactlyOnePhaseOfCandidates()
         {
-            // Phase 1 (8 candidates / 2000 ms with ×2) ends by time after 5 candidates.
+            // Phase 1 (8 candidates ×2 / 1000 ms) ends by time after 3 candidates (1200 ms).
             var session = new GenerationSession(Forced(1, 2));
             Runs.Drive(session, k => Runs.Good(winner: 0, participants: 2), k => 400L * (k + 1));
             Assert.Equal(GenerationOutcome.WinnerNotFound, session.Result.Outcome);
-            Assert.Equal(5, session.Evaluations.Count);
+            Assert.Equal(3, session.Evaluations.Count);
             session.SearchLonger();
-            Assert.Equal(5 + session.PhaseBudget.Candidates, session.CandidateLimit);
-            Assert.Equal(2000 + session.PhaseBudget.TimeMs, session.TimeLimitMs);
-            Runs.Drive(session, k => Runs.Good(winner: 0, participants: 2), k => 2000L + k);
-            Assert.Equal(13, session.Result.CandidatesEvaluated);
+            Assert.Equal(3 + session.PhaseBudget.Candidates, session.CandidateLimit);
+            Assert.Equal(1200 + session.PhaseBudget.TimeMs, session.TimeLimitMs);
+            Runs.Drive(session, k => Runs.Good(winner: 0, participants: 2), k => 1300L + k);
+            Assert.Equal(11, session.Result.CandidatesEvaluated);
         }
 
         [Fact]
@@ -302,7 +305,7 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Equal(GenerationStatus.Running, session.Status);
             Assert.Null(session.Result);
             Assert.Equal(8 + 8, session.CandidateLimit);
-            Assert.Equal(80 + 2000, session.TimeLimitMs);
+            Assert.Equal(80 + 1000, session.TimeLimitMs);
             GenerationStep step = Runs.Drive(session, summaries, k => 10L * (k + 1));
             Assert.Equal(GenerationStepKind.Done, step.Kind);
             GenerationResult r = session.Result;
@@ -630,7 +633,7 @@ namespace Ballverse.Core.Tests.Generation
             race.ForcedWinner = 2;
             race.ParticipantCount = 6;
             race.Goal = DirectorGoal.Comeback;
-            Assert.Equal(new GenerationBudget(64, 10000), new GenerationSession(race).PhaseBudget);
+            Assert.Equal(new GenerationBudget(64, 2500), new GenerationSession(race).PhaseBudget);
         }
 
         [Fact]
@@ -818,38 +821,150 @@ namespace Ballverse.Core.Tests.Generation
         }
 
         [Fact]
-        public void TimeEndedPhaseConsidersOnlyTheContiguousPrefix()
+        public void TimeEndedPhaseWaitsForEveryHandedOutRun()
         {
             var session = new GenerationSession(Runs.Options(candidates: 4, timeMs: 1000));
             session.NextRequest();
             session.NextRequest();
-            // Candidate 1 (good) arrives first, after the time budget: candidate 0 is still running, so nothing is evaluated
-            // yet, nothing passes, and the one-time doubling keeps the session running.
+            // Candidate 1 (good) arrives first, after the time budget, while candidate 0 is still running: no new candidates,
+            // and the phase waits for candidate 0 instead of ending on an empty prefix (QA round 1 #1).
             Assert.True(session.Report(1, Runs.Good(), 1100));
             Assert.Empty(session.Evaluations);
-            Assert.True(session.BudgetDoubled);
+            Assert.False(session.BudgetDoubled);
             Assert.Equal(GenerationStatus.Running, session.Status);
-            Assert.Equal(2000, session.NextRequest().DeadlineMs);
+            Assert.Equal(GenerationStepKind.Wait, session.NextRequest().Kind);
             Assert.True(session.Report(0, Runs.Bad(), 1200));
-            Assert.Equal(2, session.Evaluations.Count);
-            Assert.True(session.Report(2, Runs.Bad(), 2100));
             Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
             Assert.Equal(1, session.Result.SelectedIndex);
+            Assert.Equal(2, session.Result.CandidatesEvaluated);
+            Assert.False(session.Result.BudgetDoubled);
+            Assert.Equal(1000, session.TimeLimitMs);
         }
 
         [Fact]
-        public void LateReportsOfAbandonedRunsAreIgnored()
+        public void ReportsAfterTheDeadlineAreAllRankedAndLateOnesAfterCompletionIgnored()
         {
             var session = new GenerationSession(Runs.Options(candidates: 10, timeMs: 1000));
             for (int i = 0; i < 3; i++) session.NextRequest();
-            Assert.True(session.Report(2, Runs.Good(), 900));
-            Assert.True(session.Report(0, Runs.Good(), 1500)); // time is up; prefix [0] passes
+            Assert.True(session.Report(2, Runs.Good(tension: 1.0), 900));
+            Assert.True(session.Report(0, Runs.Good(), 1500)); // time is up; candidate 1 is still outstanding
+            Assert.Equal(GenerationStatus.Running, session.Status);
+            Assert.Equal(2, session.OutstandingCount); // 1 running, 2 buffered
+            Assert.True(session.Report(1, Runs.Bad(), 1600));
             Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
-            Assert.Equal(0, session.Result.SelectedIndex);
-            Assert.Equal(1, session.Result.CandidatesEvaluated);
+            Assert.Equal(2, session.Result.SelectedIndex); // the buffered best candidate is not thrown away
+            Assert.Equal(3, session.Result.CandidatesEvaluated);
             Assert.Equal(0, session.OutstandingCount);
-            Assert.False(session.Report(1, Runs.Good(), 1600));
-            Assert.Single(session.Evaluations);
+            Assert.False(session.Report(3, Runs.Good(), 1700));
+            Assert.Equal(3, session.Evaluations.Count);
+        }
+
+        [Fact]
+        public void ReportOrderAtTheDeadlineDoesNotChangeTheOutcome()
+        {
+            // QA probe V1: 0 and 1 issued, 1 (good) reported at 600 ms, 2 issued; at the 1000 ms deadline 0 and 2 are aborted and
+            // reported at the same elapsed time in either order.
+            CandidateRunSummary aborted = Runs.Make(durationTicks: 300, finished: false);
+            var a = new GenerationSession(Runs.Options(candidates: 4, timeMs: 1000));
+            var b = new GenerationSession(Runs.Options(candidates: 4, timeMs: 1000));
+            foreach (GenerationSession s in new[] { a, b })
+            {
+                Assert.Equal(0, s.NextRequest().CandidateIndex);
+                Assert.Equal(1, s.NextRequest().CandidateIndex);
+                s.Report(1, Runs.Good(), 600);
+                Assert.Equal(2, s.NextRequest().CandidateIndex);
+            }
+            a.Report(0, aborted, 1000);
+            a.Report(2, aborted, 1000);
+            b.Report(2, aborted, 1000);
+            b.Report(0, aborted, 1000);
+            foreach (GenerationSession s in new[] { a, b })
+            {
+                Assert.Equal(GenerationStatus.Completed, s.Status);
+                Assert.Equal(GenerationOutcome.Success, s.Result.Outcome);
+                Assert.Equal(1, s.Result.SelectedIndex);
+                Assert.Equal(3, s.Result.CandidatesEvaluated);
+                Assert.False(s.Result.BudgetDoubled);
+                Assert.Equal(1000, s.TimeLimitMs);
+            }
+        }
+
+        [Fact]
+        public void PassingCandidateReportedAtTheDoubledDeadlineIsKept()
+        {
+            // QA probe V2: phase 1 ends by count with nothing passing, the budget doubles to 4 / 2000 ms; candidate 3 (good) is
+            // reported at the deadline while candidate 2 is still being aborted.
+            var s = new GenerationSession(Runs.Options(candidates: 2, timeMs: 1000));
+            s.NextRequest();
+            s.NextRequest();
+            s.Report(0, Runs.Bad(), 100);
+            s.Report(1, Runs.Bad(), 200);
+            Assert.True(s.BudgetDoubled);
+            Assert.Equal(2, s.NextRequest().CandidateIndex);
+            Assert.Equal(3, s.NextRequest().CandidateIndex);
+            s.Report(3, Runs.Good(), 2000);
+            Assert.Equal(GenerationStatus.Running, s.Status);
+            s.Report(2, Runs.Make(durationTicks: 300, finished: false), 2000);
+            Assert.Equal(GenerationOutcome.Success, s.Result.Outcome);
+            Assert.Equal(3, s.Result.SelectedIndex);
+            Assert.False(s.Result.QualityBelowThreshold);
+        }
+
+        [Fact]
+        public void WinnerNotFoundWaitsForInFlightRunsAndSearchLongerUsesNewIndices()
+        {
+            // QA probes V3 / K16: forced winner 1 of 2 (phase 8 / 1000 ms); 3 handed out, 0 and 1 reported, the second past the
+            // deadline. The decision is offered only after candidate 2 reports, so nothing is abandoned and "Search longer" never
+            // re-issues an index: a stale report cannot be credited to a new run.
+            var s = new GenerationSession(Forced(1, 2));
+            for (int i = 0; i < 3; i++) s.NextRequest();
+            s.Report(0, Runs.Good(winner: 0, participants: 2), 900);
+            s.Report(1, Runs.Good(winner: 0, participants: 2), 1100);
+            Assert.Equal(GenerationStatus.Running, s.Status);
+            Assert.Equal(GenerationStepKind.Wait, s.NextRequest().Kind);
+            s.Report(2, Runs.Make(durationTicks: 300, finished: false, winner: 1, participants: 2), 1100);
+            Assert.Equal(GenerationOutcome.WinnerNotFound, s.Result.Outcome);
+            Assert.Equal(3, s.Result.CandidatesEvaluated);
+            Assert.Equal(0, s.OutstandingCount);
+            s.SearchLonger();
+            GenerationStep step = s.NextRequest();
+            Assert.Equal(3, step.CandidateIndex);
+            Assert.Equal(CandidateSeeds.ForCandidate(12345UL, 3), step.Seed);
+            Assert.Throws<InvalidOperationException>(() => s.Report(2, Runs.Good(winner: 1, participants: 2), 1150));
+            Assert.True(s.Report(3, Runs.Good(winner: 1, participants: 2), 1200)); // limits now 11 candidates / 2100 ms
+            GenerationStep last = Runs.Drive(s, k => Runs.Good(winner: 0, participants: 2), k => 1300L + k);
+            Assert.Equal(GenerationStepKind.Done, last.Kind);
+            Assert.Equal(GenerationOutcome.Success, s.Result.Outcome);
+            Assert.Equal(3, s.Result.SelectedIndex);
+        }
+
+        [Fact]
+        public void LastSecondGoalIsMetAtExactlyTheTensionGoal()
+        {
+            GenerationSessionOptions o = Runs.Options(candidates: 1);
+            o.Goal = DirectorGoal.LastSecond;
+            var s = new GenerationSession(o);
+            Runs.Drive(s, k => Runs.Make(tension: GenerationSession.LastSecondTensionGoal));
+            Assert.True(s.Evaluations[0].GoalMet);
+            Assert.True(s.Result.GoalMet);
+        }
+
+        [Fact]
+        public void ReportThatThrowsChangesNothingAndTheIndexCanBeReportedAgain()
+        {
+            // QA probe V4: an inconsistent summary throws before any state changes; the index stays outstanding until it is
+            // reported again (here as an aborted run), then the session completes.
+            var s = new GenerationSession(Runs.Options(candidates: 2, timeMs: 1000));
+            s.NextRequest();
+            s.NextRequest();
+            Assert.Throws<ArgumentException>(() => s.Report(0, Runs.Make(durationTicks: 5000, finished: false, endedByLimit: true), 10));
+            Assert.Equal(2, s.OutstandingCount);
+            Assert.True(s.Report(1, Runs.Good(), 20));
+            Assert.Equal(GenerationStepKind.Wait, s.NextRequest().Kind);
+            Assert.True(s.Report(0, Runs.Make(durationTicks: 300, finished: false), 30));
+            Assert.Equal(RejectReason.Incomplete, s.Evaluations[0].Breakdown.Rejected);
+            Assert.Equal(GenerationOutcome.Success, s.Result.Outcome);
+            Assert.Equal(1, s.Result.SelectedIndex);
         }
 
         [Fact]

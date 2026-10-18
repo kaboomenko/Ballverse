@@ -55,7 +55,8 @@ namespace Ballverse.Core.Generation
                     warn.Add("generation_budget_by_tier." + key + ": unknown tier");
                     continue;
                 }
-                if (!RemoteJson.TryConvert(entries[key], "generation_budget_by_tier." + key, warn, out GenerationBudgetDto dto)) continue;
+                if (!RemoteJson.TryConvert(entries[key], "generation_budget_by_tier." + key, warn, out GenerationBudgetDto dto,
+                    "candidates", "timeMs")) continue;
                 GenerationBudget current = result[tierIndex];
                 int candidates = dto.Candidates ?? current.Candidates;
                 long timeMs = dto.TimeMs ?? current.TimeMs;

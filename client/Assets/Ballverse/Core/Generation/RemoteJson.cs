@@ -40,8 +40,13 @@ namespace Ballverse.Core.Generation
             return entries;
         }
 
-        /// <summary>Converts one entry; on a null, non-object or wrongly typed entry adds a warning for <paramref name="path"/>.</summary>
-        public static bool TryConvert<T>(JToken token, string path, List<string> warnings, out T value) where T : class
+        /// <summary>
+        /// Converts one entry; on a null, non-object or wrongly typed entry adds a warning for <paramref name="path"/>.
+        /// Fields named in <paramref name="integerFields"/> (matched case-insensitively, like the deserializer) must be JSON
+        /// integers or null: a fractional number or a quoted number is rejected instead of being silently rounded or parsed.
+        /// </summary>
+        public static bool TryConvert<T>(JToken token, string path, List<string> warnings, out T value, params string[] integerFields)
+            where T : class
         {
             value = null;
             if (token == null || token.Type == JTokenType.Null)
@@ -53,6 +58,16 @@ namespace Ballverse.Core.Generation
             {
                 warnings.Add(path + ": entry must be an object, got " + token.Type);
                 return false;
+            }
+            foreach (JProperty p in ((JObject)token).Properties())
+            {
+                if (p.Value.Type == JTokenType.Integer || p.Value.Type == JTokenType.Null) continue;
+                foreach (string field in integerFields)
+                {
+                    if (!string.Equals(p.Name, field, StringComparison.OrdinalIgnoreCase)) continue;
+                    warnings.Add(path + ": invalid entry (" + p.Name + " must be an integer, got " + p.Value.Type + ")");
+                    return false;
+                }
             }
             try
             {

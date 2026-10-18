@@ -11,9 +11,12 @@ namespace Ballverse.Core.Generation
     /// Parallel runs (spec §2.4 step 3, §6.5, §7.11 "headless candidates in separate PhysicsWorlds"): every
     /// <see cref="NextRequest"/> call hands out the next candidate index until the current candidate limit is reached (then it
     /// returns <see cref="GenerationStepKind.Wait"/>), and <see cref="Report"/> accepts any outstanding index in any order.
-    /// Reports are buffered and evaluated strictly in index order, so with the same summaries the choice never depends on which
-    /// worker finished first; a phase that ends by time only considers the contiguous prefix of reported candidates. A sequential
-    /// caller simply alternates NextRequest / Report.
+    /// Reports are buffered and evaluated strictly in index order. A phase ends only when no handed-out run is outstanding: by
+    /// count once every candidate of the limit is reported, by time once some report reached the time limit (no new candidates
+    /// are handed out from then on) and every run already handed out has reported. The caller bounds that wait by aborting
+    /// runs at <see cref="GenerationStep.DeadlineMs"/> and reporting them as aborted. So with the same handed-out candidates and
+    /// the same summaries the choice never depends on which worker finished first or on the order of reports at the deadline.
+    /// A sequential caller simply alternates NextRequest / Report.
     /// </para>
     /// <para>
     /// Flow: run candidates until the budget (count or time, whichever first) is exhausted. If a candidate passes the quality
@@ -33,7 +36,7 @@ namespace Ballverse.Core.Generation
     /// </summary>
     public sealed class GenerationSession
     {
-        /// <summary>Forced winner multiplies the budget by the participant count, at most ×4 (spec §2.5).</summary>
+        /// <summary>Forced winner multiplies the candidate budget by the participant count, at most ×4 (spec §2.5).</summary>
         public const int MaxForcedWinnerMultiplier = 4;
 
         /// <summary>Headless runs stop at target × 1.3 (spec §2.4 step 3).</summary>
@@ -69,9 +72,10 @@ namespace Ballverse.Core.Generation
             _interactive = _options.EffectiveInteractive;
 
             int multiplier = BudgetMultiplier(_options.ForcedWinner, _options.ParticipantCount);
+            // Spec §2.5 multiplies only the candidate budget; the time budget stays the tier's unless explicitly overridden.
             long phaseTime = HasForcedWinner && _options.ForcedWinnerTimeMs.HasValue
                 ? _options.ForcedWinnerTimeMs.Value
-                : checked(_options.Budget.TimeMs * multiplier);
+                : _options.Budget.TimeMs;
             _phaseBudget = new GenerationBudget(checked(_options.Budget.Candidates * multiplier), phaseTime);
             _maxTicks = RunLimitTicks(_options.TargetDurationTicks);
             _countLimit = _phaseBudget.Candidates;
@@ -88,8 +92,9 @@ namespace Ballverse.Core.Generation
         public IReadOnlyList<CandidateEvaluation> Evaluations => _evaluations;
 
         /// <summary>
-        /// Budget of one phase: candidates × the forced-winner multiplier, time × the multiplier or
-        /// <see cref="GenerationSessionOptions.ForcedWinnerTimeMs"/> (the doubling and "Search longer" each add one more).
+        /// Budget of one phase: candidates × the forced-winner multiplier (spec §2.5); time = the base budget's, or
+        /// <see cref="GenerationSessionOptions.ForcedWinnerTimeMs"/> with a forced winner when set (the doubling and "Search longer"
+        /// each add one more phase).
         /// </summary>
         public GenerationBudget PhaseBudget => _phaseBudget;
 
@@ -112,7 +117,7 @@ namespace Ballverse.Core.Generation
 
         /// <summary>
         /// Budget multiplier for a forced winner: the participant count capped at ×4 (spec §2.5); 1 without a forced winner.
-        /// It multiplies the candidate count, and the time budget unless <see cref="GenerationSessionOptions.ForcedWinnerTimeMs"/> is set.
+        /// It multiplies the candidate count only; the time budget is the base one (or <see cref="GenerationSessionOptions.ForcedWinnerTimeMs"/>).
         /// </summary>
         public static int BudgetMultiplier(int forcedWinner, int participantCount)
         {
@@ -135,7 +140,7 @@ namespace Ballverse.Core.Generation
 
         /// <summary>
         /// The next instruction. While running, each call hands out a new candidate (index order) until the current count limit is
-        /// reached or the time budget ran out; then <see cref="GenerationStepKind.Wait"/> until outstanding runs are reported.
+        /// reached or a report reached the time limit; then <see cref="GenerationStepKind.Wait"/> until outstanding runs are reported.
         /// </summary>
         public GenerationStep NextRequest()
         {
@@ -158,7 +163,14 @@ namespace Ballverse.Core.Generation
         /// Reports an outstanding candidate's run, in any order. <paramref name="elapsedMsSoFar"/> is the total generation time
         /// measured by the caller since the session started (excluding time spent waiting for the user's decision); it must not
         /// decrease between calls. Returns false, ignoring the report, when the session is no longer running (completed, cancelled
-        /// or awaiting the decision): runs still in flight at that moment are abandoned.
+        /// or awaiting the decision). A phase only ends once every handed-out run has reported, so runs are abandoned only by
+        /// <see cref="Cancel"/>; "Search longer" never re-issues an index.
+        /// <para>
+        /// Every exception is thrown before any state changes: the report is not recorded and the candidate stays outstanding,
+        /// which blocks the phase from ending. After an <see cref="ArgumentException"/> (a Sim bug) the caller must report the
+        /// same index again with a valid summary, e.g. an aborted one (<c>finished = false</c>, <c>endedByLimit = false</c>,
+        /// rejected as <see cref="RejectReason.Incomplete"/>), or <see cref="Cancel"/> the session.
+        /// </para>
         /// </summary>
         /// <exception cref="InvalidOperationException">The candidate was not handed out or was already reported.</exception>
         /// <exception cref="ArgumentNullException">summary is null.</exception>
@@ -191,11 +203,16 @@ namespace Ballverse.Core.Generation
                 _evaluations.Add(Evaluate(_evaluations.Count, next));
             }
 
-            if (_evaluations.Count >= _countLimit || _lastElapsedMs >= _timeLimitMs) EndPhase();
+            // Count limit: every candidate of the limit is evaluated (hence none is outstanding). Time limit: wait until every
+            // handed-out run has reported, so the phase ranks all of them whatever the report order at the deadline.
+            if (OutstandingCount == 0 && (_evaluations.Count >= _countLimit || _lastElapsedMs >= _timeLimitMs)) EndPhase();
             return true;
         }
 
-        /// <summary>"Search longer" (spec §2.5): one more phase budget from the current position, then the same evaluation again.</summary>
+        /// <summary>
+        /// "Search longer" (spec §2.5): one more phase budget from the current position (new candidate indices), then the same
+        /// evaluation again.
+        /// </summary>
         /// <exception cref="InvalidOperationException">The session is not waiting for a decision.</exception>
         public void SearchLonger()
         {
@@ -227,7 +244,8 @@ namespace Ballverse.Core.Generation
         {
             if (_status == GenerationStatus.Completed || _status == GenerationStatus.Cancelled) return;
             _status = GenerationStatus.Cancelled;
-            AbandonOutstanding();
+            _issued = _evaluations.Count;
+            _buffered.Clear();
             _result = new GenerationResult(GenerationOutcome.Cancelled, null, -1, _evaluations.Count, _lastElapsedMs, _doubled,
                 _searchLongerCount, HasForcedWinner, false);
         }
@@ -253,6 +271,7 @@ namespace Ballverse.Core.Generation
                 matches, comeback, goalMet, passes);
         }
 
+        /// <summary>Ends a phase; only called when no handed-out run is outstanding, so every reported candidate is ranked.</summary>
         void EndPhase()
         {
             CandidateEvaluation bestMatching;
@@ -287,7 +306,6 @@ namespace Ballverse.Core.Generation
             {
                 CandidateEvaluation nearest = Best(e => !e.IsRejected);
                 _status = GenerationStatus.AwaitingDecision;
-                AbandonOutstanding();
                 _result = new GenerationResult(GenerationOutcome.WinnerNotFound, null, nearest?.Index ?? -1, _evaluations.Count,
                     _lastElapsedMs, _doubled, _searchLongerCount, true, false);
                 return;
@@ -298,16 +316,8 @@ namespace Ballverse.Core.Generation
         void Complete(GenerationOutcome outcome, CandidateEvaluation selected)
         {
             _status = GenerationStatus.Completed;
-            AbandonOutstanding();
             _result = new GenerationResult(outcome, selected, -1, _evaluations.Count, _lastElapsedMs, _doubled, _searchLongerCount,
                 HasForcedWinner, selected != null && selected.GoalMet);
-        }
-
-        /// <summary>Forgets handed-out candidates that were not evaluated; "Search longer" re-issues them from the same index.</summary>
-        void AbandonOutstanding()
-        {
-            _issued = _evaluations.Count;
-            _buffered.Clear();
         }
 
         /// <summary>Best candidate matching the filter by the goal-aware ranking; ties go to the lowest index.</summary>

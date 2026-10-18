@@ -52,10 +52,11 @@ namespace Ballverse.Core.Generation
         public DensityRange Density { get; set; } = new DensityRange(1.0, 8.0);
 
         /// <summary>
-        /// Time budget of one phase with a forced winner, in ms; null (default) scales <see cref="Budget"/>'s time by the same
-        /// ×N as the candidate count (<see cref="GenerationSession.BudgetMultiplier"/>). Spec §2.5 only multiplies the candidate
-        /// budget; without more time the extra candidates could not run, so scaling is the default, and this caps it explicitly
-        /// (pending an owner decision, e.g. a forced-winner time column in <c>generation_budget_by_tier</c>).
+        /// Time budget of one phase with a forced winner, in ms. Null (default) keeps <see cref="Budget"/>'s time: spec §2.5 only
+        /// multiplies the candidate budget (×N, <see cref="GenerationSession.BudgetMultiplier"/>), and the tier time budget
+        /// (spec §2.4 table, acceptance "≤ 2,5 с on tier B") stays, so the extra candidates come from parallel runs. Set it to
+        /// opt in to a longer forced-winner phase (e.g. <c>Budget.TimeMs × BudgetMultiplier</c>). Open question for the owner:
+        /// whether <c>generation_budget_by_tier</c> (spec §9.3) gets a forced-winner time column; until then the spec default applies.
         /// </summary>
         public long? ForcedWinnerTimeMs { get; set; }
 

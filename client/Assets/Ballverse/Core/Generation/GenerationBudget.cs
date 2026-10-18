@@ -51,7 +51,8 @@ namespace Ballverse.Core.Generation
         }
 
         /// <summary>
-        /// Budget multiplied by <paramref name="factor"/> on both limits (spec §2.5 forced winner: ×N).
+        /// Budget multiplied by <paramref name="factor"/> on both limits (e.g. an opt-in forced-winner time budget; the session
+        /// itself scales only the candidate count, spec §2.5).
         /// </summary>
         public GenerationBudget Scale(int factor)
         {
