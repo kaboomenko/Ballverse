@@ -103,27 +103,31 @@ namespace Ballverse.Core.Monetization
 
         /// <summary>
         /// The one-time screen after the first-video quest (spec §5.2 "После выполнения квеста первого ролика — Один экран с
-        /// All Modes — Один раз"): All Modes when not yet shown and the smart storefront shows it; otherwise empty.
+        /// All Modes — Один раз"; spec §4.3 "без давления, кнопка «Позже» равнозначна по размеру"): All Modes when not yet
+        /// shown and the smart storefront shows it; otherwise <see cref="FirstVideoQuestScreen.None"/>.
+        /// <para>
+        /// "Без давления": unlike the paid-card sheet, the offer is not <see cref="StorefrontOffer.Emphasized"/>, and the
+        /// screen carries a «Позже» button of equal weight (<see cref="FirstVideoQuestScreen.LaterButtonWeight"/>).
+        /// </para>
         /// <para>
         /// Decision: when the storefront hides All Modes (owned, nothing new, every mode already available, or only one mode
         /// missing so the single is the cheaper equivalent) the screen is skipped rather than replaced, consistent with
         /// <see cref="Storefront.ModeSheet"/>. The caller persists <paramref name="alreadyShown"/> = true once the screen is
-        /// displayed; a skipped screen may be persisted as shown too, so it never appears later.
+        /// displayed (whether bought or dismissed with «Позже»); a skipped screen may be persisted as shown too, so it never
+        /// appears later. A screen suppressed only by <paramref name="interstitialJustShown"/> is not consumed.
         /// </para>
         /// </summary>
         /// <param name="alreadyShown">Persisted one-shot flag.</param>
         /// <param name="interstitialJustShown">An interstitial closed right before this screen (spec §5.2 "После interstitial").</param>
         /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
-        public static IReadOnlyList<StorefrontOffer> FirstVideoQuestOffers(bool alreadyShown, IEnumerable<string> ownedProductIds,
+        public static FirstVideoQuestScreen FirstVideoQuest(bool alreadyShown, IEnumerable<string> ownedProductIds,
             bool interstitialJustShown = false, MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
-            var result = new List<StorefrontOffer>();
-            if (alreadyShown || interstitialJustShown) return result;
+            if (alreadyShown || interstitialJustShown) return FirstVideoQuestScreen.None;
             var all = Storefront.Build(ownedProductIds, config, grandfathered).Get(ProductIds.AllModes);
-            if (all.Visible) result.Add(all.WithEmphasis(true));
-            return result;
+            return all.Visible ? new FirstVideoQuestScreen(all.WithEmphasis(false)) : FirstVideoQuestScreen.None;
         }
     }
 }

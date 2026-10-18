@@ -34,6 +34,83 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(expected, SalePointPolicy.ShouldShowDoneScreenLine(export, lastShown, Nothing));
         }
 
+        /// <summary>
+        /// Boundary of "не в первые 2 экспорта": exports 1–2 never show the line, export 3 is the first that may, whatever the
+        /// persisted state; kills mutants of the first-eligible constant or comparison (2 or 4 instead of 3, &lt;= for &lt;).
+        /// </summary>
+        [Fact]
+        public void DoneScreenLine_FirstEligibleIsExactlyExport3()
+        {
+            Assert.Equal(3, SalePointPolicy.DoneScreenFirstEligibleExport);
+            Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(1, null, Nothing));
+            Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(2, null, Nothing));
+            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, null, Nothing));
+            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(4, null, Nothing));
+            // A persisted "shown at export 0" (never really shown) must not unlock exports 1–2 either.
+            Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(2, 0, Nothing));
+            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(3, 0, Nothing));
+        }
+
+        /// <summary>
+        /// Boundary of "не чаще 1 раза в 3 экспорта" for every last-shown export 3…30: distances 0, 1, 2 hide, 3 and more
+        /// show. Kills mutants of the cadence constant or comparison (2 or 4 instead of 3, &gt; for &gt;=, == for &gt;=).
+        /// </summary>
+        [Fact]
+        public void DoneScreenLine_MinDistanceIsExactly3Exports()
+        {
+            Assert.Equal(3, SalePointPolicy.DoneScreenMinExportsBetween);
+            for (int last = 3; last <= 30; last++)
+            {
+                Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(last, last, Nothing));
+                Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(last + 1, last, Nothing));
+                Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(last + 2, last, Nothing));
+                Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(last + 3, last, Nothing));
+                Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(last + 4, last, Nothing));
+                Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(last + 10, last, Nothing));
+            }
+        }
+
+        /// <summary>
+        /// A last-shown export ahead of the current one (inconsistent persisted state) suppresses the line for any gap; kills
+        /// an absolute-distance mutant (|completed - last| &gt;= 3), which would show it when the gap is 3 or more.
+        /// </summary>
+        [Theory]
+        [InlineData(3, 4)]
+        [InlineData(3, 6)]
+        [InlineData(5, 9)]
+        [InlineData(10, 20)]
+        [InlineData(3, 1000)]
+        public void DoneScreenLine_LastShownInFutureSuppresses(int export, int lastShown)
+        {
+            Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(export, lastShown, Nothing));
+        }
+
+        /// <summary>The cadence is measured from the last export that actually showed the line, not from the last eligible one.</summary>
+        [Fact]
+        public void DoneScreenLine_SkippedEligibleExportDoesNotResetCadence()
+        {
+            // Eligible on 3 but the Done screen was not reached: the caller does not persist, so export 4 still shows.
+            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(4, null, Nothing));
+            // Shown on 4: next on 7, not 6.
+            Assert.False(SalePointPolicy.ShouldShowDoneScreenLine(6, 4, Nothing));
+            Assert.True(SalePointPolicy.ShouldShowDoneScreenLine(7, 4, Nothing));
+        }
+
+        /// <summary>Exhaustive oracle over exports 0…40 and last-shown null/0…40.</summary>
+        [Fact]
+        public void DoneScreenLine_ExhaustiveOracle()
+        {
+            for (int export = 0; export <= 40; export++)
+            {
+                Assert.Equal(export >= 3, SalePointPolicy.ShouldShowDoneScreenLine(export, null, Nothing));
+                for (int last = 0; last <= 40; last++)
+                {
+                    bool expected = export >= 3 && export - last >= 3;
+                    Assert.Equal(expected, SalePointPolicy.ShouldShowDoneScreenLine(export, last, Nothing));
+                }
+            }
+        }
+
         [Fact]
         public void DoneScreenLine_ShownWheneverAllowed_AppearsOnExports3_6_9()
         {
@@ -133,6 +210,74 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 100, 101));
         }
 
+        /// <summary>
+        /// "1 демо на режим в сутки" for every paid mode and day index around a used day: only the same day is refused.
+        /// Kills mutants comparing with &lt;=, &gt;=, or todayIndex ± 1, or ignoring the day.
+        /// </summary>
+        [Fact]
+        public void TrialPreview_OnlySameDayIsRefused_AllModesAndNeighbourDays()
+        {
+            for (int m = 6; m <= 15; m++)
+            {
+                var mode = (ModeCode)m;
+                foreach (int today in new[] { int.MinValue, -1, 0, 1, 365, int.MaxValue })
+                {
+                    Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, null, today));
+                    Assert.Equal(TrialPreviewAccess.UsedToday, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today, today));
+                    if (today != int.MinValue)
+                        Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today - 1, today));
+                    if (today != int.MaxValue)
+                        Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(mode, Nothing, today + 1, today));
+                }
+            }
+        }
+
+        /// <summary>A simulated month: the caller persists the day after each demo; each mode gets at most one demo per day.</summary>
+        [Fact]
+        public void TrialPreview_Simulation_AtMostOneDemoPerModePerDay()
+        {
+            var rng = Rng.FromSeed(0x7121A1UL, 9UL);
+            var lastDemoDay = new Dictionary<ModeCode, int>();
+            var demos = new Dictionary<(ModeCode, int), int>();
+            int allowedCount = 0;
+            for (int day = 0; day < 30; day++)
+            {
+                for (int attempt = 0; attempt < 20; attempt++)
+                {
+                    var mode = (ModeCode)(6 + (int)rng.NextUInt(10));
+                    int? last = lastDemoDay.TryGetValue(mode, out var d) ? d : (int?)null;
+                    var access = SalePointPolicy.CanStartTrialPreview(mode, Nothing, last, day);
+                    bool alreadyToday = demos.ContainsKey((mode, day));
+                    Assert.Equal(alreadyToday ? TrialPreviewAccess.UsedToday : TrialPreviewAccess.Allowed, access);
+                    if (access == TrialPreviewAccess.Allowed)
+                    {
+                        demos[(mode, day)] = 1;
+                        lastDemoDay[mode] = day;
+                        allowedCount++;
+                    }
+                }
+            }
+            Assert.Equal(demos.Count, allowedCount);
+        }
+
+        /// <summary>
+        /// Precedence of the results is pinned: NotPaid, then NotLocked, then Disabled, then UsedToday. Kills mutants that
+        /// reorder the checks (e.g. reporting UsedToday for a playable mode, or Disabled for a free mode).
+        /// </summary>
+        [Fact]
+        public void TrialPreview_ResultPrecedence()
+        {
+            var entitled = Entitlements.From(new[] { ProductIds.ModeColorWar });
+            // NotPaid wins over everything.
+            Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M01, Nothing, 5, 5, trialEnabled: false));
+            // NotLocked wins over Disabled and UsedToday.
+            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, 5, 5, trialEnabled: false));
+            Assert.Equal(TrialPreviewAccess.NotLocked, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, entitled, 5, 5));
+            // Disabled wins over UsedToday.
+            Assert.Equal(TrialPreviewAccess.Disabled, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 5, 5, trialEnabled: false));
+            Assert.Equal(TrialPreviewAccess.Disabled, SalePointPolicy.CanStartTrialPreview(ModeCode.M08, Nothing, 4, 5, trialEnabled: false));
+        }
+
         [Fact]
         public void TrialPreview_DemoDaysAreTrackedPerMode()
         {
@@ -180,49 +325,158 @@ namespace Ballverse.Core.Tests.Monetization
             }
         }
 
-        // ---- First-video quest: "Один экран с All Modes — Один раз" ----
+        // ---- First-video quest: "Один экран с All Modes — Один раз"; §4.3 "без давления, «Позже» равнозначна" ----
+
+        static FirstVideoQuestScreen Quest(bool alreadyShown, IEnumerable<string> owned, bool interstitial = false,
+            MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null)
+        {
+            return SalePointPolicy.FirstVideoQuest(alreadyShown, owned, interstitial, config, grandfathered);
+        }
 
         [Fact]
-        public void FirstVideoQuest_ShowsEmphasizedAllModesOnce()
+        public void FirstVideoQuest_ShowsAllModesOnce()
         {
-            var offers = SalePointPolicy.FirstVideoQuestOffers(false, new string[0]);
-            Assert.Single(offers);
-            Assert.Equal(ProductIds.AllModes, offers[0].ProductId);
-            Assert.True(offers[0].Emphasized);
-            Assert.Empty(SalePointPolicy.FirstVideoQuestOffers(true, new string[0]));
+            var screen = Quest(false, new string[0]);
+            Assert.True(screen.Show);
+            Assert.Equal(ProductIds.AllModes, screen.Offer.ProductId);
+            Assert.Single(screen.Offers);
+            Assert.Same(screen.Offer, screen.Offers[0]);
+            Assert.False(Quest(true, new string[0]).Show);
+        }
+
+        [Fact]
+        public void FirstVideoQuest_OfferIsNotEmphasized()
+        {
+            // §4.3 "без давления": no visual priority, unlike the paid-card sheet where All Modes is emphasized.
+            Assert.False(Quest(false, new string[0]).Offer.Emphasized);
+            Assert.False(Quest(false, new[] { ProductIds.ModeColorWar }).Offer.Emphasized);
+            Assert.True(Storefront.ModeSheet(ModeCode.M06, new string[0]).Single(o => o.ProductId == ProductIds.AllModes).Emphasized);
+        }
+
+        [Fact]
+        public void FirstVideoQuest_LaterButtonHasEqualWeight()
+        {
+            var screen = Quest(false, new string[0]);
+            Assert.True(screen.HasLaterButton);
+            Assert.Equal(SalePointButtonWeight.Equal, screen.LaterButtonWeight);
+            Assert.Equal(screen.OfferButtonWeight, screen.LaterButtonWeight);
+        }
+
+        [Fact]
+        public void FirstVideoQuest_NoneHasNoOfferAndNoButtons()
+        {
+            var none = FirstVideoQuestScreen.None;
+            Assert.False(none.Show);
+            Assert.Null(none.Offer);
+            Assert.Empty(none.Offers);
+            Assert.False(none.HasLaterButton);
+            Assert.Same(none, Quest(true, new string[0]));
+        }
+
+        [Fact]
+        public void FirstVideoQuest_OffersListIsReadOnly()
+        {
+            var offers = Quest(false, new string[0]).Offers;
+            Assert.False(offers is StorefrontOffer[]);
+            Assert.True(((ICollection<StorefrontOffer>)offers).IsReadOnly);
         }
 
         [Fact]
         public void FirstVideoQuest_PartialOwnerSeesModeCount()
         {
-            var offers = SalePointPolicy.FirstVideoQuestOffers(false, new[] { ProductIds.ModeColorWar });
-            Assert.Single(offers);
-            Assert.Equal(1, offers[0].OwnedModeCount);
-            Assert.True(offers[0].PartiallyOwned);
+            var screen = Quest(false, new[] { ProductIds.ModeColorWar });
+            Assert.True(screen.Show);
+            Assert.Equal(1, screen.Offer.OwnedModeCount);
+            Assert.True(screen.Offer.PartiallyOwned);
         }
 
         [Fact]
         public void FirstVideoQuest_SkippedWhenStorefrontHidesAllModes()
         {
-            Assert.Empty(SalePointPolicy.FirstVideoQuestOffers(false, new[] { ProductIds.AllModes }));
-            Assert.Empty(SalePointPolicy.FirstVideoQuestOffers(false, new[] { ProductIds.Ultimate }));
+            Assert.False(Quest(false, new[] { ProductIds.AllModes }).Show);
+            Assert.False(Quest(false, new[] { ProductIds.Ultimate }).Show);
             var nineSingles = ProductCatalog.All.Where(p => p.Kind == ProductKind.SingleMode && p.Mode != ModeCode.M15)
                 .Select(p => p.Id).ToArray();
-            Assert.Empty(SalePointPolicy.FirstVideoQuestOffers(false, nineSingles));
+            Assert.False(Quest(false, nineSingles).Show);
             var allFree = new MonetizationConfig(Enumerable.Range(6, 10).Select(m => (ModeCode)m));
-            Assert.Empty(SalePointPolicy.FirstVideoQuestOffers(false, new string[0], false, allFree));
+            Assert.False(Quest(false, new string[0], false, allFree).Show);
+            var allGrandfathered = Enumerable.Range(6, 10).Select(m => (ModeCode)m).ToArray();
+            Assert.False(Quest(false, new string[0], false, null, allGrandfathered).Show);
         }
 
         [Fact]
         public void FirstVideoQuest_NeverRightAfterInterstitial()
         {
-            Assert.Empty(SalePointPolicy.FirstVideoQuestOffers(false, new string[0], interstitialJustShown: true));
+            Assert.False(Quest(false, new string[0], interstitial: true).Show);
+            Assert.False(Quest(true, new string[0], interstitial: true).Show);
+        }
+
+        /// <summary>
+        /// Kills mutants of the one-shot flag: for every owned-product combination, an already shown screen (or one right after
+        /// an interstitial) is never shown again, and an unshown one equals the smart storefront's All Modes offer.
+        /// </summary>
+        [Fact]
+        public void FirstVideoQuest_Exhaustive_OneShotAndMatchesStorefront()
+        {
+            for (int mask = 0; mask < Subsets.Count; mask++)
+            {
+                var owned = Subsets.Ids(mask);
+                Assert.False(Quest(true, owned).Show);
+                Assert.False(Quest(true, owned, interstitial: true).Show);
+                Assert.False(Quest(false, owned, interstitial: true).Show);
+                if ((mask & 0x3F) != 0) continue; // the storefront comparison below on 1/64 of the subsets keeps this fast
+                var screen = Quest(false, owned);
+                var all = Storefront.Build(owned).Get(ProductIds.AllModes);
+                Assert.Equal(all.Visible, screen.Show);
+                if (screen.Show)
+                {
+                    Assert.False(screen.Offer.Emphasized);
+                    Assert.Equal(all.OwnedModeCount, screen.Offer.OwnedModeCount);
+                    Assert.Equal(all.Gain.ToArray(), screen.Offer.Gain.ToArray());
+                }
+            }
+        }
+
+        /// <summary>A simulated app lifetime: the screen appears exactly once, on the first opportunity not right after an interstitial.</summary>
+        [Fact]
+        public void FirstVideoQuest_LifetimeSimulation_ShownExactlyOnce()
+        {
+            var rng = Rng.FromSeed(0x9E57UL, 5UL);
+            for (int iter = 0; iter < 100; iter++)
+            {
+                bool shownFlag = false;
+                int shownCount = 0;
+                int firstEligible = -1;
+                int shownAt = -1;
+                for (int step = 0; step < 20; step++)
+                {
+                    bool interstitial = rng.NextUInt(3) == 0;
+                    if (!interstitial && firstEligible < 0) firstEligible = step;
+                    var screen = Quest(shownFlag, new string[0], interstitial);
+                    if (screen.Show)
+                    {
+                        shownCount++;
+                        shownAt = step;
+                        shownFlag = true;
+                    }
+                }
+                if (firstEligible < 0)
+                {
+                    Assert.Equal(0, shownCount);
+                }
+                else
+                {
+                    Assert.Equal(1, shownCount);
+                    Assert.Equal(firstEligible, shownAt);
+                }
+            }
         }
 
         [Fact]
         public void FirstVideoQuest_NullOwnedThrows()
         {
-            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuestOffers(false, null));
+            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(false, null));
+            Assert.Throws<ArgumentNullException>(() => SalePointPolicy.FirstVideoQuest(true, null));
         }
     }
 }

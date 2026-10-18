@@ -113,6 +113,26 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.False(new MonetizationConfig(None, false).WatermarkByParts);
         }
 
+        /// <summary>
+        /// Owner-level rule (spec §5.1, §9.3, §9.6): effective free set = FreeByDefault ∪ configured, for every one of the
+        /// 2^10 configured subsets of M06…M15, each paired with a different subset of M01…M05 (all 32 occur).
+        /// </summary>
+        [Fact]
+        public void FreeSetIsExactlyDefaultUnionConfigured_Exhaustive()
+        {
+            var defaults = ModeCatalog.All.Where(m => m.FreeByDefault).Select(m => m.Code).ToArray();
+            for (int paid = 0; paid < 1 << 10; paid++)
+            {
+                int mask = (paid << 5) | (paid % 32);
+                var configured = Enumerable.Range(1, 15).Where(m => (mask & (1 << (m - 1))) != 0).Select(m => (ModeCode)m).ToArray();
+                var config = new MonetizationConfig(configured);
+                var expected = defaults.Union(configured).OrderBy(m => m).ToArray();
+                Assert.Equal(expected, config.FreeModes.ToArray());
+                for (int m = 1; m <= 15; m++)
+                    Assert.Equal(expected.Contains((ModeCode)m), config.IsFree((ModeCode)m));
+            }
+        }
+
         [Fact]
         public void EmptyFreeSetPayloadStillLeavesFreeModesForNewUser()
         {
