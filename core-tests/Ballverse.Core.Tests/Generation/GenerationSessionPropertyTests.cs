@@ -11,10 +11,10 @@ namespace Ballverse.Core.Tests.Generation
     public class GenerationSessionPropertyTests
     {
         /// <summary>Summary of candidate k, a pure function of (scenario seed, k) so it can be replayed.</summary>
-        static CandidateRunSummary RandomCandidate(ulong scenarioSeed, int k, int participants)
+        static CandidateRunSummary RandomCandidate(ulong scenarioSeed, int k, int participants, int maxTicks)
         {
             Rng rng = Rng.FromSeed(scenarioSeed, 1000UL + (ulong)k);
-            int duration = rng.NextInt(600, 3000);
+            int duration = Math.Min(rng.NextInt(600, 3000), maxTicks);
             int every = rng.NextInt(10, 400);
             bool stuck = rng.NextUInt(8) == 0;
             int winner = participants > 0 ? rng.NextInt(-1, participants) : -1;
@@ -24,7 +24,8 @@ namespace Ballverse.Core.Tests.Generation
             // Quantized metrics make exact ties likely, exercising the tie-break.
             double coverage = rng.NextInt(0, 5) / 4.0;
             double tension = rng.NextInt(0, 5) / 4.0;
-            return new CandidateRunSummary(duration, finished, !finished, Runs.EvenEvents(duration, every), coverage, tension,
+            int[] events = Runs.EvenEvents(duration, every);
+            return new CandidateRunSummary(duration, finished, !finished, events, events.Length, coverage, tension,
                 winner, participants, leaders, stuck);
         }
 
@@ -57,7 +58,7 @@ namespace Ballverse.Core.Tests.Generation
                     Assert.Equal(session.Evaluations.Count, step.CandidateIndex);
                     Assert.Equal(CandidateSeeds.ForCandidate(o.SessionSeed, step.CandidateIndex), step.Seed);
                     elapsed += Rng.FromSeed(scenarioSeed, 5000UL + (ulong)step.CandidateIndex).NextInt(1, 120);
-                    session.Report(step.CandidateIndex, RandomCandidate(scenarioSeed, step.CandidateIndex, o.ParticipantCount), elapsed);
+                    session.Report(step.CandidateIndex, RandomCandidate(scenarioSeed, step.CandidateIndex, o.ParticipantCount, step.MaxTicks), elapsed);
                     Assert.True(session.Evaluations.Count <= session.CandidateLimit);
                     continue;
                 }
@@ -73,14 +74,23 @@ namespace Ballverse.Core.Tests.Generation
             throw new InvalidOperationException("Session did not finish");
         }
 
-        static CandidateEvaluation BestOf(GenerationSession s, Func<CandidateEvaluation, bool> filter)
+        /// <summary>Independent restatement of the ranking: goal key, then total, then the lowest index.</summary>
+        static bool Better(CandidateEvaluation a, CandidateEvaluation b, DirectorGoal goal)
+        {
+            if (goal == DirectorGoal.LastSecond && a.Breakdown.FinishTension != b.Breakdown.FinishTension)
+                return a.Breakdown.FinishTension > b.Breakdown.FinishTension;
+            if (goal == DirectorGoal.Comeback && a.IsComeback != b.IsComeback) return a.IsComeback;
+            if (a.Breakdown.Total != b.Breakdown.Total) return a.Breakdown.Total > b.Breakdown.Total;
+            return a.Index < b.Index;
+        }
+
+        static CandidateEvaluation BestOf(GenerationSession s, DirectorGoal goal, Func<CandidateEvaluation, bool> filter)
         {
             CandidateEvaluation best = null;
             foreach (CandidateEvaluation e in s.Evaluations)
             {
                 if (!filter(e)) continue;
-                if (best == null || e.SelectionScore > best.SelectionScore || (e.SelectionScore == best.SelectionScore && e.Index < best.Index))
-                    best = e;
+                if (best == null || Better(e, best, goal)) best = e;
             }
             return best;
         }
@@ -93,17 +103,23 @@ namespace Ballverse.Core.Tests.Generation
             if (r.Selected != null) Assert.False(r.Selected.IsRejected);
             foreach (CandidateEvaluation e in s.Evaluations)
             {
+                Assert.Equal(e.GoalMet, o.Goal == DirectorGoal.None
+                    || (o.Goal == DirectorGoal.LastSecond && e.Breakdown.FinishTension >= GenerationSession.LastSecondTensionGoal)
+                    || (o.Goal == DirectorGoal.Comeback && e.IsComeback));
                 Assert.Equal(e.PassesThreshold, !e.IsRejected && e.Breakdown.Total >= o.QualityThreshold);
                 Assert.Equal(e.MatchesWinner, o.ForcedWinner < 0 || e.Summary.WinnerIndex == o.ForcedWinner);
             }
-            CandidateEvaluation bestPassing = BestOf(s, e => e.PassesThreshold && e.MatchesWinner);
-            CandidateEvaluation bestMatching = BestOf(s, e => !e.IsRejected && e.MatchesWinner);
-            CandidateEvaluation bestAny = BestOf(s, e => !e.IsRejected);
+            CandidateEvaluation bestPassing = BestOf(s, o.Goal, e => e.PassesThreshold && e.MatchesWinner);
+            CandidateEvaluation bestMatching = BestOf(s, o.Goal, e => !e.IsRejected && e.MatchesWinner);
+            CandidateEvaluation bestAny = BestOf(s, o.Goal, e => !e.IsRejected);
             switch (r.Outcome)
             {
                 case GenerationOutcome.Success:
                     Assert.Same(bestPassing, r.Selected);
                     Assert.True(r.QualityOk);
+                    // A goal-meeting candidate is always preferred when one passed (spec §2.5).
+                    if (BestOf(s, o.Goal, e => e.PassesThreshold && e.MatchesWinner && e.GoalMet) != null) Assert.True(r.GoalMet);
+                    Assert.Equal(!r.GoalMet, r.DirectorGoalMissed);
                     break;
                 case GenerationOutcome.BelowThreshold:
                     Assert.Null(bestPassing);
@@ -113,6 +129,7 @@ namespace Ballverse.Core.Tests.Generation
                     break;
                 case GenerationOutcome.WinnerNotFound:
                     Assert.Null(bestMatching);
+                    Assert.Equal(0, s.OutstandingCount);
                     Assert.Equal(bestAny?.Index ?? -1, r.NearestCandidateIndex);
                     break;
                 case GenerationOutcome.NearestWinner:

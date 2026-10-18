@@ -8,13 +8,17 @@ namespace Ballverse.Core.Generation
         public CandidateRunSummary Summary { get; }
         public SpectacleBreakdown Breakdown { get; }
 
-        /// <summary><see cref="SpectacleBreakdown.Total"/> plus the director-goal bonus; used to rank candidates.</summary>
-        public double SelectionScore { get; }
-
         /// <summary>The winner equals the forced winner (always true without a forced winner).</summary>
         public bool MatchesWinner { get; }
 
+        /// <summary><see cref="DirectorAnalysis.IsComeback"/> of the run.</summary>
         public bool IsComeback { get; }
+
+        /// <summary>
+        /// The session's director goal is met by this candidate: always true for <see cref="DirectorGoal.None"/>; finishTension ≥
+        /// <see cref="GenerationSession.LastSecondTensionGoal"/> for LastSecond; <see cref="IsComeback"/> for Comeback (spec §2.5).
+        /// </summary>
+        public bool GoalMet { get; }
 
         /// <summary>Not rejected and total ≥ threshold.</summary>
         public bool PassesThreshold { get; }
@@ -22,15 +26,15 @@ namespace Ballverse.Core.Generation
         public bool IsRejected => Breakdown.IsRejected;
 
         public CandidateEvaluation(int index, ulong seed, CandidateRunSummary summary, SpectacleBreakdown breakdown,
-            double selectionScore, bool matchesWinner, bool isComeback, bool passesThreshold)
+            bool matchesWinner, bool isComeback, bool goalMet, bool passesThreshold)
         {
             Index = index;
             Seed = seed;
             Summary = summary;
             Breakdown = breakdown;
-            SelectionScore = selectionScore;
             MatchesWinner = matchesWinner;
             IsComeback = isComeback;
+            GoalMet = goalMet;
             PassesThreshold = passesThreshold;
         }
     }

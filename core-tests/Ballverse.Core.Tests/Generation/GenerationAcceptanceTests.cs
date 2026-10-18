@@ -40,7 +40,7 @@ namespace Ballverse.Core.Tests.Generation
             for (int i = 0; i < 2; i++)
             {
                 var session = new GenerationSession(Runs.Options());
-                int duration = i == 0 ? 1800 : 2400;
+                int duration = i == 0 ? 1800 : 2300; // 2300 is within the 2340-tick run limit but misses 30 ± 3 s
                 Runs.Drive(session, k => Runs.Make(durationTicks: duration));
                 results[i] = session.Result;
             }

@@ -11,9 +11,9 @@
     "participants": 0,
     "goal": "None",
     "summaries": [
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "coverage": 0.5, "finishTension": 0.5, "winnerIndex": -1, "participantCount": 0 },
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "coverage": 0.5, "finishTension": 0.9, "winnerIndex": -1, "participantCount": 0 },
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [], "coverage": 0.9, "finishTension": 0.9, "winnerIndex": -1, "participantCount": 0 }
+      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "collisionCount": 5, "coverage": 0.5, "finishTension": 0.5, "winnerIndex": -1, "participantCount": 0 },
+      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "collisionCount": 5, "coverage": 0.5, "finishTension": 0.9, "winnerIndex": -1, "participantCount": 0 },
+      { "durationTicks": 600, "finished": true, "significantEventTicks": [], "collisionCount": 0, "coverage": 0.9, "finishTension": 0.9, "winnerIndex": -1, "participantCount": 0 }
     ],
     "expectedOutcome": "Success",
     "expectedIndex": 1,
@@ -32,10 +32,10 @@
     "participants": 0,
     "goal": "None",
     "summaries": [
-      { "durationTicks": 300, "finished": true, "significantEventTicks": [60, 120, 180, 240, 300], "coverage": 0.2, "finishTension": 0.2, "winnerIndex": -1, "participantCount": 0 },
-      { "durationTicks": 300, "finished": true, "significantEventTicks": [60, 120, 180, 240, 300], "coverage": 0.2, "finishTension": 0.2, "winnerIndex": -1, "participantCount": 0 },
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "coverage": 1.0, "finishTension": 1.0, "winnerIndex": -1, "participantCount": 0, "stuck": true },
-      { "durationTicks": 300, "finished": true, "significantEventTicks": [60, 120, 180, 240, 300], "coverage": 0.4, "finishTension": 0.6, "winnerIndex": -1, "participantCount": 0 }
+      { "durationTicks": 300, "finished": true, "significantEventTicks": [60, 120, 180, 240, 300], "collisionCount": 5, "coverage": 0.2, "finishTension": 0.2, "winnerIndex": -1, "participantCount": 0 },
+      { "durationTicks": 300, "finished": true, "significantEventTicks": [60, 120, 180, 240, 300], "collisionCount": 5, "coverage": 0.2, "finishTension": 0.2, "winnerIndex": -1, "participantCount": 0 },
+      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "collisionCount": 5, "coverage": 1.0, "finishTension": 1.0, "winnerIndex": -1, "participantCount": 0, "stuck": true },
+      { "durationTicks": 300, "finished": true, "significantEventTicks": [60, 120, 180, 240, 300], "collisionCount": 5, "coverage": 0.4, "finishTension": 0.6, "winnerIndex": -1, "participantCount": 0 }
     ],
     "expectedOutcome": "BelowThreshold",
     "expectedIndex": 3,
@@ -43,7 +43,7 @@
     "expectedDoubled": true
   },
   {
-    "name": "forced winner found after doubling",
+    "name": "forced winner: a weak match triggers the doubling, a strong match is found after it",
     "candidates": 1,
     "timeMs": 1000,
     "threshold": 2.0,
@@ -54,10 +54,10 @@
     "participants": 2,
     "goal": "LastSecond",
     "summaries": [
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "coverage": 0.5, "finishTension": 0.9, "winnerIndex": 0, "participantCount": 2 },
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "coverage": 0.5, "finishTension": 0.9, "winnerIndex": 0, "participantCount": 2 },
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "coverage": 0.5, "finishTension": 0.3, "winnerIndex": 1, "participantCount": 2 },
-      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "coverage": 0.5, "finishTension": 0.4, "winnerIndex": 1, "participantCount": 2 }
+      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "collisionCount": 5, "coverage": 0.5, "finishTension": 0.9, "winnerIndex": 0, "participantCount": 2 },
+      { "durationTicks": 300, "finished": true, "significantEventTicks": [60, 120, 180, 240, 300], "collisionCount": 5, "coverage": 0.5, "finishTension": 0.9, "winnerIndex": 1, "participantCount": 2 },
+      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "collisionCount": 5, "coverage": 0.5, "finishTension": 0.3, "winnerIndex": 1, "participantCount": 2 },
+      { "durationTicks": 600, "finished": true, "significantEventTicks": [120, 240, 360, 480, 600], "collisionCount": 5, "coverage": 0.5, "finishTension": 0.4, "winnerIndex": 1, "participantCount": 2 }
     ],
     "expectedOutcome": "Success",
     "expectedIndex": 3,

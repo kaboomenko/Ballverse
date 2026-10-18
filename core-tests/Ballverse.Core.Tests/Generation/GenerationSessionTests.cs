@@ -191,6 +191,55 @@ namespace Ballverse.Core.Tests.Generation
         }
 
         [Fact]
+        public void ForcedWinnerTimeCanBeCappedExplicitly()
+        {
+            GenerationSessionOptions o = Forced(0, 4);
+            o.ForcedWinnerTimeMs = 1500;
+            Assert.Equal(new GenerationBudget(16, 1500), new GenerationSession(o).PhaseBudget);
+            GenerationSessionOptions plain = Runs.Options();
+            plain.ForcedWinnerTimeMs = 1500; // ignored without a forced winner
+            Assert.Equal(new GenerationBudget(4, 1000), new GenerationSession(plain).PhaseBudget);
+        }
+
+        [Fact]
+        public void ForcedWinnerNotFoundIsOfferedAfterTheFirstPhase()
+        {
+            // QA probe P16: M03, tier B, 8 participants, 150 ms per candidate. Previously 128 candidates / 19.2 s before the prompt.
+            GenerationSessionOptions o = GenerationSessionOptions.ForMode(ModeCode.M03, DeviceTier.B, 5UL, Runs.Target);
+            o.ForcedWinner = 7;
+            o.ParticipantCount = 8;
+            var session = new GenerationSession(o);
+            Assert.Equal(new GenerationBudget(64, 10000), session.PhaseBudget);
+            Runs.Drive(session, k => Runs.Good(winner: k % 7, participants: 8), k => 150L * (k + 1));
+            Assert.Equal(GenerationOutcome.WinnerNotFound, session.Result.Outcome);
+            Assert.Equal(64, session.Result.CandidatesEvaluated);
+            Assert.Equal(9600, session.Result.ElapsedMs);
+            Assert.False(session.Result.BudgetDoubled);
+
+            o.ForcedWinnerTimeMs = 2500;
+            var capped = new GenerationSession(o);
+            Runs.Drive(capped, k => Runs.Good(winner: k % 7, participants: 8), k => 150L * (k + 1));
+            Assert.Equal(GenerationOutcome.WinnerNotFound, capped.Result.Outcome);
+            Assert.Equal(17, capped.Result.CandidatesEvaluated);
+            Assert.Equal(2550, capped.Result.ElapsedMs);
+        }
+
+        [Fact]
+        public void SearchLongerAfterTimeLimitedPhaseAddsExactlyOnePhaseOfCandidates()
+        {
+            // Phase 1 (8 candidates / 2000 ms with ×2) ends by time after 5 candidates.
+            var session = new GenerationSession(Forced(1, 2));
+            Runs.Drive(session, k => Runs.Good(winner: 0, participants: 2), k => 400L * (k + 1));
+            Assert.Equal(GenerationOutcome.WinnerNotFound, session.Result.Outcome);
+            Assert.Equal(5, session.Evaluations.Count);
+            session.SearchLonger();
+            Assert.Equal(5 + session.PhaseBudget.Candidates, session.CandidateLimit);
+            Assert.Equal(2000 + session.PhaseBudget.TimeMs, session.TimeLimitMs);
+            Runs.Drive(session, k => Runs.Good(winner: 0, participants: 2), k => 2000L + k);
+            Assert.Equal(13, session.Result.CandidatesEvaluated);
+        }
+
+        [Fact]
         public void NoForcedWinnerKeepsBudget()
         {
             Assert.Equal(1, GenerationSession.BudgetMultiplier(-1, 10));
@@ -229,37 +278,38 @@ namespace Ballverse.Core.Tests.Generation
         public void ForcedWinnerNotFoundAwaitsDecision()
         {
             var session = new GenerationSession(Forced(1, 2));
-            GenerationStep step = Runs.Drive(session, k => Runs.Good(tension: k == 9 ? 0.95 : 0.5, winner: 0, participants: 2));
+            GenerationStep step = Runs.Drive(session, k => Runs.Good(tension: k == 5 ? 0.95 : 0.5, winner: 0, participants: 2));
             Assert.Equal(GenerationStepKind.AwaitDecision, step.Kind);
             Assert.Equal(GenerationStatus.AwaitingDecision, session.Status);
             GenerationResult r = session.Result;
             Assert.Equal(GenerationOutcome.WinnerNotFound, r.Outcome);
             Assert.Null(r.Selected);
-            Assert.Equal(9, r.NearestCandidateIndex);
-            Assert.True(r.BudgetDoubled);
-            Assert.Equal(16, r.CandidatesEvaluated);
+            Assert.Equal(5, r.NearestCandidateIndex);
+            // No viable candidate with the forced winner: the choice is offered right after the ×N phase, without doubling.
+            Assert.False(r.BudgetDoubled);
+            Assert.Equal(8, r.CandidatesEvaluated);
             Assert.False(r.QualityBelowThreshold);
-            Assert.Throws<InvalidOperationException>(() => session.Report(16, Runs.Good(), 1000));
+            Assert.False(session.Report(8, Runs.Good(winner: 0, participants: 2), 1000));
         }
 
         [Fact]
         public void SearchLongerRunsAnotherBudgetAndFindsWinner()
         {
             var session = new GenerationSession(Forced(1, 2));
-            Func<int, CandidateRunSummary> summaries = k => Runs.Good(winner: k == 20 ? 1 : 0, participants: 2);
+            Func<int, CandidateRunSummary> summaries = k => Runs.Good(winner: k == 12 ? 1 : 0, participants: 2);
             Runs.Drive(session, summaries, k => 10L * (k + 1));
             session.SearchLonger();
             Assert.Equal(GenerationStatus.Running, session.Status);
             Assert.Null(session.Result);
-            Assert.Equal(16 + 8, session.CandidateLimit);
-            Assert.Equal(160 + 2000, session.TimeLimitMs);
+            Assert.Equal(8 + 8, session.CandidateLimit);
+            Assert.Equal(80 + 2000, session.TimeLimitMs);
             GenerationStep step = Runs.Drive(session, summaries, k => 10L * (k + 1));
             Assert.Equal(GenerationStepKind.Done, step.Kind);
             GenerationResult r = session.Result;
             Assert.Equal(GenerationOutcome.Success, r.Outcome);
-            Assert.Equal(20, r.SelectedIndex);
+            Assert.Equal(12, r.SelectedIndex);
             Assert.Equal(1, r.SearchLongerCount);
-            Assert.Equal(24, r.CandidatesEvaluated);
+            Assert.Equal(16, r.CandidatesEvaluated);
         }
 
         [Fact]
@@ -271,7 +321,7 @@ namespace Ballverse.Core.Tests.Generation
             session.SearchLonger();
             GenerationStep step = Runs.Drive(session, summaries);
             Assert.Equal(GenerationStepKind.AwaitDecision, step.Kind);
-            Assert.Equal(24, session.Result.CandidatesEvaluated);
+            Assert.Equal(16, session.Result.CandidatesEvaluated);
             Assert.Equal(1, session.Result.SearchLongerCount);
         }
 
@@ -279,12 +329,16 @@ namespace Ballverse.Core.Tests.Generation
         public void SearchLongerFindingOnlyWeakMatchGivesBelowThreshold()
         {
             var session = new GenerationSession(Forced(1, 2));
-            Func<int, CandidateRunSummary> summaries = k => k == 18 ? Runs.Bad(winner: 1, participants: 2) : Runs.Good(winner: 0, participants: 2);
+            Func<int, CandidateRunSummary> summaries = k => k == 10 ? Runs.Bad(winner: 1, participants: 2) : Runs.Good(winner: 0, participants: 2);
             Runs.Drive(session, summaries);
+            Assert.False(session.Result.BudgetDoubled);
             session.SearchLonger();
             Runs.Drive(session, summaries);
+            // The weak match makes the one-time doubling worthwhile: 8 + 8, then doubled by 8.
             Assert.Equal(GenerationOutcome.BelowThreshold, session.Result.Outcome);
-            Assert.Equal(18, session.Result.SelectedIndex);
+            Assert.Equal(10, session.Result.SelectedIndex);
+            Assert.True(session.Result.BudgetDoubled);
+            Assert.Equal(24, session.Result.CandidatesEvaluated);
         }
 
         [Fact]
@@ -368,8 +422,10 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Equal(2, r.SelectedIndex);
             Assert.True(r.GoalMet);
             Assert.True(session.Evaluations[2].IsComeback);
+            Assert.True(session.Evaluations[2].GoalMet);
             Assert.False(session.Evaluations[0].IsComeback);
-            Assert.Equal(session.Evaluations[2].Breakdown.Total + 1.0, session.Evaluations[2].SelectionScore, 12);
+            Assert.False(session.Evaluations[0].GoalMet);
+            Assert.True(session.Evaluations[0].Breakdown.Total > session.Evaluations[2].Breakdown.Total);
         }
 
         [Fact]
@@ -381,15 +437,15 @@ namespace Ballverse.Core.Tests.Generation
             Runs.Drive(session, k => Runs.Make(winner: 0, participants: 2, leaders: ComebackLeaders(0, 0)));
             Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
             Assert.False(session.Result.GoalMet);
+            Assert.True(session.Result.DirectorGoalMissed);
             Assert.False(session.Result.BudgetDoubled);
         }
 
         [Fact]
-        public void ComebackBonusDoesNotLiftCandidateOverThreshold()
+        public void ComebackDoesNotLiftCandidateOverThreshold()
         {
             GenerationSessionOptions o = Runs.Options(candidates: 2);
             o.Goal = DirectorGoal.Comeback;
-            o.GoalBonusWeight = 10.0;
             var session = new GenerationSession(o);
             Runs.Drive(session, k => Runs.Make(durationTicks: 1800, eventEveryTicks: 300, coverage: 0.1, tension: 0.1,
                 winner: 1, participants: 2, leaders: ComebackLeaders(1, 0)));
@@ -424,6 +480,50 @@ namespace Ballverse.Core.Tests.Generation
             Runs.Drive(session, k => Runs.Make(coverage: 1.0, tension: 0.79));
             Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
             Assert.False(session.Result.GoalMet);
+            Assert.True(session.Result.DirectorGoalMissed);
+        }
+
+        [Fact]
+        public void LastSecondPrefersPassingHighTensionCandidate()
+        {
+            // QA probe P4: candidate 0 passes with tension 1.0 but a lower total than candidate 1 (tension 0.3).
+            GenerationSessionOptions o = Runs.Options(candidates: 2, threshold: 1.6);
+            o.Goal = DirectorGoal.LastSecond;
+            var session = new GenerationSession(o);
+            Runs.Drive(session, k => k == 0
+                ? Runs.Make(durationTicks: 1500, coverage: 0.0, tension: 1.0)
+                : Runs.Make(coverage: 1.0, tension: 0.3));
+            Assert.True(session.Evaluations[0].PassesThreshold);
+            Assert.True(session.Evaluations[1].PassesThreshold);
+            Assert.True(session.Evaluations[1].Breakdown.Total > session.Evaluations[0].Breakdown.Total);
+            Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
+            Assert.Equal(0, session.Result.SelectedIndex);
+            Assert.True(session.Result.GoalMet);
+            Assert.False(session.Result.DirectorGoalMissed);
+        }
+
+        [Fact]
+        public void LastSecondMaximizesTensionThenTotal()
+        {
+            GenerationSessionOptions o = Runs.Options(candidates: 4, threshold: 1.0);
+            o.Goal = DirectorGoal.LastSecond;
+            var session = new GenerationSession(o);
+            double[] tension = { 0.9, 0.95, 0.95, 0.5 };
+            double[] coverage = { 1.0, 0.2, 0.6, 1.0 };
+            Runs.Drive(session, k => Runs.Make(tension: tension[k], coverage: coverage[k]));
+            Assert.Equal(2, session.Result.SelectedIndex); // tied tension 0.95, higher total
+        }
+
+        [Fact]
+        public void LastSecondNeverPrefersAFailingCandidate()
+        {
+            // Tension only ranks among candidates that pass the threshold.
+            GenerationSessionOptions o = Runs.Options(candidates: 2);
+            o.Goal = DirectorGoal.LastSecond;
+            var session = new GenerationSession(o);
+            Runs.Drive(session, k => k == 0 ? Runs.Bad(tension: 1.0) : Runs.Good(tension: 0.2));
+            Assert.Equal(1, session.Result.SelectedIndex);
+            Assert.False(session.Result.GoalMet);
         }
 
         // ---- interactive ----
@@ -439,6 +539,43 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
             foreach (CandidateEvaluation e in session.Evaluations) Assert.Equal(1.0, e.Breakdown.FitDuration);
             Assert.Equal(8, session.Result.CandidatesEvaluated);
+        }
+
+        [Fact]
+        public void ModeInteractiveWithoutFlagRejectsForcedWinner()
+        {
+            // QA probe P1: Mode = M10 (interactive, has a winner in the catalog) with Interactive left false.
+            var o = Runs.Options();
+            o.Mode = ModeCode.M10;
+            o.ForcedWinner = 0;
+            o.ParticipantCount = 2;
+            Assert.False(o.Interactive);
+            Assert.Throws<ArgumentException>(() => new GenerationSession(o));
+            o.ForcedWinner = GenerationSessionOptions.NoForcedWinner;
+            var session = new GenerationSession(o);
+            Assert.True(session.IsInteractive);
+        }
+
+        [Fact]
+        public void ModeInteractiveWithoutFlagIgnoresDuration()
+        {
+            // QA probe P1b: Mode = M04, a 900-tick run against a 1800-tick target still gets fit 1.
+            var o = Runs.Options(candidates: 1, threshold: 0.0);
+            o.Mode = ModeCode.M04;
+            var session = new GenerationSession(o);
+            Runs.Drive(session, k => Runs.Make(durationTicks: 900));
+            Assert.Equal(1.0, session.Evaluations[0].Breakdown.FitDuration);
+        }
+
+        [Fact]
+        public void InteractiveFlagForNonInteractiveModeIsRejected()
+        {
+            var o = Runs.Options();
+            o.Mode = ModeCode.M03;
+            o.Interactive = true;
+            Assert.Throws<ArgumentException>(() => new GenerationSession(o));
+            o.Interactive = false;
+            Assert.False(new GenerationSession(o).IsInteractive);
         }
 
         [Fact]
@@ -487,7 +624,7 @@ namespace Ballverse.Core.Tests.Generation
             o.Goal = DirectorGoal.Comeback;
             Assert.Throws<ArgumentException>(() => new GenerationSession(o));
             o.Goal = DirectorGoal.LastSecond;
-            new GenerationSession(o);
+            Assert.Throws<ArgumentException>(() => new GenerationSession(o));
 
             GenerationSessionOptions race = GenerationSessionOptions.ForMode(ModeCode.M03, DeviceTier.B, 1UL, 1800);
             race.ForcedWinner = 2;
@@ -503,15 +640,49 @@ namespace Ballverse.Core.Tests.Generation
             Check(o => o.Budget = default(GenerationBudget));
             Check(o => o.QualityThreshold = double.NaN);
             Check(o => o.TargetDurationTicks = 0);
+            Check(o => o.TargetDurationTicks = 60); // QA probe P9: 1 s
+            Check(o => o.TargetDurationTicks = GenerationSessionOptions.MinTargetDurationTicks - 1);
+            Check(o => { o.ForcedWinner = 0; o.ParticipantCount = 2; o.ForcedWinnerTimeMs = 0; });
             Check(o => o.TargetDurationTicks = SimConstants.MaxDurationTicks + 1);
             Check(o => o.Weights = null);
             Check(o => o.Density = default(DensityRange));
-            Check(o => o.GoalBonusWeight = -1);
             Check(o => o.Goal = (DirectorGoal)9);
             Check(o => o.ParticipantCount = -1);
             Check(o => { o.ForcedWinner = 0; o.ParticipantCount = 1; });
             Check(o => { o.ForcedWinner = 3; o.ParticipantCount = 3; });
             Check(o => { o.ForcedWinner = -5; o.ParticipantCount = 3; });
+        }
+
+        [Fact]
+        public void TargetBoundsAreTenToOneHundredEightySeconds()
+        {
+            GenerationSessionOptions o = Runs.Options();
+            o.TargetDurationTicks = GenerationSessionOptions.MinTargetDurationTicks;
+            new GenerationSession(o);
+            o.TargetDurationTicks = SimConstants.MaxDurationTicks;
+            new GenerationSession(o);
+        }
+
+        [Fact]
+        public void GoalScopeRaceAndBattleOnly()
+        {
+            // QA probes P10 (M01 + LastSecond) and P11 (M07 + Comeback): spec §2.5 "for race and battle".
+            foreach (ModeInfo mode in ModeCatalog.All)
+            {
+                foreach (DirectorGoal goal in new[] { DirectorGoal.LastSecond, DirectorGoal.Comeback })
+                {
+                    GenerationSessionOptions o = GenerationSessionOptions.ForMode(mode.Code, DeviceTier.B, 1UL, Runs.Target);
+                    o.Goal = goal;
+                    bool allowed = mode.Code == ModeCode.M03 || mode.Code == ModeCode.M06;
+                    Assert.Equal(allowed, GenerationSessionOptions.SupportsDirectorGoals(mode.Code));
+                    if (allowed) new GenerationSession(o);
+                    else Assert.Throws<ArgumentException>(() => new GenerationSession(o));
+                }
+            }
+            // Without a mode the caller is trusted.
+            GenerationSessionOptions free = Runs.Options();
+            free.Goal = DirectorGoal.Comeback;
+            new GenerationSession(free);
         }
 
         static void Check(Action<GenerationSessionOptions> mutate)
@@ -567,21 +738,118 @@ namespace Ballverse.Core.Tests.Generation
         // ---- protocol ----
 
         [Fact]
-        public void NextRequestRepeatsOutstandingCandidate()
+        public void NextRequestHandsOutNewCandidatesUpToTheLimit()
         {
-            var session = new GenerationSession(Runs.Options());
+            var session = new GenerationSession(Runs.Options(candidates: 3));
             GenerationStep a = session.NextRequest();
             GenerationStep b = session.NextRequest();
             Assert.Equal(GenerationStepKind.RunCandidate, a.Kind);
             Assert.Equal(0, a.CandidateIndex);
-            Assert.Equal(a.CandidateIndex, b.CandidateIndex);
-            Assert.Equal(a.Seed, b.Seed);
+            Assert.Equal(1, b.CandidateIndex);
             Assert.Equal(CandidateSeeds.ForCandidate(12345UL, 0), a.Seed);
+            Assert.Equal(CandidateSeeds.ForCandidate(12345UL, 1), b.Seed);
             Assert.Equal(2340, a.MaxTicks);
-            session.Report(0, Runs.Good(), 5);
-            GenerationStep c = session.NextRequest();
-            Assert.Equal(1, c.CandidateIndex);
-            Assert.Equal(CandidateSeeds.ForCandidate(12345UL, 1), c.Seed);
+            Assert.Equal(1000, a.DeadlineMs);
+            Assert.Equal(2, session.OutstandingCount);
+            Assert.Equal(2, session.NextRequest().CandidateIndex);
+            GenerationStep wait = session.NextRequest();
+            Assert.Equal(GenerationStepKind.Wait, wait.Kind);
+            Assert.Equal(-1, wait.CandidateIndex);
+            Assert.False(wait.IsRun);
+            Assert.True(session.Report(1, Runs.Good(), 5));
+            Assert.Empty(session.Evaluations); // buffered until candidate 0 arrives
+            Assert.True(session.Report(0, Runs.Good(), 6));
+            Assert.Equal(2, session.Evaluations.Count);
+            Assert.Equal(GenerationStepKind.Wait, session.NextRequest().Kind);
+            Assert.True(session.Report(2, Runs.Good(), 7));
+            Assert.Equal(GenerationStepKind.Done, session.NextRequest().Kind);
+            Assert.Equal(0, session.Result.SelectedIndex);
+        }
+
+        [Fact]
+        public void OutOfOrderReportsGiveTheSameChoiceAsSequential()
+        {
+            var rng = Rng.FromSeed(4242UL, 1);
+            for (int round = 0; round < 50; round++)
+            {
+                int candidates = rng.NextInt(2, 12);
+                ulong scenario = rng.NextULong();
+                Func<int, CandidateRunSummary> summaryFor = k =>
+                {
+                    Rng r = Rng.FromSeed(scenario, (ulong)k);
+                    return Runs.Make(durationTicks: r.NextInt(1200, 2340), coverage: r.NextInt(0, 5) / 4.0,
+                        tension: r.NextInt(0, 5) / 4.0, winner: r.NextInt(0, 3), participants: 3, stuck: r.NextUInt(6) == 0);
+                };
+                GenerationSessionOptions o = Runs.Options(candidates: candidates, timeMs: 1000000);
+                o.ForcedWinner = rng.NextBool() ? rng.NextInt(0, 3) : GenerationSessionOptions.NoForcedWinner;
+                o.ParticipantCount = 3;
+                o.Goal = (DirectorGoal)rng.NextInt(0, 3);
+
+                var sequential = new GenerationSession(o);
+                Runs.Drive(sequential, summaryFor, k => 1L);
+
+                var parallel = new GenerationSession(o);
+                for (int guard = 0; guard < 1000 && parallel.Status == GenerationStatus.Running; guard++)
+                {
+                    // Hand out up to 4 candidates at a time ("workers"), report them in a shuffled order.
+                    var batch = new System.Collections.Generic.List<int>();
+                    for (int w = 0; w < 4; w++)
+                    {
+                        GenerationStep step = parallel.NextRequest();
+                        if (!step.IsRun) break;
+                        Assert.Equal(CandidateSeeds.ForCandidate(o.SessionSeed, step.CandidateIndex), step.Seed);
+                        batch.Add(step.CandidateIndex);
+                    }
+                    for (int i = batch.Count - 1; i > 0; i--)
+                    {
+                        int j = rng.NextInt(0, i + 1);
+                        int t = batch[i];
+                        batch[i] = batch[j];
+                        batch[j] = t;
+                    }
+                    foreach (int k in batch) parallel.Report(k, summaryFor(k), 1L);
+                }
+                Assert.Equal(sequential.Status, parallel.Status);
+                Assert.Equal(sequential.Result.Outcome, parallel.Result.Outcome);
+                Assert.Equal(sequential.Result.SelectedIndex, parallel.Result.SelectedIndex);
+                Assert.Equal(sequential.Result.CandidatesEvaluated, parallel.Result.CandidatesEvaluated);
+                Assert.Equal(sequential.Result.BudgetDoubled, parallel.Result.BudgetDoubled);
+            }
+        }
+
+        [Fact]
+        public void TimeEndedPhaseConsidersOnlyTheContiguousPrefix()
+        {
+            var session = new GenerationSession(Runs.Options(candidates: 4, timeMs: 1000));
+            session.NextRequest();
+            session.NextRequest();
+            // Candidate 1 (good) arrives first, after the time budget: candidate 0 is still running, so nothing is evaluated
+            // yet, nothing passes, and the one-time doubling keeps the session running.
+            Assert.True(session.Report(1, Runs.Good(), 1100));
+            Assert.Empty(session.Evaluations);
+            Assert.True(session.BudgetDoubled);
+            Assert.Equal(GenerationStatus.Running, session.Status);
+            Assert.Equal(2000, session.NextRequest().DeadlineMs);
+            Assert.True(session.Report(0, Runs.Bad(), 1200));
+            Assert.Equal(2, session.Evaluations.Count);
+            Assert.True(session.Report(2, Runs.Bad(), 2100));
+            Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
+            Assert.Equal(1, session.Result.SelectedIndex);
+        }
+
+        [Fact]
+        public void LateReportsOfAbandonedRunsAreIgnored()
+        {
+            var session = new GenerationSession(Runs.Options(candidates: 10, timeMs: 1000));
+            for (int i = 0; i < 3; i++) session.NextRequest();
+            Assert.True(session.Report(2, Runs.Good(), 900));
+            Assert.True(session.Report(0, Runs.Good(), 1500)); // time is up; prefix [0] passes
+            Assert.Equal(GenerationOutcome.Success, session.Result.Outcome);
+            Assert.Equal(0, session.Result.SelectedIndex);
+            Assert.Equal(1, session.Result.CandidatesEvaluated);
+            Assert.Equal(0, session.OutstandingCount);
+            Assert.False(session.Report(1, Runs.Good(), 1600));
+            Assert.Single(session.Evaluations);
         }
 
         [Fact]
@@ -591,6 +859,7 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Throws<InvalidOperationException>(() => session.Report(0, Runs.Good(), 1));
             session.NextRequest();
             Assert.Throws<InvalidOperationException>(() => session.Report(1, Runs.Good(), 1));
+            Assert.Throws<InvalidOperationException>(() => session.Report(-1, Runs.Good(), 1));
             Assert.Throws<ArgumentNullException>(() => session.Report(0, null, 1));
             session.Report(0, Runs.Good(), 100);
             session.NextRequest();
@@ -598,14 +867,55 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Throws<InvalidOperationException>(() => session.Report(0, Runs.Good(), 200));
             session.Report(1, Runs.Good(), 100);
             Assert.Equal(2, session.Evaluations.Count);
+            session.NextRequest();
+            session.NextRequest();
+            session.Report(3, Runs.Good(), 100);
+            Assert.Throws<InvalidOperationException>(() => session.Report(3, Runs.Good(), 100)); // buffered duplicate
         }
 
         [Fact]
-        public void ReportAfterCompletionThrows()
+        public void ReportRejectsSummaryInconsistentWithSession()
+        {
+            // QA probe P7: target 600 -> MaxTicks 780, a 5000-tick run cannot come from this session.
+            GenerationSessionOptions o = Runs.Options();
+            o.TargetDurationTicks = 600;
+            var session = new GenerationSession(o);
+            Assert.Equal(780, session.MaxTicks);
+            session.NextRequest();
+            Assert.Throws<ArgumentException>(() => session.Report(0, Runs.Make(durationTicks: 5000, finished: false, endedByLimit: true), 1));
+            session.Report(0, Runs.Make(durationTicks: 780, finished: false, endedByLimit: true), 1);
+
+            // QA probe P8: forced winner 3 of 4, but the run reports 2 participants.
+            GenerationSessionOptions f = Runs.Options();
+            f.ForcedWinner = 3;
+            f.ParticipantCount = 4;
+            var forced = new GenerationSession(f);
+            forced.NextRequest();
+            Assert.Throws<ArgumentException>(() => forced.Report(0, Runs.Good(winner: 1, participants: 2), 1));
+            forced.Report(0, Runs.Good(winner: 3, participants: 4), 1);
+        }
+
+        [Fact]
+        public void ReportAfterCompletionIsIgnored()
         {
             var session = new GenerationSession(Runs.Options(candidates: 1));
             Runs.Drive(session, k => Runs.Good());
-            Assert.Throws<InvalidOperationException>(() => session.Report(1, Runs.Good(), 1000));
+            Assert.False(session.Report(1, Runs.Good(), 1000));
+            Assert.Equal(GenerationStatus.Completed, session.Status);
+        }
+
+        [Fact]
+        public void DeadlineFollowsTheCurrentTimeLimit()
+        {
+            var session = new GenerationSession(Runs.Options(candidates: 4, timeMs: 1000));
+            Runs.Drive(session, k => Runs.Bad(), k => 300L * (k + 1));
+            Assert.Equal(2000, session.TimeLimitMs);
+            // An aborted run (neither finished nor stopped by the limit) is Incomplete and never chosen.
+            var aborted = new GenerationSession(Runs.Options(candidates: 2, timeMs: 1000));
+            GenerationStep step = aborted.NextRequest();
+            Assert.Equal(1000, step.DeadlineMs);
+            aborted.Report(step.CandidateIndex, Runs.Make(durationTicks: 300, finished: false), step.DeadlineMs);
+            Assert.Equal(RejectReason.Incomplete, aborted.Evaluations[0].Breakdown.Rejected);
         }
 
         [Fact]
@@ -622,7 +932,9 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Null(session.Result.Selected);
             Assert.False(session.Result.QualityBelowThreshold);
             Assert.Equal(GenerationStepKind.Done, session.NextRequest().Kind);
-            Assert.Throws<InvalidOperationException>(() => session.Report(1, Runs.Good(), 20));
+            // QA probe P17: a background run still in flight reports after the user left: ignored, no exception.
+            Assert.False(session.Report(1, Runs.Good(), 20));
+            Assert.Equal(0, session.OutstandingCount);
             session.Cancel(); // idempotent
         }
 

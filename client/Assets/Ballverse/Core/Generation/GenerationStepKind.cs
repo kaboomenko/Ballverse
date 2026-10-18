@@ -9,5 +9,10 @@ namespace Ballverse.Core.Generation
         AwaitDecision = 1,
         /// <summary>The session is over; read <see cref="GenerationSession.Result"/>.</summary>
         Done = 2,
+        /// <summary>
+        /// Every candidate the current budget allows is already handed out: wait for the outstanding runs to be reported, then ask
+        /// again (parallel candidate runs, spec §2.4 step 3, §6.5).
+        /// </summary>
+        Wait = 3,
     }
 }

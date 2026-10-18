@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Ballverse.Core.Generation
 {
@@ -66,8 +66,10 @@ namespace Ballverse.Core.Generation
         /// Applies the Remote Config value <c>generation_weights</c> (spec §9.3) on top of this table and returns the result.
         /// Format: an object keyed by mode id ("ring_escape") or code ("M01"), each value
         /// <c>{ "w1", "w2", "w3", "w4", "w5", "densityMin", "densityMax", "qualityThreshold" }</c>, every field optional.
-        /// Remote Config must never break generation: malformed JSON, unknown modes and invalid entries are skipped
-        /// (the mode keeps its current profile) and described in <paramref name="warnings"/>, in ordinal key order.
+        /// Remote Config must never break generation: malformed JSON keeps the whole table; unknown modes, entries of the wrong
+        /// type (e.g. <c>"w1": "abc"</c>) and out-of-range values are skipped one by one (that mode keeps its current profile, the
+        /// others still apply) and described in <paramref name="warnings"/>, in ordinal key order. Weights must be within
+        /// 0..<see cref="SpectacleWeights.MaxWeight"/> and |qualityThreshold| ≤ <see cref="SpectacleProfile.MaxAbsThreshold"/>.
         /// </summary>
         public SpectacleProfileTable ApplyRemoteJson(string json, out IReadOnlyList<string> warnings)
         {
@@ -75,16 +77,7 @@ namespace Ballverse.Core.Generation
             warnings = warn;
             if (string.IsNullOrWhiteSpace(json)) return this;
 
-            Dictionary<string, SpectacleProfileDto> entries;
-            try
-            {
-                entries = CoreJson.Deserialize<Dictionary<string, SpectacleProfileDto>>(json);
-            }
-            catch (JsonException e)
-            {
-                warn.Add("generation_weights: malformed JSON (" + e.Message + ")");
-                return this;
-            }
+            Dictionary<string, JToken> entries = RemoteJson.ParseObject(json, "generation_weights", warn);
             if (entries == null) return this;
 
             var keys = new List<string>(entries.Keys);
@@ -97,12 +90,7 @@ namespace Ballverse.Core.Generation
                     warn.Add("generation_weights." + key + ": unknown mode");
                     continue;
                 }
-                SpectacleProfileDto dto = entries[key];
-                if (dto == null)
-                {
-                    warn.Add("generation_weights." + key + ": null entry");
-                    continue;
-                }
+                if (!RemoteJson.TryConvert(entries[key], "generation_weights." + key, warn, out SpectacleProfileDto dto)) continue;
                 SpectacleProfile current = result[(int)mode - 1];
                 if (TryMerge(current, dto, out SpectacleProfile merged, out string error))
                     result[(int)mode - 1] = merged;
@@ -152,7 +140,7 @@ namespace Ballverse.Core.Generation
             if (!SpectacleWeights.IsValidWeight(w1) || !SpectacleWeights.IsValidWeight(w2) || !SpectacleWeights.IsValidWeight(w3)
                 || !SpectacleWeights.IsValidWeight(w4) || !SpectacleWeights.IsValidWeight(w5))
             {
-                error = "weights must be finite and non-negative";
+                error = "weights must be within 0..100";
                 return false;
             }
             double min = dto.DensityMin ?? current.Density.MinPerSecond;
@@ -163,9 +151,9 @@ namespace Ballverse.Core.Generation
                 return false;
             }
             double threshold = dto.QualityThreshold ?? current.QualityThreshold;
-            if (double.IsNaN(threshold) || double.IsInfinity(threshold))
+            if (!SpectacleProfile.IsValidThreshold(threshold))
             {
-                error = "qualityThreshold must be finite";
+                error = "qualityThreshold must be finite with |qualityThreshold| <= 1000";
                 return false;
             }
             merged = new SpectacleProfile(new SpectacleWeights(w1, w2, w3, w4, w5), new DensityRange(min, max), threshold);

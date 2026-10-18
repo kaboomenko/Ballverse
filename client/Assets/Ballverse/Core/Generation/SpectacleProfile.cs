@@ -17,15 +17,26 @@ namespace Ballverse.Core.Generation
         /// </summary>
         public double QualityThreshold { get; }
 
+        /// <summary>Largest accepted |threshold| (guards against a broken Remote Config value).</summary>
+        public const double MaxAbsThreshold = 1000.0;
+
         /// <exception cref="ArgumentNullException">weights is null.</exception>
-        /// <exception cref="ArgumentOutOfRangeException">threshold is not finite.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">threshold is not valid (<see cref="IsValidThreshold"/>).</exception>
+        /// <exception cref="ArgumentException">density is invalid (e.g. <c>default(DensityRange)</c>).</exception>
         public SpectacleProfile(SpectacleWeights weights, DensityRange density, double qualityThreshold)
         {
-            if (double.IsNaN(qualityThreshold) || double.IsInfinity(qualityThreshold))
+            if (!IsValidThreshold(qualityThreshold))
                 throw new ArgumentOutOfRangeException(nameof(qualityThreshold));
+            if (!density.IsValidRange) throw new ArgumentException("Density range is invalid", nameof(density));
             Weights = weights ?? throw new ArgumentNullException(nameof(weights));
             Density = density;
             QualityThreshold = qualityThreshold;
+        }
+
+        /// <summary>True for a finite threshold with |threshold| ≤ <see cref="MaxAbsThreshold"/>.</summary>
+        public static bool IsValidThreshold(double threshold)
+        {
+            return !double.IsNaN(threshold) && Math.Abs(threshold) <= MaxAbsThreshold;
         }
     }
 }

@@ -12,17 +12,18 @@ namespace Ballverse.Core.Tests.Generation
             double coverage = 0.5, double tension = 0.5, int winner = -1, int participants = 0, IReadOnlyList<int> leaders = null,
             IReadOnlyList<int> last = null)
         {
-            return new CandidateRunSummary(duration, finished, limit, events, coverage, tension, winner, participants, leaders, false, last);
+            return new CandidateRunSummary(duration, finished, limit, events, 0, coverage, tension, winner, participants, leaders, false, last);
         }
 
         [Fact]
         public void StoresValuesAndTreatsNullListsAsEmpty()
         {
-            var s = new CandidateRunSummary(600, true, false, null, 0.25, 0.75, 1, 3, null, true);
+            var s = new CandidateRunSummary(600, true, false, null, 7, 0.25, 0.75, 1, 3, null, true);
             Assert.Equal(600, s.DurationTicks);
             Assert.True(s.Finished);
             Assert.False(s.EndedByLimit);
             Assert.Empty(s.SignificantEventTicks);
+            Assert.Equal(7, s.CollisionCount);
             Assert.Equal(0.25, s.Coverage);
             Assert.Equal(0.75, s.FinishTension);
             Assert.Equal(1, s.WinnerIndex);
@@ -86,6 +87,33 @@ namespace Ballverse.Core.Tests.Generation
         }
 
         [Fact]
+        public void DuplicateEventTicksAreCollapsedSoTheListIsBounded()
+        {
+            var s = Make(duration: 100, events: new[] { 0, 0, 5, 5, 5, 100, 100 });
+            Assert.Equal(new[] { 0, 5, 100 }, s.SignificantEventTicks);
+            var dense = new int[50000];
+            for (int i = 0; i < dense.Length; i++) dense[i] = i / 10;
+            var big = Make(duration: SimConstants.MaxDurationTicks, events: dense);
+            Assert.Equal(5000, big.SignificantEventTicks.Count);
+            Assert.True(big.SignificantEventTicks.Count <= big.DurationTicks + 1);
+        }
+
+        [Fact]
+        public void RejectsNegativeCollisionCount()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new CandidateRunSummary(600, true, false, null, -1, 0.5, 0.5, -1, 0, null, false));
+        }
+
+        [Fact]
+        public void ReachedFinaleIncludesTheGlobalCapButNotTheTargetLimit()
+        {
+            Assert.True(Make(finished: true).ReachedFinale);
+            Assert.False(Make(duration: 2340, finished: false, limit: true).ReachedFinale);
+            Assert.True(Make(duration: SimConstants.MaxDurationTicks, finished: false, limit: true).ReachedFinale);
+            Assert.False(Make(finished: false, limit: false).ReachedFinale);
+        }
+
+        [Fact]
         public void RejectsBadParticipantIndices()
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => Make(participants: -1));
@@ -100,7 +128,7 @@ namespace Ballverse.Core.Tests.Generation
         [Fact]
         public void RoundTripsThroughCoreJson()
         {
-            var s = new CandidateRunSummary(1800, false, true, new[] { 5, 60, 900 }, 0.4, 0.9, 2, 4, new[] { 0, 1, -1 }, false, new[] { 2, 2, 3 });
+            var s = new CandidateRunSummary(1800, false, true, new[] { 5, 60, 900 }, 321, 0.4, 0.9, 2, 4, new[] { 0, 1, -1 }, false, new[] { 2, 2, 3 });
             string json = CoreJson.Serialize(s);
             Assert.Contains("\"durationTicks\"", json);
             Assert.Contains("\"endedByLimit\"", json);
@@ -109,6 +137,8 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Equal(s.Finished, back.Finished);
             Assert.Equal(s.EndedByLimit, back.EndedByLimit);
             Assert.Equal(s.SignificantEventTicks, back.SignificantEventTicks);
+            Assert.Equal(321, back.CollisionCount);
+            Assert.DoesNotContain("reachedFinale", json);
             Assert.Equal(s.Coverage, back.Coverage);
             Assert.Equal(s.FinishTension, back.FinishTension);
             Assert.Equal(s.WinnerIndex, back.WinnerIndex);

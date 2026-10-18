@@ -80,14 +80,45 @@ namespace Ballverse.Core.Tests.Generation
         [Theory]
         [InlineData("{ not json")]
         [InlineData("[1,2,3]")]
-        [InlineData("{ \"orbit\": { \"w1\": \"heavy\" } }")]
-        [InlineData("{ \"orbit\": 5 }")]
+        [InlineData("42")]
         public void MalformedJsonKeepsTable(string json)
         {
             var t = SpectacleProfileTable.Default.ApplyRemoteJson(json, out IReadOnlyList<string> warnings);
             Assert.Same(SpectacleProfileTable.Default, t);
             Assert.Single(warnings);
             Assert.Contains("malformed", warnings[0]);
+        }
+
+        [Fact]
+        public void RemoteWeightsOneBadEntryKeepsOthers()
+        {
+            // QA probe P6: a type error in one mode must not discard the valid entries.
+            var t = SpectacleProfileTable.Default.ApplyRemoteJson("{\"M01\":{\"w1\":\"abc\"},\"M02\":{\"w1\":2.5},\"orbit\":5}",
+                out IReadOnlyList<string> warnings);
+            Assert.Equal(2, warnings.Count);
+            Assert.StartsWith("generation_weights.M01: invalid entry", warnings[0]);
+            Assert.StartsWith("generation_weights.orbit: entry must be an object", warnings[1]);
+            Assert.Equal(2.5, t.Get(ModeCode.M02).Weights.W1);
+            Assert.Same(SpectacleProfileTable.Default.Get(ModeCode.M01), t.Get(ModeCode.M01));
+            Assert.Same(SpectacleProfileTable.Default.Get(ModeCode.M14), t.Get(ModeCode.M14));
+        }
+
+        [Fact]
+        public void RemoteWeightsAndThresholdAreBounded()
+        {
+            // QA probe P14: 1e308 weights would overflow the total to +Infinity.
+            var t = SpectacleProfileTable.Default.ApplyRemoteJson(
+                "{\"M01\":{\"w1\":1e308,\"w2\":1e308},\"M02\":{\"w5\":100.5},\"M03\":{\"qualityThreshold\":-1e6},\"M04\":{\"w2\":100}}",
+                out IReadOnlyList<string> warnings);
+            Assert.Equal(3, warnings.Count);
+            Assert.StartsWith("generation_weights.M01:", warnings[0]);
+            Assert.StartsWith("generation_weights.M02:", warnings[1]);
+            Assert.StartsWith("generation_weights.M03:", warnings[2]);
+            Assert.Same(SpectacleProfileTable.Default.Get(ModeCode.M01), t.Get(ModeCode.M01));
+            Assert.Equal(100.0, t.Get(ModeCode.M04).Weights.W2);
+            SpectacleProfile m01 = t.Get(ModeCode.M01);
+            double total = SpectacleScorer.Score(Runs.Good(), Runs.Target, m01.Weights, m01.Density).Total;
+            Assert.False(double.IsInfinity(total));
         }
 
         [Theory]
@@ -145,6 +176,10 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Throws<ArgumentOutOfRangeException>(() => new SpectacleWeights(0, 0, double.PositiveInfinity, 0, 0));
             Assert.Throws<ArgumentOutOfRangeException>(() => new SpectacleWeights(0, 0, 0, -1, 0));
             Assert.Throws<ArgumentOutOfRangeException>(() => new SpectacleWeights(0, 0, 0, 0, -1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new SpectacleWeights(SpectacleWeights.MaxWeight + 0.001, 0, 0, 0, 0));
+            new SpectacleWeights(SpectacleWeights.MaxWeight, 0, 0, 0, SpectacleWeights.MaxWeight);
+            Assert.Throws<ArgumentOutOfRangeException>(() => new SpectacleProfile(SpectacleWeights.Default, new DensityRange(0, 1), 1001));
+            Assert.Throws<ArgumentException>(() => new SpectacleProfile(SpectacleWeights.Default, default(DensityRange), 1.0));
             Assert.Throws<ArgumentNullException>(() => new SpectacleProfile(null, new DensityRange(0, 1), 0));
             Assert.Throws<ArgumentOutOfRangeException>(() => new SpectacleProfile(SpectacleWeights.Default, new DensityRange(0, 1), double.NaN));
             Assert.Throws<ArgumentOutOfRangeException>(() => new DensityRange(2, 1));

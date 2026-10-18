@@ -17,12 +17,15 @@ namespace Ballverse.Core.Generation
         /// <summary>Required share of generations ready within the tier time budget (95% on tier B).</summary>
         public const double RequiredTimeHitRate = 0.95;
 
-        /// <summary>True when the run reached its finale within target ± 3 s (a run stopped by the limit never counts).</summary>
+        /// <summary>
+        /// True when the run reached its finale within target ± 3 s. A run stopped by the target × 1.3 limit never counts; a run
+        /// that reached the global 180 s cap has a forced finale there (spec §2.1, <see cref="CandidateRunSummary.ReachedFinale"/>).
+        /// </summary>
         public static bool FinishedWithinTarget(CandidateRunSummary summary, int targetDurationTicks)
         {
             if (summary == null) throw new ArgumentNullException(nameof(summary));
             if (targetDurationTicks <= 0) throw new ArgumentOutOfRangeException(nameof(targetDurationTicks));
-            return summary.Finished && Math.Abs(summary.DurationTicks - targetDurationTicks) <= DurationToleranceTicks;
+            return summary.ReachedFinale && Math.Abs(summary.DurationTicks - targetDurationTicks) <= DurationToleranceTicks;
         }
 
         /// <summary>

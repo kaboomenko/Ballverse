@@ -63,6 +63,31 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Equal(1.0, SpectacleScorer.FitDuration(s, null));
         }
 
+        [Theory]
+        [InlineData(10800, 1.0)]                 // target 180 s: capped run lands exactly on target (QA probe P5b)
+        [InlineData(10200, 24600.0 / 30600.0)]   // target 170 s: 10 s over (QA probe P5)
+        [InlineData(9000, 1.0 / 3.0)]            // target 150 s: 30 s over
+        [InlineData(7800, 0.0)]                  // target 130 s: limit 169 s < 180 s, a capped run cannot exist; formula gives 0
+        public void FitForRunCappedAt180sWithLongTarget(int target, double expected)
+        {
+            // Spec §2.1: at the 180 s cap the mode forces a finale "by points", so the run is scored on its duration.
+            var capped = Runs.Make(durationTicks: SimConstants.MaxDurationTicks, finished: false, endedByLimit: true);
+            Assert.Equal(expected, SpectacleScorer.FitDuration(capped, target), 12);
+            Assert.Equal(expected, SpectacleScorer.Score(capped, target, SpectacleWeights.Default, Range).FitDuration, 12);
+            Assert.Equal(target == 10800, GenerationAcceptance.FinishedWithinTarget(capped, target));
+        }
+
+        [Fact]
+        public void FitStaysZeroWhenStoppedByTargetLimitBelowTheCap()
+        {
+            int limit = GenerationSession.RunLimitTicks(9000);
+            Assert.Equal(SimConstants.MaxDurationTicks, limit);
+            var stopped = Runs.Make(durationTicks: GenerationSession.RunLimitTicks(1800), finished: false, endedByLimit: true);
+            Assert.Equal(0.0, SpectacleScorer.FitDuration(stopped, 1800));
+            var almostCap = Runs.Make(durationTicks: SimConstants.MaxDurationTicks - 1, finished: false, endedByLimit: true);
+            Assert.Equal(0.0, SpectacleScorer.FitDuration(almostCap, 10800));
+        }
+
         [Fact]
         public void FitRejectsNonPositiveTarget()
         {
@@ -99,6 +124,31 @@ namespace Ballverse.Core.Tests.Generation
             Assert.Equal(0.0, SpectacleScorer.EventDensity(0, 1800, Range));
             Assert.Equal(0.0, SpectacleScorer.EventDensity(0, 0, Range));
             Assert.Equal(0.0, SpectacleScorer.DensityScore(double.PositiveInfinity, Range));
+        }
+
+        [Fact]
+        public void DensityCountsCollisionsNotSignificantEvents()
+        {
+            // Spec §2.4: eventDensity = collisions per second; stagnation = gaps without significant events.
+            var rolling = new CandidateRunSummary(1800, true, false, null, 150, 0.5, 0.5, -1, 0, null, false);
+            SpectacleBreakdown b = SpectacleScorer.Score(rolling, null, SpectacleWeights.Default, Range);
+            Assert.Equal(1.0, b.EventDensity); // 5 collisions/s
+            Assert.Equal(1.0, b.Stagnation);   // but nothing significant happened
+            var eventful = new CandidateRunSummary(1800, true, false, Runs.EvenEvents(1800, 60), 0, 0.5, 0.5, -1, 0, null, false);
+            SpectacleBreakdown e = SpectacleScorer.Score(eventful, null, SpectacleWeights.Default, Range);
+            Assert.Equal(0.0, e.EventDensity);
+            Assert.Equal(0.0, e.Stagnation);
+        }
+
+        [Fact]
+        public void DefaultDensityRangeIsRejected()
+        {
+            // QA probe P12: default(DensityRange) = (0, 0) bypasses the constructor and used to score a silent run as 1.
+            Assert.Throws<ArgumentException>(() => SpectacleScorer.DensityScore(0.0, default(DensityRange)));
+            Assert.Throws<ArgumentException>(() => SpectacleScorer.EventDensity(0, 600, default(DensityRange)));
+            Assert.Throws<ArgumentException>(() => SpectacleScorer.Score(Runs.Good(), null, SpectacleWeights.Default, default(DensityRange)));
+            Assert.False(default(DensityRange).IsValidRange);
+            Assert.True(Range.IsValidRange);
         }
 
         [Fact]
@@ -203,7 +253,7 @@ namespace Ballverse.Core.Tests.Generation
             var w = new SpectacleWeights(1.5, 0.7, 0.9, 0.3, 2.0);
             // 30 s run, events at 2..10 s then nothing: stagnation = 20 s / 30 s
             var events = new[] { 120, 240, 360, 480, 600 };
-            var s = new CandidateRunSummary(1800, true, false, events, 0.6, 0.4, -1, 0, null, false);
+            var s = new CandidateRunSummary(1800, true, false, events, events.Length, 0.6, 0.4, -1, 0, null, false);
             SpectacleBreakdown b = SpectacleScorer.Score(s, 2070, w, Range);
             double fit = 1.0 - (270.0 / 2070.0) / 0.3;
             double density = SpectacleScorer.DensityScore(5.0 / 30.0, Range);
@@ -263,7 +313,7 @@ namespace Ballverse.Core.Tests.Generation
         [Fact]
         public void EmptyRunScoresWithoutDivisionByZero()
         {
-            var s = new CandidateRunSummary(0, true, false, null, 0.0, 0.0, -1, 0, null, false);
+            var s = new CandidateRunSummary(0, true, false, null, 0, 0.0, 0.0, -1, 0, null, false);
             SpectacleBreakdown b = SpectacleScorer.Score(s, 1800, SpectacleWeights.Default, Range);
             Assert.Equal(0.0, b.FitDuration);
             Assert.Equal(0.0, b.EventDensity);
@@ -298,7 +348,7 @@ namespace Ballverse.Core.Tests.Generation
             for (int e = 0; e < eventCount; e++) events[e] = rng.NextInt(0, duration + 1);
             Array.Sort(events);
             bool finished = rng.NextBool();
-            return new CandidateRunSummary(duration, finished, !finished && rng.NextBool(), events, rng.NextDouble(), rng.NextDouble(),
+            return new CandidateRunSummary(duration, finished, !finished && rng.NextBool(), events, rng.NextInt(0, 2000), rng.NextDouble(), rng.NextDouble(),
                 -1, 0, null, rng.NextUInt(10) == 0);
         }
     }

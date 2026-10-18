@@ -23,6 +23,12 @@ namespace Ballverse.Core.Generation
         /// <summary>The director goal was achieved by the selected candidate (always true for <see cref="DirectorGoal.None"/>).</summary>
         public bool GoalMet { get; }
 
+        /// <summary>
+        /// UI hint "the director goal was not reached" (spec §2.5): a candidate was chosen but no evaluated candidate that could be
+        /// chosen met the goal (goal-meeting candidates are always preferred, see <see cref="GenerationSession"/>).
+        /// </summary>
+        public bool DirectorGoalMissed => Selected != null && !GoalMet;
+
         public GenerationResult(GenerationOutcome outcome, CandidateEvaluation selected, int nearestCandidateIndex, int candidatesEvaluated,
             long elapsedMs, bool budgetDoubled, int searchLongerCount, bool hasForcedWinner, bool goalMet)
         {

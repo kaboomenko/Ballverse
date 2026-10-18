@@ -61,12 +61,32 @@ namespace Ballverse.Core.Tests.Generation
         [Theory]
         [InlineData("{")]
         [InlineData("\"text\"")]
-        [InlineData("{ \"A\": { \"candidates\": 1.5e40 } }")]
+        [InlineData("[1, 2]")]
         public void MalformedRemoteJsonKeepsTable(string json)
         {
             var t = GenerationBudgetTable.Default.ApplyRemoteJson(json, out IReadOnlyList<string> warnings);
             Assert.Same(GenerationBudgetTable.Default, t);
             Assert.Single(warnings);
+            Assert.Contains("malformed", warnings[0]);
+        }
+
+        [Fact]
+        public void RemoteBudgetOneBadEntryKeepsOthers()
+        {
+            var t = GenerationBudgetTable.Default.ApplyRemoteJson(
+                "{ \"A\": { \"candidates\": 1.5e40 }, \"B\": { \"timeMs\": \"slow\" }, \"C\": 3 , \"D\": {} }",
+                out IReadOnlyList<string> warnings);
+            Assert.Equal(4, warnings.Count);
+            Assert.StartsWith("generation_budget_by_tier.A: invalid entry", warnings[0]);
+            Assert.StartsWith("generation_budget_by_tier.B: invalid entry", warnings[1]);
+            Assert.StartsWith("generation_budget_by_tier.C: entry must be an object", warnings[2]);
+            Assert.StartsWith("generation_budget_by_tier.D: unknown tier", warnings[3]);
+
+            t = GenerationBudgetTable.Default.ApplyRemoteJson("{ \"A\": { \"candidates\": \"x\" }, \"B\": { \"candidates\": 5 } }",
+                out warnings);
+            Assert.Single(warnings);
+            Assert.Equal(GenerationBudget.TierA, t.Get(DeviceTier.A));
+            Assert.Equal(new GenerationBudget(5, 2500), t.Get(DeviceTier.B));
         }
 
         [Fact]

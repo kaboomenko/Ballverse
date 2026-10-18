@@ -6,11 +6,16 @@ namespace Ballverse.Core.Generation
     public static class DirectorAnalysis
     {
         /// <summary>
-        /// Comeback (spec §2.5 "the winner was last in the first half"). The summary only carries per-second samples, so:
-        /// there is a winner, at least 2 participants and at least one sample in the first half (sample i is at tick (i + 1) × 60,
-        /// first half = ticks ≤ duration / 2); the winner never led in any first-half sample; and, when the mode reports
-        /// <see cref="CandidateRunSummary.LastPlaceBySecond"/>, the winner was in last place in at least one first-half sample.
-        /// With 2 participants "never led" already means "was last".
+        /// Comeback (spec §2.5 "the winner was last in the first half"). The summary only carries per-second samples (sample i is
+        /// at tick (i + 1) × 60, first half = ticks ≤ duration / 2), so a comeback needs a winner, at least 2 participants, the
+        /// winner never leading in a first-half sample, and positive evidence that the winner was last in a first-half sample:
+        /// <list type="bullet">
+        /// <item>with <see cref="CandidateRunSummary.LastPlaceBySecond"/> reported: the winner is the last-place sample at least once;</item>
+        /// <item>without it and exactly 2 participants: the other participant led at least once (a -1 "no clear leader"
+        /// sample is a tie, not evidence);</item>
+        /// <item>without it and more than 2 participants: never a comeback (leading samples cannot tell 2nd place from last),
+        /// so race and battle modes with more than 2 participants must report LastPlaceBySecond.</item>
+        /// </list>
         /// </summary>
         public static bool IsComeback(CandidateRunSummary summary)
         {
@@ -20,13 +25,16 @@ namespace Ballverse.Core.Generation
 
             int firstHalfSamples = FirstHalfSampleCount(summary.DurationTicks);
             int leaderSamples = Math.Min(firstHalfSamples, summary.LeaderBySecond.Count);
-            if (leaderSamples == 0) return false;
+            bool otherLed = false;
             for (int i = 0; i < leaderSamples; i++)
             {
-                if (summary.LeaderBySecond[i] == winner) return false;
+                int leader = summary.LeaderBySecond[i];
+                if (leader == winner) return false;
+                if (leader >= 0) otherLed = true;
             }
 
-            if (summary.LastPlaceBySecond.Count == 0) return true;
+            if (summary.LastPlaceBySecond.Count == 0)
+                return summary.ParticipantCount == 2 && otherLed;
             int lastSamples = Math.Min(firstHalfSamples, summary.LastPlaceBySecond.Count);
             for (int i = 0; i < lastSamples; i++)
             {

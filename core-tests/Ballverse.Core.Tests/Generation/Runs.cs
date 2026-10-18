@@ -32,9 +32,11 @@ namespace Ballverse.Core.Tests.Generation
             bool endedByLimit = false,
             bool stuck = false,
             int[] leaders = null,
-            int[] lastPlace = null)
+            int[] lastPlace = null,
+            int collisions = -1)
         {
-            return new CandidateRunSummary(durationTicks, finished, endedByLimit, EvenEvents(durationTicks, eventEveryTicks),
+            int[] events = EvenEvents(durationTicks, eventEveryTicks);
+            return new CandidateRunSummary(durationTicks, finished, endedByLimit, events, collisions >= 0 ? collisions : events.Length,
                 coverage, tension, winner, participants, leaders, stuck, lastPlace);
         }
 
@@ -63,7 +65,7 @@ namespace Ballverse.Core.Tests.Generation
             };
         }
 
-        /// <summary>Runs every requested candidate; elapsed defaults to 10 ms per candidate. Returns the first non-run step.</summary>
+        /// <summary>Runs every requested candidate sequentially; elapsed defaults to 10 ms per candidate. Returns the first non-run step.</summary>
         public static GenerationStep Drive(GenerationSession session, Func<int, CandidateRunSummary> summaryFor,
             Func<int, long> elapsedAfter = null, int safety = 10000)
         {

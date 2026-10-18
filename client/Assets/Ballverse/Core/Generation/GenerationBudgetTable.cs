@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Ballverse.Core.Generation
 {
@@ -31,8 +31,9 @@ namespace Ballverse.Core.Generation
 
         /// <summary>
         /// Applies Remote Config <c>generation_budget_by_tier</c> (spec §9.3): <c>{ "A": { "candidates": 24, "timeMs": 1500 }, … }</c>,
-        /// fields optional. Malformed JSON, unknown tiers and out-of-range values
-        /// (<see cref="GenerationBudget.IsValidConfigured"/>) are skipped and reported in <paramref name="warnings"/> in ordinal key order.
+        /// fields optional. Malformed JSON keeps the whole table; unknown tiers, entries of the wrong type and out-of-range values
+        /// (<see cref="GenerationBudget.IsValidConfigured"/>) are skipped one by one and reported in <paramref name="warnings"/> in
+        /// ordinal key order.
         /// </summary>
         public GenerationBudgetTable ApplyRemoteJson(string json, out IReadOnlyList<string> warnings)
         {
@@ -40,16 +41,7 @@ namespace Ballverse.Core.Generation
             warnings = warn;
             if (string.IsNullOrWhiteSpace(json)) return this;
 
-            Dictionary<string, GenerationBudgetDto> entries;
-            try
-            {
-                entries = CoreJson.Deserialize<Dictionary<string, GenerationBudgetDto>>(json);
-            }
-            catch (JsonException e)
-            {
-                warn.Add("generation_budget_by_tier: malformed JSON (" + e.Message + ")");
-                return this;
-            }
+            Dictionary<string, JToken> entries = RemoteJson.ParseObject(json, "generation_budget_by_tier", warn);
             if (entries == null) return this;
 
             var keys = new List<string>(entries.Keys);
@@ -63,12 +55,7 @@ namespace Ballverse.Core.Generation
                     warn.Add("generation_budget_by_tier." + key + ": unknown tier");
                     continue;
                 }
-                GenerationBudgetDto dto = entries[key];
-                if (dto == null)
-                {
-                    warn.Add("generation_budget_by_tier." + key + ": null entry");
-                    continue;
-                }
+                if (!RemoteJson.TryConvert(entries[key], "generation_budget_by_tier." + key, warn, out GenerationBudgetDto dto)) continue;
                 GenerationBudget current = result[tierIndex];
                 int candidates = dto.Candidates ?? current.Candidates;
                 long timeMs = dto.TimeMs ?? current.TimeMs;

@@ -31,29 +31,53 @@ namespace Ballverse.Core.Tests.Generation
         }
 
         [Fact]
-        public void WinnerWhoNeverLedInFirstHalfIsComeback()
+        public void TwoParticipantsWinnerWhoTrailedInFirstHalfIsComeback()
         {
-            // Player 2 leads only from second 10 onwards (second half).
-            int[] leaders = Fill(20, 2, from: 10, other: 0);
-            Assert.True(DirectorAnalysis.IsComeback(Race(2, leaders)));
+            // Participant 1 leads only from second 10 onwards (second half); participant 0 led before.
+            int[] leaders = Fill(20, 1, from: 10, other: 0);
+            Assert.True(DirectorAnalysis.IsComeback(Race(1, leaders, participants: 2)));
         }
 
         [Fact]
         public void WinnerWhoLedInFirstHalfIsNotComeback()
         {
-            int[] leaders = Fill(20, 2, from: 10, other: 0);
-            leaders[9] = 2; // led at the last first-half sample
-            Assert.False(DirectorAnalysis.IsComeback(Race(2, leaders)));
+            int[] leaders = Fill(20, 1, from: 10, other: 0);
+            leaders[9] = 1; // led at the last first-half sample
+            Assert.False(DirectorAnalysis.IsComeback(Race(1, leaders, participants: 2)));
             leaders[9] = 0;
-            leaders[0] = 2;
-            Assert.False(DirectorAnalysis.IsComeback(Race(2, leaders)));
+            leaders[0] = 1;
+            Assert.False(DirectorAnalysis.IsComeback(Race(1, leaders, participants: 2)));
+            // Also with last-place samples showing the winner last at some point.
+            Assert.False(DirectorAnalysis.IsComeback(Race(1, leaders, Fill(20, 1), participants: 2)));
         }
 
         [Fact]
-        public void TiesInLeaderSamplesDoNotCountAsLeading()
+        public void ComebackFalseWhenFirstHalfAllTies_TwoParticipants()
         {
-            int[] leaders = Fill(20, -1, to: 10, other: 1);
-            Assert.True(DirectorAnalysis.IsComeback(Race(1, leaders)));
+            // QA probe P2: a dead heat (no clear leader) for the whole first half is not "was last".
+            int[] leaders = Fill(20, -1, to: 10, other: 0);
+            Assert.False(DirectorAnalysis.IsComeback(Race(0, leaders, participants: 2)));
+        }
+
+        [Fact]
+        public void TiesCountAsNeitherLeadingNorEvidence_TwoParticipants()
+        {
+            // Mostly ties, but the other participant led once: the winner trailed, so it is a comeback.
+            int[] leaders = Fill(20, -1, to: 10, other: 0);
+            leaders[3] = 1;
+            Assert.True(DirectorAnalysis.IsComeback(Race(0, leaders, participants: 2)));
+        }
+
+        [Fact]
+        public void ComebackRequiresLastPlaceForMoreThanTwo()
+        {
+            // QA probe P3: 4 participants, participant 1 leads the first half, the winner 2 was never last as far as we know.
+            int[] leaders = Fill(20, 2, from: 10, other: 1);
+            Assert.False(DirectorAnalysis.IsComeback(Race(2, leaders)));
+            // Second place throughout the first half (last place is participant 3): still not a comeback.
+            Assert.False(DirectorAnalysis.IsComeback(Race(2, leaders, Fill(20, 3))));
+            // With last-place evidence it is.
+            Assert.True(DirectorAnalysis.IsComeback(Race(2, leaders, Fill(20, 2, to: 3, other: 3))));
         }
 
         [Fact]
@@ -65,16 +89,20 @@ namespace Ballverse.Core.Tests.Generation
             lastWithoutWinner[15] = 3; // last only in the second half
             Assert.True(DirectorAnalysis.IsComeback(Race(3, leaders, lastWithWinner)));
             Assert.False(DirectorAnalysis.IsComeback(Race(3, leaders, lastWithoutWinner)));
+            // Two participants: last-place samples, when reported, are the evidence.
+            int[] duel = Fill(20, 1, from: 10, other: -1);
+            Assert.False(DirectorAnalysis.IsComeback(Race(1, duel, Fill(20, 0), participants: 2)));
+            Assert.True(DirectorAnalysis.IsComeback(Race(1, duel, Fill(20, 1, to: 1, other: -1), participants: 2)));
         }
 
         [Fact]
         public void NoComebackWithoutWinnerOrSamples()
         {
             int[] leaders = Fill(20, 0);
-            Assert.False(DirectorAnalysis.IsComeback(Race(-1, leaders)));
-            Assert.False(DirectorAnalysis.IsComeback(Race(1, new int[0])));
+            Assert.False(DirectorAnalysis.IsComeback(Race(-1, leaders, participants: 2)));
+            Assert.False(DirectorAnalysis.IsComeback(Race(1, new int[0], participants: 2)));
             // Run too short to have a first-half sample.
-            Assert.False(DirectorAnalysis.IsComeback(Race(1, new[] { 0 }, duration: 100)));
+            Assert.False(DirectorAnalysis.IsComeback(Race(1, new[] { 0 }, participants: 2, duration: 100)));
             // Single participant cannot come back.
             Assert.False(DirectorAnalysis.IsComeback(Race(0, new[] { -1, -1, -1 }, participants: 1)));
         }
@@ -82,8 +110,8 @@ namespace Ballverse.Core.Tests.Generation
         [Fact]
         public void ShortLeaderSeriesUsesAvailableSamples()
         {
-            // Only 3 samples although the first half has 10: winner never led in them.
-            Assert.True(DirectorAnalysis.IsComeback(Race(1, new[] { 0, 0, 2 })));
+            // Only 3 samples although the first half has 10: the winner never led in them, the other did.
+            Assert.True(DirectorAnalysis.IsComeback(Race(1, new[] { 0, 0, -1 }, participants: 2)));
         }
 
         [Fact]

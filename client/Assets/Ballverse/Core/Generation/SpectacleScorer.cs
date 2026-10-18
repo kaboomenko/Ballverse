@@ -19,17 +19,21 @@ namespace Ballverse.Core.Generation
         /// <summary>
         /// Scores a candidate (spec §2.4 step 4). <paramref name="targetDurationTicks"/> null means "unlimited" (or an interactive
         /// mode, whose duration is not selected): fitDuration is then 1 for every candidate. Stuck or aborted candidates
-        /// get their metrics computed but are marked <see cref="SpectacleBreakdown.Rejected"/>.
+        /// get their metrics computed but are marked <see cref="SpectacleBreakdown.Rejected"/>. eventDensity is computed from
+        /// <see cref="CandidateRunSummary.CollisionCount"/> ("collisions per second"), stagnation from
+        /// <see cref="CandidateRunSummary.SignificantEventTicks"/> (spec §2.4 metrics table).
         /// </summary>
         /// <exception cref="ArgumentNullException">summary or weights is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">target is not positive.</exception>
+        /// <exception cref="ArgumentException">densityRange is invalid (e.g. <c>default(DensityRange)</c>).</exception>
         public static SpectacleBreakdown Score(CandidateRunSummary summary, int? targetDurationTicks, SpectacleWeights weights, DensityRange densityRange)
         {
             if (summary == null) throw new ArgumentNullException(nameof(summary));
             if (weights == null) throw new ArgumentNullException(nameof(weights));
+            ValidateRange(densityRange);
 
             double fit = FitDuration(summary, targetDurationTicks);
-            double density = EventDensity(summary.SignificantEventTicks.Count, summary.DurationTicks, densityRange);
+            double density = EventDensity(summary.CollisionCount, summary.DurationTicks, densityRange);
             double tension = summary.FinishTension;
             double coverage = summary.Coverage;
             double stagnation = Stagnation(summary.SignificantEventTicks, summary.DurationTicks);
@@ -43,14 +47,16 @@ namespace Ballverse.Core.Generation
         }
 
         /// <summary>
-        /// fitDuration of a run. A run that hit the headless limit without a finale has no finale to fit, so it gets 0 when a
-        /// target is set (spec §2.4: "how close the finale is to the target"). No target → 1.
+        /// fitDuration of a run. A run stopped by the headless limit target × 1.3 has no finale to fit, so it gets 0 when a
+        /// target is set (spec §2.4: "how close the finale is to the target"). A run that reached the global 180 s cap has a
+        /// forced finale there (spec §2.1, <see cref="CandidateRunSummary.ReachedFinale"/>) and is scored on its duration, which
+        /// matters for targets above ≈ 138 s whose ±30% window reaches past 180 s. No target → 1.
         /// </summary>
         public static double FitDuration(CandidateRunSummary summary, int? targetDurationTicks)
         {
             if (summary == null) throw new ArgumentNullException(nameof(summary));
             if (targetDurationTicks == null) return 1.0;
-            if (summary.EndedByLimit)
+            if (summary.EndedByLimit && !summary.ReachedFinale)
             {
                 ValidateTarget(targetDurationTicks.Value);
                 return 0.0;
@@ -93,8 +99,10 @@ namespace Ballverse.Core.Generation
         /// 1 inside [min, max]; outside, a smooth log-scale falloff <c>2^(−log2(r)²)</c> where r is the factor by which the rate
         /// misses the nearest bound: ×2 off → 0.5, ×4 off → 0.0625, rate 0 → 0. Continuous with zero slope at the bounds.
         /// </summary>
+        /// <exception cref="ArgumentException">range is invalid (e.g. <c>default(DensityRange)</c>).</exception>
         public static double DensityScore(double eventsPerSecond, DensityRange range)
         {
+            ValidateRange(range);
             if (double.IsNaN(eventsPerSecond) || eventsPerSecond < 0.0) throw new ArgumentOutOfRangeException(nameof(eventsPerSecond));
             double ratio;
             if (eventsPerSecond < range.MinPerSecond)
@@ -139,6 +147,11 @@ namespace Ballverse.Core.Generation
             int tail = durationTicks - prev;
             if (tail > StagnationGapTicks) stagnant += tail;
             return stagnant / (double)durationTicks;
+        }
+
+        static void ValidateRange(DensityRange range)
+        {
+            if (!range.IsValidRange) throw new ArgumentException("Density range is invalid (default(DensityRange)?)", "densityRange");
         }
 
         static void ValidateTarget(int target)

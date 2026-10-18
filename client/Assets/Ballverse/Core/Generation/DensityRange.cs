@@ -19,6 +19,12 @@ namespace Ballverse.Core.Generation
             MaxPerSecond = maxPerSecond;
         }
 
+        /// <summary>
+        /// False for <c>default(DensityRange)</c> (0, 0), which bypasses the constructor; consumers check it
+        /// (<see cref="SpectacleProfile"/>, <see cref="SpectacleScorer"/>).
+        /// </summary>
+        public bool IsValidRange => IsValid(MinPerSecond, MaxPerSecond);
+
         /// <summary>Validation shared with the remote-config parser.</summary>
         public static bool IsValid(double minPerSecond, double maxPerSecond)
         {
