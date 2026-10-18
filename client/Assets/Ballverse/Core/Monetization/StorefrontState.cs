@@ -16,9 +16,10 @@ namespace Ballverse.Core.Monetization
         /// <summary>The user's current entitlements.</summary>
         public EntitlementSet Entitlements { get; }
         /// <summary>
-        /// Nothing more can be bought: the user has every entitlement that owning all sellable products would give
+        /// Nothing more can be bought: the user has every entitlement that owning all sellable products would give, paid
+        /// modes they can already play without one (free by config or grandfathered, spec §5.1) counted as had
         /// (spec §5.2 last row "Всё куплено ✓"; full catalog: every entitlement; release 1: NO_EXPORT_ADS, NO_INTERSTITIALS
-        /// and NO_WATERMARK). No offers are visible then.
+        /// and NO_WATERMARK). True exactly when no offer is visible.
         /// </summary>
         public bool AllPurchased { get; }
 

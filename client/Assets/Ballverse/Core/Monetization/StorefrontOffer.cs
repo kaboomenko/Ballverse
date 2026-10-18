@@ -54,8 +54,11 @@ namespace Ballverse.Core.Monetization
         /// <summary>All Modes only: the user has 1…9 of its 10 modes.</summary>
         public bool PartiallyOwned { get; }
         /// <summary>
-        /// Visible non-Ultimate product that completes the full Ultimate contents, so it also removes the watermark
-        /// (spec §5.2 "последний шаг: … и водяной знак уйдут", §5.1 NO_WATERMARK by parts).
+        /// Visible non-Ultimate product that removes the watermark by completing a set the user has already started
+        /// (spec §5.2 "последний шаг: … и водяной знак уйдут"): the full Ultimate contents (§5.1 NO_WATERMARK by parts),
+        /// or, under the release-1 No Ads rule or its grandfathering, both ad rights (e.g. Remove Interstitial after
+        /// Remove Export). False on a first purchase that removes the watermark on its own (No Ads with nothing owned);
+        /// use <see cref="RemovesWatermark"/> for the "+ без водяного знака" badge.
         /// </summary>
         public bool IsLastStep { get; }
         /// <summary>Buying it grants NO_WATERMARK; on Ultimate this is the "+ без водяного знака" badge (spec §5.2, §3.10).</summary>

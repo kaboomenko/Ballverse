@@ -33,7 +33,8 @@ namespace Ballverse.Core.Tests.Monetization
             var noAds = s.Get(ProductIds.NoAds);
             Assert.Equal(EntitlementSet.AdFree.With(Entitlement.NoWatermark), noAds.Gain);
             Assert.True(noAds.RemovesWatermark);
-            Assert.True(noAds.IsLastStep);
+            // A first purchase is not a "последний шаг" (StorefrontOffer.IsLastStep); RemovesWatermark carries the badge.
+            Assert.False(noAds.IsLastStep);
             Assert.False(s.Get(ProductIds.RemoveExportAds).RemovesWatermark);
             Assert.False(s.Get(ProductIds.RemoveInterstitialAds).RemovesWatermark);
             foreach (var o in s.Offers)
@@ -128,7 +129,7 @@ namespace Ballverse.Core.Tests.Monetization
         {
             Assert.Empty(Storefront.CheapestPartsToComplete(EntitlementSet.Empty, R1));
             Assert.Equal(new[] { ProductIds.NoAds }, Storefront.CheapestPartsToComplete(EntitlementSet.PaidModes10, R1).ToArray());
-            Assert.Equal(new[] { ProductIds.AllModes, ProductIds.NoAds }, Storefront.CheapestPartsToComplete(EntitlementSet.Empty).ToArray());
+            Assert.Equal(new[] { ProductIds.AllModes, ProductIds.NoAds }, Storefront.CheapestPartsToComplete(EntitlementSet.Empty, MonetizationConfig.FullCatalog).ToArray());
         }
 
         [Fact]
@@ -143,7 +144,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void FirstVideoQuest_NoOfferBecauseAllModesIsNotSold()
         {
-            var screen = SalePointPolicy.FirstVideoQuest(false, None, false, R1);
+            var screen = SalePointPolicy.FirstVideoQuest(false, None, R1, false);
             Assert.False(screen.ShowOffer);
             Assert.Same(FirstVideoQuestScreen.None, screen);
         }
@@ -154,12 +155,12 @@ namespace Ballverse.Core.Tests.Monetization
             for (int m = 6; m <= 15; m++)
             {
                 Assert.Equal(TrialPreviewAccess.NotReleased,
-                    SalePointPolicy.CanStartTrialPreview((ModeCode)m, EntitlementSet.Empty, null, 0, true, null, R1));
+                    SalePointPolicy.CanStartTrialPreview((ModeCode)m, EntitlementSet.Empty, null, 0, R1, true, null));
             }
             for (int m = 1; m <= 5; m++)
             {
                 Assert.Equal(TrialPreviewAccess.NotPaid,
-                    SalePointPolicy.CanStartTrialPreview((ModeCode)m, EntitlementSet.Empty, null, 0, true, null, R1));
+                    SalePointPolicy.CanStartTrialPreview((ModeCode)m, EntitlementSet.Empty, null, 0, R1, true, null));
             }
         }
 
@@ -170,14 +171,14 @@ namespace Ballverse.Core.Tests.Monetization
             var c = new MonetizationConfig(new ModeCode[0], true, MonetizationConfig.Release1.SellableProductIds,
                 new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05, ModeCode.M14 }, true);
             var nothing = EntitlementSet.Empty;
-            Assert.Equal(TrialPreviewAccess.NotSold, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, nothing, 5, 5, false, null, c));
+            Assert.Equal(TrialPreviewAccess.NotSold, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, nothing, 5, 5, c, false, null));
             Assert.Equal(TrialPreviewAccess.NotLocked,
-                SalePointPolicy.CanStartTrialPreview(ModeCode.M14, Entitlements.From(new[] { ProductIds.ModeOrbit }), 5, 5, false, null, c));
-            Assert.Equal(TrialPreviewAccess.NotReleased, SalePointPolicy.CanStartTrialPreview(ModeCode.M13, nothing, 5, 5, false, null, c));
-            Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M03, nothing, 5, 5, false, null, c));
+                SalePointPolicy.CanStartTrialPreview(ModeCode.M14, Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog), 5, 5, c, false, null));
+            Assert.Equal(TrialPreviewAccess.NotReleased, SalePointPolicy.CanStartTrialPreview(ModeCode.M13, nothing, 5, 5, c, false, null));
+            Assert.Equal(TrialPreviewAccess.NotPaid, SalePointPolicy.CanStartTrialPreview(ModeCode.M03, nothing, 5, 5, c, false, null));
             // Once its single is sold, the demo is allowed.
             var sold = new MonetizationConfig(new ModeCode[0], true, new[] { ProductIds.ModeOrbit }, c.ReleasedModes, true);
-            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, nothing, null, 5, true, null, sold));
+            Assert.Equal(TrialPreviewAccess.Allowed, SalePointPolicy.CanStartTrialPreview(ModeCode.M14, nothing, null, 5, sold, true, null));
             Assert.Equal(new[] { ProductIds.ModeOrbit }, Ids(Storefront.ModeSheet(ModeCode.M14, None, sold)));
         }
 
@@ -199,9 +200,9 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void DoneScreenLine_FullCatalogMatchesWatermarkOffers()
         {
-            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None)));
+            Assert.Equal(new[] { ProductIds.Ultimate }, Ids(SalePointPolicy.DoneScreenLineOffers(3, null, None, MonetizationConfig.FullCatalog)));
             var owned = new[] { ProductIds.RemoveExportAds, ProductIds.ModeSmash };
-            Assert.Equal(Ids(Storefront.WatermarkOffers(owned)), Ids(SalePointPolicy.DoneScreenLineOffers(3, null, owned)));
+            Assert.Equal(Ids(Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog)), Ids(SalePointPolicy.DoneScreenLineOffers(3, null, owned, MonetizationConfig.FullCatalog)));
         }
 
         [Fact]

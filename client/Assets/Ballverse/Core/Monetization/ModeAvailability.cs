@@ -31,11 +31,11 @@ namespace Ballverse.Core.Monetization
         /// Access of <paramref name="mode"/>, checked in order NotReleased, Free, Grandfathered, Entitled.
         /// </summary>
         /// <param name="grandfathered">Persisted grandfathered modes; null means none.</param>
-        /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
+        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         public static ModeAccess GetAccess(ModeCode mode, EntitlementSet entitlements,
-            IEnumerable<ModeCode> grandfathered, MonetizationConfig config = null)
+            IEnumerable<ModeCode> grandfathered, MonetizationConfig config)
         {
-            config = config ?? MonetizationConfig.Default;
+            if (config == null) throw new ArgumentNullException(nameof(config));
             if (!config.IsReleased(mode)) return ModeAccess.NotReleased;
             if (config.IsFree(mode)) return ModeAccess.Free;
             if (grandfathered != null)
@@ -50,7 +50,7 @@ namespace Ballverse.Core.Monetization
         }
 
         public static bool IsAvailable(ModeCode mode, EntitlementSet entitlements,
-            IEnumerable<ModeCode> grandfathered, MonetizationConfig config = null)
+            IEnumerable<ModeCode> grandfathered, MonetizationConfig config)
         {
             var access = GetAccess(mode, entitlements, grandfathered, config);
             return access != ModeAccess.Locked && access != ModeAccess.NotReleased;
@@ -63,9 +63,9 @@ namespace Ballverse.Core.Monetization
         /// Result is sorted ascending and distinct; the input is never mutated.
         /// </summary>
         public static IReadOnlyList<ModeCode> RecordUse(IEnumerable<ModeCode> grandfathered, ModeCode mode,
-            MonetizationConfig config = null)
+            MonetizationConfig config)
         {
-            config = config ?? MonetizationConfig.Default;
+            if (config == null) throw new ArgumentNullException(nameof(config));
             var set = new SortedSet<ModeCode>();
             if (grandfathered != null)
             {
@@ -79,8 +79,9 @@ namespace Ballverse.Core.Monetization
 
         /// <summary>Every catalog mode currently available (released and open), in code order.</summary>
         public static IReadOnlyList<ModeCode> AvailableModes(EntitlementSet entitlements,
-            IEnumerable<ModeCode> grandfathered, MonetizationConfig config = null)
+            IEnumerable<ModeCode> grandfathered, MonetizationConfig config)
         {
+            if (config == null) throw new ArgumentNullException(nameof(config));
             var g = grandfathered == null ? Array.Empty<ModeCode>() : new List<ModeCode>(grandfathered).ToArray();
             var list = new List<ModeCode>();
             foreach (var m in ModeCatalog.All)

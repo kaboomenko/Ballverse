@@ -25,12 +25,19 @@ namespace Ballverse.Core.Monetization
         /// Revoked). An empty id (native bridges often marshal a missing string as "") counts as no id (spec §5.4).
         /// </summary>
         public string TransactionId { get; }
+        /// <summary>
+        /// Store purchase time, Unix ms (StoreKit originalPurchaseDate / Play purchaseTime), or null when the bridge did not
+        /// supply it. Restorable on any device; used only to grandfather the release-1 No Ads watermark rule
+        /// (<see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/>).
+        /// </summary>
+        public long? PurchaseTimeUnixMs { get; }
 
-        public PurchaseRecord(string productId, PurchaseState state, string transactionId = null)
+        public PurchaseRecord(string productId, PurchaseState state, string transactionId = null, long? purchaseTimeUnixMs = null)
         {
             ProductId = productId;
             State = state;
             TransactionId = transactionId;
+            PurchaseTimeUnixMs = purchaseTimeUnixMs;
         }
     }
 
@@ -49,21 +56,31 @@ namespace Ballverse.Core.Monetization
         /// </summary>
         public static IReadOnlyList<string> From(IEnumerable<PurchaseRecord> records)
         {
+            var set = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var r in CurrentPurchased(records)) set.Add(r.ProductId);
+            var result = new string[set.Count];
+            set.CopyTo(result);
+            return result;
+        }
+
+        /// <summary>
+        /// The current state of every transaction (rules of <see cref="From"/>) that is <see cref="PurchaseState.Purchased"/>
+        /// with a non-empty product id. Order is unspecified: callers must aggregate order-independently.
+        /// </summary>
+        internal static List<PurchaseRecord> CurrentPurchased(IEnumerable<PurchaseRecord> records)
+        {
             if (records == null) throw new ArgumentNullException(nameof(records));
             var latest = new Dictionary<string, PurchaseRecord>(StringComparer.Ordinal);
-            var set = new SortedSet<string>(StringComparer.Ordinal);
+            var result = new List<PurchaseRecord>();
             foreach (var r in records)
             {
                 if (!string.IsNullOrEmpty(r.TransactionId)) latest[r.TransactionId] = r;
-                else if (r.State == PurchaseState.Purchased && !string.IsNullOrEmpty(r.ProductId)) set.Add(r.ProductId);
+                else if (r.State == PurchaseState.Purchased && !string.IsNullOrEmpty(r.ProductId)) result.Add(r);
             }
-            // Order of the dictionary does not leak: results go into a sorted set.
             foreach (var r in latest.Values)
             {
-                if (r.State == PurchaseState.Purchased && !string.IsNullOrEmpty(r.ProductId)) set.Add(r.ProductId);
+                if (r.State == PurchaseState.Purchased && !string.IsNullOrEmpty(r.ProductId)) result.Add(r);
             }
-            var result = new string[set.Count];
-            set.CopyTo(result);
             return result;
         }
     }

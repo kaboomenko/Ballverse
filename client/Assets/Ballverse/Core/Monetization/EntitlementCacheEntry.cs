@@ -35,9 +35,9 @@ namespace Ballverse.Core.Monetization
         }
 
         /// <summary>Entitlements of the cached products (spec §5.1 <c>Entitlements.From</c>).</summary>
-        /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
+        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
-        public EntitlementSet GetEntitlements(MonetizationConfig config = null, bool watermarkGrandfathered = false)
+        public EntitlementSet GetEntitlements(MonetizationConfig config, bool watermarkGrandfathered = false)
         {
             return Entitlements.From(_ownedProductIds, config, watermarkGrandfathered);
         }

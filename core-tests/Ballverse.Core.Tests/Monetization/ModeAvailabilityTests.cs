@@ -13,11 +13,11 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void DefaultFreeModesAreM01ToM05()
         {
-            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 }, MonetizationConfig.Default.FreeModes.ToArray());
-            Assert.True(MonetizationConfig.Default.WatermarkByParts);
+            Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M03, ModeCode.M04, ModeCode.M05 }, MonetizationConfig.FullCatalog.FreeModes.ToArray());
+            Assert.True(MonetizationConfig.FullCatalog.WatermarkByParts);
             for (int m = 1; m <= 15; m++)
             {
-                var access = ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, None);
+                var access = ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, None, MonetizationConfig.FullCatalog);
                 Assert.Equal(m <= 5 ? ModeAccess.Free : ModeAccess.Locked, access);
             }
         }
@@ -25,10 +25,10 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void EntitlementUnlocksPaidMode()
         {
-            var e = Entitlements.From(new[] { ProductIds.ModeOrbit });
-            Assert.Equal(ModeAccess.Entitled, ModeAvailability.GetAccess(ModeCode.M14, e, None));
-            Assert.False(ModeAvailability.IsAvailable(ModeCode.M13, e, None));
-            Assert.True(ModeAvailability.IsAvailable(ModeCode.M14, e, null));
+            var e = Entitlements.From(new[] { ProductIds.ModeOrbit }, MonetizationConfig.FullCatalog);
+            Assert.Equal(ModeAccess.Entitled, ModeAvailability.GetAccess(ModeCode.M14, e, None, MonetizationConfig.FullCatalog));
+            Assert.False(ModeAvailability.IsAvailable(ModeCode.M13, e, None, MonetizationConfig.FullCatalog));
+            Assert.True(ModeAvailability.IsAvailable(ModeCode.M14, e, null, MonetizationConfig.FullCatalog));
         }
 
         [Fact]
@@ -41,21 +41,21 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void RecordUseGrandfathersOnlyFreeModes()
         {
-            var g = ModeAvailability.RecordUse(None, ModeCode.M03);
+            var g = ModeAvailability.RecordUse(None, ModeCode.M03, MonetizationConfig.FullCatalog);
             Assert.Equal(new[] { ModeCode.M03 }, g.ToArray());
-            g = ModeAvailability.RecordUse(g, ModeCode.M07); // paid: not grandfathered
+            g = ModeAvailability.RecordUse(g, ModeCode.M07, MonetizationConfig.FullCatalog); // paid: not grandfathered
             Assert.Equal(new[] { ModeCode.M03 }, g.ToArray());
-            g = ModeAvailability.RecordUse(g, ModeCode.M01);
-            g = ModeAvailability.RecordUse(g, ModeCode.M03);
+            g = ModeAvailability.RecordUse(g, ModeCode.M01, MonetizationConfig.FullCatalog);
+            g = ModeAvailability.RecordUse(g, ModeCode.M03, MonetizationConfig.FullCatalog);
             Assert.Equal(new[] { ModeCode.M01, ModeCode.M03 }, g.ToArray());
-            Assert.Equal(new[] { ModeCode.M02 }, ModeAvailability.RecordUse(null, ModeCode.M02).ToArray());
+            Assert.Equal(new[] { ModeCode.M02 }, ModeAvailability.RecordUse(null, ModeCode.M02, MonetizationConfig.FullCatalog).ToArray());
         }
 
         [Fact]
         public void RecordUseDoesNotMutateInputAndSortsDistinct()
         {
             var input = new[] { ModeCode.M05, ModeCode.M02, ModeCode.M05 };
-            var g = ModeAvailability.RecordUse(input, ModeCode.M01);
+            var g = ModeAvailability.RecordUse(input, ModeCode.M01, MonetizationConfig.FullCatalog);
             Assert.Equal(new[] { ModeCode.M01, ModeCode.M02, ModeCode.M05 }, g.ToArray());
             Assert.Equal(new[] { ModeCode.M05, ModeCode.M02, ModeCode.M05 }, input);
         }

@@ -37,7 +37,11 @@ namespace Ballverse.Core.Monetization
             AllModes, RemoveExportAds, RemoveInterstitialAds, NoAds, Ultimate,
         };
 
-        /// <summary>All ids in spec §5.1 table order (what to register with the store).</summary>
+        /// <summary>
+        /// All ids in spec §5.1 table order: the ids to reserve and to query on restore (they can never be reused). Only
+        /// <see cref="MonetizationConfig.SellableProductIds"/> are submitted for sale in a release (release 1: the three ad
+        /// products); submitting products that promise modes the build does not contain risks store rejection.
+        /// </summary>
         public static IReadOnlyList<string> All => s_allView;
 
         static readonly IReadOnlyList<string> s_allView = Array.AsReadOnly(s_all);

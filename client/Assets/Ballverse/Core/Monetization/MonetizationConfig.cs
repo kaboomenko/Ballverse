@@ -31,14 +31,11 @@ namespace Ballverse.Core.Monetization
 
         /// <summary>
         /// The full spec §5.1 catalog: free modes M01–M05, every mode released, all 15 products sellable,
-        /// <see cref="WatermarkByParts"/> on, <see cref="WatermarkWithNoAds"/> off. Also what a null config means everywhere
-        /// in this module (kept for compatibility); release builds pass <see cref="Release1"/> explicitly.
+        /// <see cref="WatermarkByParts"/> on, <see cref="WatermarkWithNoAds"/> off. Not the shipping build: pass it
+        /// explicitly (tests, later releases).
         /// </summary>
-        public static readonly MonetizationConfig Default =
-            new MonetizationConfig(s_defaultFree, true, ProductIds.All, s_allModes, false);
-
-        /// <summary>The full spec §5.1 catalog preset; the same instance as <see cref="Default"/>.</summary>
-        public static MonetizationConfig FullCatalog => Default;
+        public static readonly MonetizationConfig FullCatalog =
+            new MonetizationConfig(s_defaultFree, true, ProductIds.All, s_allModes, false, null);
 
         /// <summary>
         /// Release 1 (owner decisions, 00_brief): only M01 Ring Escape, M02 Geometry Bounce and M05 Helix Drop ship, all
@@ -47,7 +44,14 @@ namespace Ballverse.Core.Monetization
         /// M01–M05 (spec §5.1 "только расширение"), but M03/M04 are not released, so they are not playable.
         /// </summary>
         public static readonly MonetizationConfig Release1 =
-            new MonetizationConfig(s_defaultFree, true, s_release1Sellable, s_release1Modes, true);
+            new MonetizationConfig(s_defaultFree, true, s_release1Sellable, s_release1Modes, true, null);
+
+        /// <summary>
+        /// The preset the shipping build uses: <see cref="Release1"/>. Every App-facing function of this module takes the
+        /// config as a required argument and rejects null, so a forgotten argument fails to compile instead of silently
+        /// selling the full catalog; start from this preset (e.g. <c>MonetizationConfig.Default.WithFreeModes(resolved)</c>).
+        /// </summary>
+        public static MonetizationConfig Default => Release1;
 
         readonly ModeCode[] _freeModes;
         readonly ReadOnlyCollection<ModeCode> _freeModesView;
@@ -71,7 +75,8 @@ namespace Ballverse.Core.Monetization
         /// <summary>
         /// Modes available in this release (owner decision, release 1: M01, M02, M05). Sorted, distinct, read-only. A mode
         /// outside this set is not playable for anyone (<see cref="ModeAccess.NotReleased"/>), whatever is free, grandfathered
-        /// or owned, and no sellable product may grant it.
+        /// or owned, and no sellable product may grant it. A released mode should be free or sold; otherwise its card stays
+        /// <see cref="ModeAccess.Locked"/> with nothing to buy.
         /// </summary>
         public IReadOnlyList<ModeCode> ReleasedModes => _releasedModesView;
 
@@ -92,10 +97,21 @@ namespace Ballverse.Core.Monetization
         /// <summary>
         /// Release-1 rule (owner decision): owning NO_EXPORT_ADS + NO_INTERSTITIALS (No Ads Bundle, or both ad removals)
         /// also grants NO_WATERMARK. On in <see cref="Release1"/>, off in <see cref="FullCatalog"/>. Turning it off never
-        /// revokes the right from users who obtained it under the rule: persist <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{string}, MonetizationConfig)"/>
-        /// and pass the flag to <see cref="Entitlements.From"/>.
+        /// revokes the right from users who obtained it under the rule: turn it off with <see cref="WithWatermarkWithNoAdsEnded"/>,
+        /// persist <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/> and pass
+        /// the flag to <see cref="Entitlements.From"/>.
         /// </summary>
         public bool WatermarkWithNoAds { get; }
+
+        /// <summary>
+        /// When <see cref="WatermarkWithNoAds"/> is off: the moment (Unix ms, store clock) the release that turned the rule off
+        /// took effect, or null when the rule never applied to this build's users (e.g. <see cref="FullCatalog"/> in tests).
+        /// Ad products whose store purchase time is earlier were bought under the rule, so
+        /// <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/> grandfathers
+        /// their owners from restorable store data on any device (owner decision: keep NO_WATERMARK obtained under the rule).
+        /// Ignored while the rule is on. Assumes the rule was on in every release before the cutoff (true from release 1).
+        /// </summary>
+        public long? WatermarkWithNoAdsEndedAtUnixMs { get; }
 
         /// <param name="freeModes">Configured <c>free_modes</c> (already resolved by the config module); united with M01–M05.</param>
         /// <param name="watermarkByParts">See <see cref="WatermarkByParts"/>.</param>
@@ -103,7 +119,14 @@ namespace Ballverse.Core.Monetization
         /// <exception cref="ArgumentNullException"><paramref name="freeModes"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">A mode outside M01…M15.</exception>
         public MonetizationConfig(IEnumerable<ModeCode> freeModes, bool watermarkByParts = true)
-            : this(freeModes, watermarkByParts, ProductIds.All, s_allModes ?? BuildAllModes(), false)
+            : this(freeModes, watermarkByParts, ProductIds.All, s_allModes ?? BuildAllModes(), false, null)
+        {
+        }
+
+        /// <summary>Same as the six-argument constructor without a rule cutoff (<see cref="WatermarkWithNoAdsEndedAtUnixMs"/> null).</summary>
+        public MonetizationConfig(IEnumerable<ModeCode> freeModes, bool watermarkByParts, IEnumerable<string> sellableProductIds,
+            IEnumerable<ModeCode> releasedModes, bool watermarkWithNoAds)
+            : this(freeModes, watermarkByParts, sellableProductIds, releasedModes, watermarkWithNoAds, null)
         {
         }
 
@@ -112,6 +135,12 @@ namespace Ballverse.Core.Monetization
         /// <param name="sellableProductIds">See <see cref="SellableProductIds"/>; duplicates are collapsed.</param>
         /// <param name="releasedModes">See <see cref="ReleasedModes"/>; duplicates are collapsed.</param>
         /// <param name="watermarkWithNoAds">See <see cref="WatermarkWithNoAds"/>.</param>
+        /// <param name="watermarkWithNoAdsEndedAtUnixMs">See <see cref="WatermarkWithNoAdsEndedAtUnixMs"/>.</param>
+        /// <remarks>
+        /// A released mode that is neither free nor sold is accepted (a locked card with an empty
+        /// <see cref="Storefront.ModeSheet"/>), so a broken Remote Config <c>free_modes</c> payload can never make the
+        /// config unconstructible; release configs should not contain such a mode.
+        /// </remarks>
         /// <exception cref="ArgumentNullException">A list is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">A mode outside M01…M15.</exception>
         /// <exception cref="ArgumentException">
@@ -119,7 +148,7 @@ namespace Ballverse.Core.Monetization
         /// (the store must not sell products that promise unavailable modes).
         /// </exception>
         public MonetizationConfig(IEnumerable<ModeCode> freeModes, bool watermarkByParts, IEnumerable<string> sellableProductIds,
-            IEnumerable<ModeCode> releasedModes, bool watermarkWithNoAds)
+            IEnumerable<ModeCode> releasedModes, bool watermarkWithNoAds, long? watermarkWithNoAdsEndedAtUnixMs)
         {
             if (freeModes == null) throw new ArgumentNullException(nameof(freeModes));
             if (sellableProductIds == null) throw new ArgumentNullException(nameof(sellableProductIds));
@@ -164,6 +193,7 @@ namespace Ballverse.Core.Monetization
 
             WatermarkByParts = watermarkByParts;
             WatermarkWithNoAds = watermarkWithNoAds;
+            WatermarkWithNoAdsEndedAtUnixMs = watermarkWithNoAdsEndedAtUnixMs;
         }
 
         /// <summary>
@@ -172,19 +202,35 @@ namespace Ballverse.Core.Monetization
         /// </summary>
         public MonetizationConfig WithFreeModes(IEnumerable<ModeCode> freeModes)
         {
-            return new MonetizationConfig(freeModes, WatermarkByParts, _sellable, _releasedModes, WatermarkWithNoAds);
+            return new MonetizationConfig(freeModes, WatermarkByParts, _sellable, _releasedModes, WatermarkWithNoAds,
+                WatermarkWithNoAdsEndedAtUnixMs);
         }
 
-        /// <summary>The same config with <see cref="WatermarkWithNoAds"/> set to <paramref name="value"/>.</summary>
+        /// <summary>
+        /// The same config with <see cref="WatermarkWithNoAds"/> set to <paramref name="value"/>; keeps
+        /// <see cref="WatermarkWithNoAdsEndedAtUnixMs"/>. A release that turns the rule off should use
+        /// <see cref="WithWatermarkWithNoAdsEnded"/> so that purchases made under the rule stay grandfathered on new devices.
+        /// </summary>
         public MonetizationConfig WithWatermarkWithNoAds(bool value)
         {
-            return new MonetizationConfig(_freeModes, WatermarkByParts, _sellable, _releasedModes, value);
+            return new MonetizationConfig(_freeModes, WatermarkByParts, _sellable, _releasedModes, value,
+                WatermarkWithNoAdsEndedAtUnixMs);
+        }
+
+        /// <summary>
+        /// The same config with the release-1 No Ads rule turned off as of <paramref name="endedAtUnixMs"/>
+        /// (<see cref="WatermarkWithNoAds"/> false, <see cref="WatermarkWithNoAdsEndedAtUnixMs"/> set).
+        /// </summary>
+        public MonetizationConfig WithWatermarkWithNoAdsEnded(long endedAtUnixMs)
+        {
+            return new MonetizationConfig(_freeModes, WatermarkByParts, _sellable, _releasedModes, false, endedAtUnixMs);
         }
 
         /// <summary>The same config with <see cref="WatermarkByParts"/> set to <paramref name="value"/>.</summary>
         public MonetizationConfig WithWatermarkByParts(bool value)
         {
-            return new MonetizationConfig(_freeModes, value, _sellable, _releasedModes, WatermarkWithNoAds);
+            return new MonetizationConfig(_freeModes, value, _sellable, _releasedModes, WatermarkWithNoAds,
+                WatermarkWithNoAdsEndedAtUnixMs);
         }
 
         /// <summary>Whether <paramref name="mode"/> is in the effective free set (spec §5.1). Says nothing about release.</summary>

@@ -101,7 +101,7 @@ namespace Ballverse.Core.Tests.Monetization
         {
             var records = new[] { new PurchaseRecord(ProductIds.NoAds, PurchaseState.Pending, "GPA.pending-1") };
             Assert.Empty(OwnedProducts.From(records));
-            Assert.Equal(EntitlementSet.Empty, Entitlements.From(OwnedProducts.From(records)));
+            Assert.Equal(EntitlementSet.Empty, Entitlements.From(OwnedProducts.From(records), MonetizationConfig.FullCatalog));
             Assert.Equal(EntitlementSet.Empty, Entitlements.From(OwnedProducts.From(records), MonetizationConfig.Release1));
         }
 

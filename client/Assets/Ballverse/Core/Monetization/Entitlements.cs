@@ -3,7 +3,10 @@ using System.Collections.Generic;
 
 namespace Ballverse.Core.Monetization
 {
-    /// <summary>The pure entitlement function of spec §5.1 (<c>Entitlements.From(ownedProducts, config)</c>).</summary>
+    /// <summary>
+    /// The pure entitlement function of spec §5.1 (<c>Entitlements.From(ownedProducts, config)</c>). The config is required
+    /// everywhere in this module: a null config throws <see cref="ArgumentNullException"/>.
+    /// </summary>
     public static class Entitlements
     {
         /// <summary>
@@ -19,12 +22,12 @@ namespace Ballverse.Core.Monetization
         /// <see cref="FullUltimateContents"/> assembled from any products, or (<see cref="MonetizationConfig.WatermarkWithNoAds"/>
         /// or <paramref name="watermarkGrandfathered"/>) owns NO_EXPORT_ADS + NO_INTERSTITIALS.
         /// </summary>
-        /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
+        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="watermarkGrandfathered">
-        /// Persisted result of <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{string}, MonetizationConfig)"/>: the
+        /// Persisted result of <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{PurchaseRecord}, MonetizationConfig)"/>: the
         /// user obtained NO_WATERMARK under the release-1 No Ads rule, which keeps applying to them after the rule is turned off.
         /// </param>
-        public static EntitlementSet From(IEnumerable<string> ownedProductIds, MonetizationConfig config = null,
+        public static EntitlementSet From(IEnumerable<string> ownedProductIds, MonetizationConfig config,
             bool watermarkGrandfathered = false)
         {
             return ApplyRules(DirectGrants(ownedProductIds), config, watermarkGrandfathered);
@@ -46,12 +49,12 @@ namespace Ballverse.Core.Monetization
         /// Applies the derived-right rules to a union of direct grants: NO_WATERMARK by parts (spec §5.1) and the release-1
         /// No Ads rule (see <see cref="From"/>).
         /// </summary>
-        /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
+        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="watermarkGrandfathered">See <see cref="From"/>.</param>
-        public static EntitlementSet ApplyRules(EntitlementSet directGrants, MonetizationConfig config = null,
+        public static EntitlementSet ApplyRules(EntitlementSet directGrants, MonetizationConfig config,
             bool watermarkGrandfathered = false)
         {
-            config = config ?? MonetizationConfig.Default;
+            if (config == null) throw new ArgumentNullException(nameof(config));
             if (config.WatermarkByParts && directGrants.IsSupersetOf(FullUltimateContents))
                 return directGrants.With(Entitlement.NoWatermark);
             if (QualifiesByNoAds(directGrants, config.WatermarkWithNoAds || watermarkGrandfathered))

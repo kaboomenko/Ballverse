@@ -15,7 +15,7 @@ namespace Ballverse.Core.Tests.Monetization
         [Fact]
         public void OnlyM01M02M05ArePlayable_ForAnyone()
         {
-            var everything = Entitlements.From(new[] { ProductIds.Ultimate });
+            var everything = Entitlements.From(new[] { ProductIds.Ultimate }, MonetizationConfig.FullCatalog);
             var allGrandfathered = Enumerable.Range(1, 15).Select(m => (ModeCode)m).ToArray();
             foreach (var e in new[] { EntitlementSet.Empty, everything })
             {
@@ -68,8 +68,8 @@ namespace Ballverse.Core.Tests.Monetization
         public void OutOfRangeModesAreNotReleased()
         {
             Assert.Equal(ModeAccess.NotReleased, ModeAvailability.GetAccess((ModeCode)16, EntitlementSet.Empty, null, R1));
-            Assert.Equal(ModeAccess.NotReleased, ModeAvailability.GetAccess((ModeCode)0, EntitlementSet.Empty, null));
-            Assert.False(ModeAvailability.IsAvailable((ModeCode)16, EntitlementSet.Empty, null));
+            Assert.Equal(ModeAccess.NotReleased, ModeAvailability.GetAccess((ModeCode)0, EntitlementSet.Empty, null, MonetizationConfig.FullCatalog));
+            Assert.False(ModeAvailability.IsAvailable((ModeCode)16, EntitlementSet.Empty, null, MonetizationConfig.FullCatalog));
         }
 
         [Fact]
@@ -77,7 +77,7 @@ namespace Ballverse.Core.Tests.Monetization
         {
             for (int m = 1; m <= 15; m++)
             {
-                Assert.NotEqual(ModeAccess.NotReleased, ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, null));
+                Assert.NotEqual(ModeAccess.NotReleased, ModeAvailability.GetAccess((ModeCode)m, EntitlementSet.Empty, null, MonetizationConfig.FullCatalog));
             }
         }
     }

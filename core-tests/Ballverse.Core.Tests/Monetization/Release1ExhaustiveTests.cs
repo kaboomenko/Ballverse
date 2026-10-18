@@ -92,7 +92,10 @@ namespace Ballverse.Core.Tests.Monetization
                 Assert.NotEqual(OfferHiddenReason.AlreadyAvailable, o.HiddenReason);
                 Assert.False(o.AlreadyAvailable);
                 Assert.False(o.Emphasized);
-                Assert.Equal(o.Visible && o.Gain.Contains(Entitlement.NoWatermark), o.IsLastStep);
+                Assert.Equal(StorefrontExhaustiveTests.ExpectedLastStep(o, owned, config, gf), o.IsLastStep);
+                // Release 1 (no restored full mode set): a last step is exactly the missing ad removal after the other one.
+                if (o.IsLastStep && !Entitlements.DirectGrants(owned).IsSupersetOf(EntitlementSet.PaidModes10))
+                    Assert.True(o.Product.Kind == ProductKind.AdRemoval && Entitlements.DirectGrants(owned).Intersect(EntitlementSet.AdFree).Count == 1);
             }
 
             // No redundant offers: exactly the cheapest sellable product of each gain class is visible.
@@ -140,7 +143,7 @@ namespace Ballverse.Core.Tests.Monetization
                 for (int mask = gf ? 1 : 0; mask < Subsets.Count; mask += 29)
                 {
                     var owned = Subsets.Ids(mask);
-                    Assert.False(SalePointPolicy.FirstVideoQuest(false, owned, false, MonetizationConfig.Release1, null, gf).ShowOffer);
+                    Assert.False(SalePointPolicy.FirstVideoQuest(false, owned, MonetizationConfig.Release1, false, null, gf).ShowOffer);
                     for (int m = 1; m <= 15; m++) Assert.Empty(Storefront.ModeSheet((ModeCode)m, owned, MonetizationConfig.Release1, null, gf));
                     Assert.All(SalePointPolicy.DoneScreenLineOffers(3, null, owned, MonetizationConfig.Release1, null, gf),
                         o => Assert.True(MonetizationConfig.Release1.IsSellable(o.ProductId)));

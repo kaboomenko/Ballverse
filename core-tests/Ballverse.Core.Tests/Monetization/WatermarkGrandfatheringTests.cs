@@ -63,7 +63,6 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.False(WatermarkGrandfathering.Update(false, NoAds, Later));
             Assert.False(WatermarkGrandfathering.Update(false, BothRemovals, Later));
             Assert.False(WatermarkGrandfathering.Update(false, new[] { ProductIds.Ultimate }, Later));
-            Assert.False(WatermarkGrandfathering.Update(false, NoAds));
         }
 
         [Fact]

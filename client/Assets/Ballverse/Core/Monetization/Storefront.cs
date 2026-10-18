@@ -33,8 +33,9 @@ namespace Ballverse.Core.Monetization
     /// </list>
     /// Repeatedly buying every visible offer always ends with every entitlement the sellable products can give, except
     /// those of available modes, including NO_WATERMARK whenever a sellable path to it exists, so nothing becomes
-    /// unreachable. Release 1 with nothing owned shows No Ads (removes the watermark), Remove Export Ads, Remove
-    /// Interstitial Ads; after one ad removal only the other one (last step); after both or No Ads "Всё куплено".
+    /// unreachable. Release 1 with nothing owned shows No Ads (removes the watermark, not a last step), Remove Export Ads,
+    /// Remove Interstitial Ads; after one ad removal only the other one (last step); after both or No Ads "Всё куплено".
+    /// <para>Every function takes the release config as a required argument and throws on null (no implicit catalog).</para>
     /// </summary>
     public static class Storefront
     {
@@ -50,14 +51,14 @@ namespace Ballverse.Core.Monetization
         /// Only <see cref="MonetizationConfig.SellableProductIds"/> can be visible; with <see cref="MonetizationConfig.Release1"/>
         /// at most No Ads, Remove Export Ads and Remove Interstitial Ads.
         /// </summary>
-        /// <param name="config">Null means <see cref="MonetizationConfig.Default"/>.</param>
+        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
-        public static StorefrontState Build(IEnumerable<string> ownedProductIds, MonetizationConfig config = null,
+        public static StorefrontState Build(IEnumerable<string> ownedProductIds, MonetizationConfig config,
             IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
         {
             if (ownedProductIds == null) throw new ArgumentNullException(nameof(ownedProductIds));
-            config = config ?? MonetizationConfig.Default;
+            if (config == null) throw new ArgumentNullException(nameof(config));
 
             var owned = new HashSet<string>(StringComparer.Ordinal);
             foreach (var id in ownedProductIds)
@@ -115,7 +116,8 @@ namespace Ballverse.Core.Monetization
                 var p = s_displayOrder[i];
                 bool allModes = p.Id == ProductIds.AllModes;
                 bool visible = reasons[i] == OfferHiddenReason.None;
-                bool lastStep = visible && i != ultimate && gains[i].Contains(Entitlement.NoWatermark);
+                bool lastStep = visible && i != ultimate && gains[i].Contains(Entitlement.NoWatermark)
+                    && CompletesStartedSet(direct, p, config, watermarkGrandfathered);
                 bool alreadyAvailable = p.Kind == ProductKind.SingleMode && p.Mode.HasValue
                     && !current.ContainsMode(p.Mode.Value) && IsModeAvailable(p.Mode.Value, availableModes);
                 offers[i] = new StorefrontOffer(p, reasons[i], alternatives[i], isOwned[i], gains[i],
@@ -123,8 +125,10 @@ namespace Ballverse.Core.Monetization
                     allModes && haveModes > 0 && haveModes < EntitlementSet.PaidModes10.Count,
                     lastStep, false, alreadyAvailable);
             }
+            // Available modes count as had, like in the offer values: otherwise an empty Shop could report "not all
+            // purchased" when the only missing rights are modes the user already plays for free.
             var obtainable = Entitlements.ApplyRules(direct.Union(config.SellableGrants), config, watermarkGrandfathered);
-            return new StorefrontState(offers, current, current.IsSupersetOf(obtainable));
+            return new StorefrontState(offers, current, current.Union(availableModes).IsSupersetOf(obtainable));
         }
 
         /// <summary>
@@ -142,7 +146,7 @@ namespace Ballverse.Core.Monetization
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static IReadOnlyList<StorefrontOffer> ModeSheet(ModeCode mode, IEnumerable<string> ownedProductIds,
-            MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
+            MonetizationConfig config, IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
         {
             var product = ProductCatalog.ForMode(mode);
             var state = Build(ownedProductIds, config, grandfathered, watermarkGrandfathered);
@@ -169,9 +173,8 @@ namespace Ballverse.Core.Monetization
         /// <param name="grandfathered">Persisted <c>grandfathered_modes</c> (spec §5.1); null means none.</param>
         /// <param name="watermarkGrandfathered">Persisted <see cref="WatermarkGrandfathering"/> flag.</param>
         public static IReadOnlyList<StorefrontOffer> WatermarkOffers(IEnumerable<string> ownedProductIds,
-            MonetizationConfig config = null, IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
+            MonetizationConfig config, IEnumerable<ModeCode> grandfathered = null, bool watermarkGrandfathered = false)
         {
-            config = config ?? MonetizationConfig.Default;
             var state = Build(ownedProductIds, config, grandfathered, watermarkGrandfathered);
             var result = new List<StorefrontOffer>();
             if (state.Entitlements.Contains(Entitlement.NoWatermark)) return result;
@@ -210,12 +213,12 @@ namespace Ballverse.Core.Monetization
         /// or the missing single modes, whichever is cheaper, plus No Ads or the missing ad removal(s). Display order;
         /// empty when the contents are complete or the sellable products cannot complete them (release 1 sells no mode).
         /// </summary>
-        /// <param name="config">Null means <see cref="MonetizationConfig.Default"/> (every product sellable).</param>
-        public static IReadOnlyList<string> CheapestPartsToComplete(EntitlementSet entitlements, MonetizationConfig config = null)
+        /// <param name="config">Release catalog and rules (required; e.g. <see cref="MonetizationConfig.Release1"/>).</param>
+        public static IReadOnlyList<string> CheapestPartsToComplete(EntitlementSet entitlements, MonetizationConfig config)
         {
+            if (config == null) throw new ArgumentNullException(nameof(config));
             var result = new List<string>();
-            if (!TryCover(entitlements, Entitlements.FullUltimateContents, config ?? MonetizationConfig.Default,
-                    out var parts, out _))
+            if (!TryCover(entitlements, Entitlements.FullUltimateContents, config, out var parts, out _))
                 return result;
             foreach (var p in s_displayOrder)
             {
@@ -302,6 +305,21 @@ namespace Ballverse.Core.Monetization
                 }
             }
             return true;
+        }
+
+        /// <summary>
+        /// Whether buying <paramref name="p"/> completes a NO_WATERMARK set the user has already started: the Ultimate
+        /// contents by parts, or both ad rights under the No Ads rule (or its grandfathering). A first purchase that removes
+        /// the watermark on its own (e.g. No Ads with nothing owned) is not a "last step".
+        /// </summary>
+        static bool CompletesStartedSet(EntitlementSet direct, ProductInfo p, MonetizationConfig config, bool watermarkGrandfathered)
+        {
+            var after = direct.Union(p.Grants);
+            if (config.WatermarkByParts && after.IsSupersetOf(Entitlements.FullUltimateContents)
+                && !direct.Intersect(Entitlements.FullUltimateContents).IsEmpty)
+                return true;
+            return (config.WatermarkWithNoAds || watermarkGrandfathered) && after.IsSupersetOf(EntitlementSet.AdFree)
+                && !direct.Intersect(EntitlementSet.AdFree).IsEmpty;
         }
 
         static EntitlementSet AvailableModeEntitlements(MonetizationConfig config, IEnumerable<ModeCode> grandfathered)

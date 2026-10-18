@@ -46,14 +46,14 @@ namespace Ballverse.Core.Tests.Monetization
         public void GrandfatheredMode_SingleHiddenAndModeSheetEmpty()
         {
             var g = new[] { ModeCode.M06 };
-            var s = Storefront.Build(new string[0], null, g);
+            var s = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, g);
             Assert.Equal(OfferHiddenReason.AlreadyAvailable, s.Get(ProductIds.ModeBallBattle).HiddenReason);
             Assert.Equal(1, s.Get(ProductIds.AllModes).OwnedModeCount);
-            Assert.Empty(Storefront.ModeSheet(ModeCode.M06, new string[0], null, g));
+            Assert.Empty(Storefront.ModeSheet(ModeCode.M06, new string[0], MonetizationConfig.FullCatalog, g));
 
             // Grandfathered M01–M05 entries have no product and change nothing.
-            var s2 = Storefront.Build(new string[0], null, new[] { ModeCode.M02 });
-            Assert.Equal(VisibleIds(Storefront.Build(new string[0])), VisibleIds(s2));
+            var s2 = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, new[] { ModeCode.M02 });
+            Assert.Equal(VisibleIds(Storefront.Build(new string[0], MonetizationConfig.FullCatalog)), VisibleIds(s2));
             Assert.Equal(0, s2.Get(ProductIds.AllModes).OwnedModeCount);
         }
 
@@ -61,7 +61,7 @@ namespace Ballverse.Core.Tests.Monetization
         public void AvailableModeStillOfferedAsLastStepForWatermark()
         {
             var owned = SinglesM07ToM15.Concat(new[] { ProductIds.NoAds }).ToArray();
-            var s = Storefront.Build(owned, null, new[] { ModeCode.M06 });
+            var s = Storefront.Build(owned, MonetizationConfig.FullCatalog, new[] { ModeCode.M06 });
             Assert.Equal(new[] { ProductIds.ModeBallBattle }, VisibleIds(s));
             var single = s.Get(ProductIds.ModeBallBattle);
             Assert.True(single.AlreadyAvailable);
@@ -69,7 +69,7 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.AllModes).HiddenReason);
             Assert.Equal(ProductIds.ModeBallBattle, s.Get(ProductIds.Ultimate).CheaperAlternativeId);
             Assert.Equal(new[] { ProductIds.ModeBallBattle },
-                Storefront.WatermarkOffers(owned, null, new[] { ModeCode.M06 }).Select(o => o.ProductId).ToArray());
+                Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, new[] { ModeCode.M06 }).Select(o => o.ProductId).ToArray());
         }
 
         [Fact]
@@ -77,11 +77,11 @@ namespace Ballverse.Core.Tests.Monetization
         {
             var owned = SinglesM07ToM15.Concat(new[] { ProductIds.RemoveExportAds }).ToArray();
             var g = new[] { ModeCode.M06 };
-            var s = Storefront.Build(owned, null, g);
+            var s = Storefront.Build(owned, MonetizationConfig.FullCatalog, g);
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds }, VisibleIds(s));
             Assert.Equal(OfferHiddenReason.CheaperViaParts, s.Get(ProductIds.Ultimate).HiddenReason);
 
-            var offers = Storefront.WatermarkOffers(owned, null, g);
+            var offers = Storefront.WatermarkOffers(owned, MonetizationConfig.FullCatalog, g);
             Assert.Equal(new[] { ProductIds.RemoveInterstitialAds, ProductIds.ModeBallBattle }, offers.Select(o => o.ProductId).ToArray());
             Assert.Equal(OfferHiddenReason.AlreadyAvailable, offers[1].HiddenReason);
             Assert.True(offers[1].AlreadyAvailable);
@@ -122,11 +122,11 @@ namespace Ballverse.Core.Tests.Monetization
         public void AllModesHiddenWhenItsValueEqualsTheSingle_Grandfathered()
         {
             var g = Enumerable.Range(6, 9).Select(m => (ModeCode)m).ToArray();
-            var s = Storefront.Build(new string[0], null, g);
+            var s = Storefront.Build(new string[0], MonetizationConfig.FullCatalog, g);
             Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.AllModes).HiddenReason);
             Assert.Equal(ProductIds.ModeLiquidSand, s.Get(ProductIds.AllModes).CheaperAlternativeId);
             Assert.Equal(new[] { ProductIds.ModeLiquidSand },
-                Storefront.ModeSheet(ModeCode.M15, new string[0], null, g).Select(o => o.ProductId).ToArray());
+                Storefront.ModeSheet(ModeCode.M15, new string[0], MonetizationConfig.FullCatalog, g).Select(o => o.ProductId).ToArray());
         }
 
         /// <summary>Rng-driven property test over random free sets, grandfathered sets and owned products.</summary>

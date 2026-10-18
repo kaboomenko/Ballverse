@@ -45,10 +45,10 @@ namespace Ballverse.Core.Tests.Monetization
         }
 
         [Fact]
-        public void FullCatalog_IsDefault_EverythingReleasedAndSellable()
+        public void FullCatalog_EverythingReleasedAndSellable_NotTheDefault()
         {
             var c = MonetizationConfig.FullCatalog;
-            Assert.Same(MonetizationConfig.Default, c);
+            Assert.NotSame(MonetizationConfig.Default, c);
             Assert.Equal(ProductIds.All.ToArray(), c.SellableProductIds.ToArray());
             Assert.Equal(AllModes, c.ReleasedModes.ToArray());
             for (int m = 6; m <= 15; m++) Assert.True(c.IsModeSold((ModeCode)m));

@@ -8,12 +8,12 @@ namespace Ballverse.Core.Tests.Monetization
     /// <summary>Storefront invariants over all 2^15 owned-product combinations (spec §5.1, §5.2).</summary>
     public class StorefrontExhaustiveTests
     {
-        static readonly MonetizationConfig NoParts = new MonetizationConfig(MonetizationConfig.Default.FreeModes, false);
+        static readonly MonetizationConfig NoParts = new MonetizationConfig(MonetizationConfig.FullCatalog.FreeModes, false);
 
         [Fact]
         public void InvariantsHoldForEverySubset_DefaultConfig()
         {
-            for (int mask = 0; mask < Subsets.Count; mask++) Check(mask, MonetizationConfig.Default);
+            for (int mask = 0; mask < Subsets.Count; mask++) Check(mask, MonetizationConfig.FullCatalog);
         }
 
         [Fact]
@@ -32,7 +32,7 @@ namespace Ballverse.Core.Tests.Monetization
 
             // "All purchased" iff every entitlement is owned; then nothing is shown.
             Assert.Equal(current == EntitlementSet.AllDefined, s.AllPurchased);
-            if (s.AllPurchased) Assert.Empty(s.VisibleOffers);
+            Assert.Equal(s.AllPurchased, s.VisibleOffers.Count == 0);
 
             var nonOwnedWithGain = new List<StorefrontOffer>();
             foreach (var o in s.Offers)
@@ -70,7 +70,7 @@ namespace Ballverse.Core.Tests.Monetization
                     Assert.Null(o.CheaperAlternativeId);
                 }
 
-                Assert.Equal(o.Visible && o.ProductId != ProductIds.Ultimate && o.Gain.Contains(Entitlement.NoWatermark), o.IsLastStep);
+                Assert.Equal(ExpectedLastStep(o, owned, config, gf), o.IsLastStep);
             }
 
             // A visible offer never has a strictly cheaper product granting the same missing set.
@@ -100,7 +100,7 @@ namespace Ballverse.Core.Tests.Monetization
             if (ultimate.HiddenReason == OfferHiddenReason.CheaperViaParts) Assert.True(viaParts);
             if (!partsGiveWatermark)
                 Assert.Equal(!current.Contains(Entitlement.NoWatermark), ultimate.Visible);
-            Assert.Equal(partsCost, Storefront.CheapestPartsToComplete(current).Sum(id => ProductCatalog.Get(id).BasePriceUsdCents));
+            Assert.Equal(partsCost, Storefront.CheapestPartsToComplete(current, MonetizationConfig.FullCatalog).Sum(id => ProductCatalog.Get(id).BasePriceUsdCents));
 
             // The cheapest product of each gain class is visible (Ultimate excepted when the missing parts are cheaper).
             foreach (var group in nonOwnedWithGain.GroupBy(o => o.Gain.Mask))
@@ -129,6 +129,22 @@ namespace Ballverse.Core.Tests.Monetization
                 Assert.False(o.Emphasized);
                 Assert.False(o.AlreadyAvailable);
             }
+        }
+
+        /// <summary>
+        /// "Последний шаг" (spec §5.2): a visible non-Ultimate offer that removes the watermark by completing a NO_WATERMARK
+        /// set in force that the user has already started (Ultimate contents by parts; both ad rights under the No Ads rule
+        /// or its grandfathering). A first purchase that removes the watermark on its own is not a last step.
+        /// </summary>
+        internal static bool ExpectedLastStep(StorefrontOffer o, IEnumerable<string> owned, MonetizationConfig config, bool gf)
+        {
+            if (!o.Visible || o.ProductId == ProductIds.Ultimate || !o.RemovesWatermark) return false;
+            var direct = Entitlements.DirectGrants(owned);
+            var after = direct.Union(o.Product.Grants);
+            var sets = new List<EntitlementSet>();
+            if (config.WatermarkByParts) sets.Add(Entitlements.FullUltimateContents);
+            if (config.WatermarkWithNoAds || gf) sets.Add(EntitlementSet.AdFree);
+            return sets.Any(set => after.IsSupersetOf(set) && !direct.Intersect(set).IsEmpty);
         }
 
         // --- Independent oracle: cheapest set of non-Ultimate products completing the Ultimate contents. ---
@@ -197,8 +213,8 @@ namespace Ballverse.Core.Tests.Monetization
                     shuffled[j] = t;
                 }
                 if (shuffled.Count > 0) shuffled.Add(shuffled[0]);
-                var a = Storefront.Build(ids);
-                var b = Storefront.Build(shuffled);
+                var a = Storefront.Build(ids, MonetizationConfig.FullCatalog);
+                var b = Storefront.Build(shuffled, MonetizationConfig.FullCatalog);
                 Assert.Equal(a.Offers.Select(Describe), b.Offers.Select(Describe));
                 var r1a = Storefront.Build(ids, MonetizationConfig.Release1);
                 var r1b = Storefront.Build(shuffled, MonetizationConfig.Release1);
