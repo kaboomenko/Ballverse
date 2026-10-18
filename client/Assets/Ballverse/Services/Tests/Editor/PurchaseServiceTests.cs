@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using Ballverse.Core;
+using Ballverse.Core.Config;
 using Ballverse.Core.Monetization;
 using NUnit.Framework;
 
@@ -24,7 +26,8 @@ namespace Ballverse.Services.Tests
         PurchaseService Create(IStoreBackend backend, IReceiptValidator validator = null, MonetizationConfig config = null)
         {
             var cache = new EntitlementStore(_store, new PrefsDeviceKeyStore(_store), _clock, _log);
-            return new PurchaseService(backend, cache, validator ?? new FakeReceiptValidator(), config, _clock, _analytics, _log);
+            return new PurchaseService(backend, cache, validator ?? new FakeReceiptValidator(), config ?? MonetizationConfig.Release1,
+                _clock, _analytics, _log);
         }
 
         /// <summary>A store whose purchases reads are answered by the test (delays, reordering) and whose orders are scripted.</summary>
@@ -34,6 +37,10 @@ namespace Ballverse.Services.Tests
 
             public int FetchRequests;
             public int ConfirmCalls;
+
+            /// <summary>When true, <see cref="Restore"/> waits for <see cref="FinishRestore"/> (the store's restore call is running).</summary>
+            public bool HoldRestore;
+            System.Action<bool, string> _heldRestore;
 
             public bool IsAvailable => true;
 
@@ -73,7 +80,20 @@ namespace Ballverse.Services.Tests
 
             public void Restore(System.Action<bool, string> done)
             {
-                done?.Invoke(true, null);
+                if (HoldRestore) _heldRestore = done;
+                else done?.Invoke(true, null);
+            }
+
+            public void FinishRestore(bool ok = true, string error = null)
+            {
+                var done = _heldRestore;
+                _heldRestore = null;
+                done?.Invoke(ok, error);
+            }
+
+            public void FailRead(string reason)
+            {
+                _listener.OnPurchasesFetchFailed(reason);
             }
 
             public static StorePurchase Confirmed(string productId)
@@ -390,33 +410,240 @@ namespace Ballverse.Services.Tests
             var one = Create(new FakeStoreBackend(config));
             one.Initialize();
             Assert.IsFalse(one.Entitlements.Contains(Entitlement.NoWatermark), "one ad removal keeps the watermark");
-            Assert.IsFalse(one.WatermarkGrandfathered);
+            Assert.AreEqual(WatermarkRow.Locked, WatermarkRowPolicy.GetRow(one.Entitlements));
         }
 
         [Test]
-        public void WatermarkRightSurvivesALaterReleaseThatDropsTheNoAdsRule()
+        public void ConfigIsRequiredAsEverywhereInCoreMonetization()
         {
-            // docs-release1 §5.0.2: a right bought earlier is never taken away.
-            var config = new FakeStoreConfig();
-            config.InitiallyOwned.Add(ProductIds.RemoveExportAds);
-            config.InitiallyOwned.Add(ProductIds.RemoveInterstitialAds);
-            var release1 = Create(new FakeStoreBackend(config));
-            release1.Initialize();
-            Assert.IsTrue(release1.Entitlements.Contains(Entitlement.NoWatermark));
-            Assert.IsTrue(release1.WatermarkGrandfathered);
-            Assert.AreEqual("1", _store.GetString(EntitlementStore.WatermarkGrandfatheredKey));
+            var cache = new EntitlementStore(_store, new PrefsDeviceKeyStore(_store), _clock, _log);
+            Assert.Throws<System.ArgumentNullException>(() =>
+                new PurchaseService(new FakeStoreBackend(), cache, null, null, _clock, _analytics, _log));
+            Assert.Throws<System.ArgumentNullException>(() => Create(new FakeStoreBackend()).SetConfig(null));
+        }
 
-            var later = MonetizationConfig.Release1.WithWatermarkWithNoAds(false);
-            var next = Create(new FakeStoreBackend(config), config: later);
-            next.Initialize();
-            Assert.IsTrue(next.Entitlements.Contains(Entitlement.NoWatermark), "grandfathered");
+        [Test]
+        public void NoWatermarkIsCoresPermanentRuleFromTheOwnedProductsAlone()
+        {
+            // Spec §5.0.2 (Р21): NO_WATERMARK = Ultimate or both ad rights, from any products, in every catalog preset;
+            // nothing but the owned product ids is stored, so it restores from the store on any device.
+            var both = new FakeStoreConfig();
+            both.InitiallyOwned.Add(ProductIds.RemoveExportAds);
+            both.InitiallyOwned.Add(ProductIds.RemoveInterstitialAds);
+            foreach (var config in new[] { MonetizationConfig.Release1, MonetizationConfig.FullCatalog })
+            {
+                _store = new MemoryKeyValueStore();
+                var service = Create(new FakeStoreBackend(both), config: config);
+                service.Initialize();
+                Assert.AreEqual(Entitlements.From(both.InitiallyOwned, config), service.Entitlements);
+                Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoWatermark));
+                Assert.AreEqual(WatermarkRow.Toggle, WatermarkRowPolicy.GetRow(service.Entitlements));
+                Assert.AreEqual(WatermarkRow.Hidden, WatermarkRowPolicy.GetRow(service.Entitlements, watermarkEnabled: false));
+            }
 
-            // A user who never qualified under the rule gets nothing from the flag.
+            // Reinstall on another device: empty local state, rights come back from the store read.
             _store = new MemoryKeyValueStore();
-            var newcomer = Create(new FakeStoreBackend(config), config: later);
-            newcomer.Initialize();
-            Assert.IsFalse(newcomer.Entitlements.Contains(Entitlement.NoWatermark));
-            Assert.IsFalse(newcomer.WatermarkGrandfathered);
+            var restored = Create(new FakeStoreBackend(both));
+            Assert.IsTrue(restored.Entitlements.IsEmpty);
+            restored.Initialize();
+            Assert.IsTrue(restored.Entitlements.Contains(Entitlement.NoWatermark));
+
+            var ultimate = new FakeStoreConfig();
+            ultimate.InitiallyOwned.Add(ProductIds.Ultimate); // not sold in release 1, still grants its rights
+            _store = new MemoryKeyValueStore();
+            var u = Create(new FakeStoreBackend(ultimate));
+            u.Initialize();
+            Assert.IsTrue(u.Entitlements.Contains(Entitlement.NoWatermark));
+            Assert.IsTrue(u.Entitlements.ContainsMode(ModeCode.M06));
+        }
+
+        [Test]
+        public void RemoteConfigFreeModesAndKillSwitchReplaceTheCatalog()
+        {
+            var backend = new FakeStoreBackend();
+            var service = Create(backend);
+            service.Initialize();
+            int configChanges = 0, productChanges = 0;
+            service.ConfigChanged += _ => configChanges++;
+            service.ProductsChanged += () => productChanges++;
+
+            var same = MonetizationConfigMapper.From(MonetizationConfig.Release1, RemoteConfigValues.Defaults);
+            Assert.IsTrue(MonetizationConfigMapper.SameCatalog(MonetizationConfig.Release1, same), "defaults = Release1");
+            service.SetConfig(same);
+            Assert.AreEqual(0, configChanges, "an equal catalog is not a change");
+
+            var parsed = RemoteConfigParser.Parse(new Dictionary<string, string> { { RemoteConfigKeys.ModesDisabled, "[\"M02\"]" } });
+            var killed = MonetizationConfigMapper.From(MonetizationConfig.Release1, parsed.Values);
+            CollectionAssert.AreEqual(new[] { ModeCode.M02 }, killed.DisabledModes);
+            service.SetConfig(killed);
+            Assert.AreEqual(1, configChanges);
+            Assert.AreSame(killed, service.Config);
+            Assert.IsFalse(service.Config.IsReleased(ModeCode.M02));
+            CollectionAssert.AreEqual(MonetizationConfig.Release1.SellableProductIds, ProductIdsOf(service.Products),
+                "the ad products grant no mode, so they stay on sale");
+            Assert.AreEqual(0, productChanges);
+
+            // Back to the defaults: the kill switch is lifted (WithDisabledModes replaces the set).
+            service.SetConfig(MonetizationConfigMapper.From(MonetizationConfig.Release1, RemoteConfigValues.Defaults));
+            Assert.AreEqual(2, configChanges);
+            Assert.IsTrue(service.Config.IsReleased(ModeCode.M02));
+        }
+
+        [Test]
+        public void ProductsAreRefilteredWhenTheCatalogChanges()
+        {
+            var backend = new FakeStoreBackend();
+            var service = Create(backend, config: MonetizationConfig.FullCatalog);
+            service.Initialize();
+            Assert.AreEqual(ProductIds.All.Count, service.Products.Count);
+            int productChanges = 0;
+            service.ProductsChanged += () => productChanges++;
+
+            service.SetConfig(MonetizationConfig.FullCatalog.WithDisabledModes(new[] { ModeCode.M06 }));
+            Assert.AreEqual(1, productChanges);
+            var ids = ProductIdsOf(service.Products);
+            CollectionAssert.DoesNotContain(ids, ProductIds.ModeBallBattle);
+            CollectionAssert.DoesNotContain(ids, ProductIds.AllModes);
+            CollectionAssert.DoesNotContain(ids, ProductIds.Ultimate);
+            CollectionAssert.Contains(ids, ProductIds.NoAds);
+
+            PurchaseOutcome? outcome = null;
+            service.Purchase(ProductIds.Ultimate, "shop", o => outcome = o);
+            Assert.AreEqual(PurchaseResultKind.NotAvailable, outcome.Value.Kind, "a product granting a disabled mode is not sold");
+        }
+
+        // ---- fake store account (OwnerTest builds keep their test purchases) ----
+
+        [Test]
+        public void FakeStoreAccountSurvivesARestart()
+        {
+            var account = new MemoryKeyValueStore();
+            var config = new FakeStoreConfig();
+            var backend = new FakeStoreBackend(config, account);
+            Assert.IsTrue(backend.IsPersistent);
+            var service = Create(backend);
+            service.Initialize();
+            service.Purchase(ProductIds.RemoveExportAds, "shop", _ => { });
+            config.Behaviour = FakePurchaseBehaviour.Defer;
+            PurchaseOutcome? deferred = null;
+            service.Purchase(ProductIds.RemoveInterstitialAds, "shop", o => deferred = o);
+            Assert.AreEqual(PurchaseResultKind.Pending, deferred.Value.Kind);
+            backend.AddUnconfirmed(ProductIds.NoAds); // paid, app killed before it was confirmed
+
+            // Restart with a wiped entitlement cache: only the fake store account remembers.
+            _store = new MemoryKeyValueStore();
+            var backend2 = new FakeStoreBackend(new FakeStoreConfig(), account);
+            CollectionAssert.AreEqual(new[] { ProductIds.RemoveExportAds }, backend2.StoreOwned);
+            CollectionAssert.AreEqual(new[] { ProductIds.RemoveInterstitialAds }, backend2.StoreDeferred);
+            var next = Create(backend2);
+            Assert.IsTrue(next.Entitlements.IsEmpty);
+            next.Initialize();
+            CollectionAssert.AreEqual(new[] { ProductIds.RemoveExportAds, ProductIds.NoAds }, next.OwnedProductIds, "ordinal order");
+            CollectionAssert.AreEqual(new[] { ProductIds.RemoveInterstitialAds }, next.PendingProductIds);
+            Assert.AreEqual(1, backend2.ConfirmCalls, "the interrupted purchase is confirmed after the restart");
+            Assert.IsTrue(next.Entitlements.Contains(Entitlement.NoWatermark));
+
+            // The deferred purchase approved in a later session.
+            var backend3 = new FakeStoreBackend(new FakeStoreConfig(), account);
+            var third = Create(backend3);
+            third.Initialize();
+            backend3.ApproveDeferred(ProductIds.RemoveInterstitialAds);
+            CollectionAssert.IsEmpty(third.PendingProductIds);
+            CollectionAssert.AreEqual(new[] { ProductIds.RemoveExportAds, ProductIds.RemoveInterstitialAds, ProductIds.NoAds },
+                new FakeStoreBackend(null, account).StoreOwned);
+
+            // Refunds and a reset persist too.
+            backend3.Refund(ProductIds.NoAds, notify: false);
+            CollectionAssert.DoesNotContain(new FakeStoreBackend(null, account).StoreOwned, ProductIds.NoAds);
+            backend3.ResetAccount();
+            CollectionAssert.IsEmpty(new FakeStoreBackend(null, account).StoreOwned);
+        }
+
+        [Test]
+        public void FakeStoreIgnoresAnUnreadableAccount()
+        {
+            var account = new MemoryKeyValueStore();
+            account.SetString(FakeStoreBackend.AccountKey, "garbage\nowned " + ProductIds.NoAds);
+            var backend = new FakeStoreBackend(null, account);
+            CollectionAssert.IsEmpty(backend.StoreOwned, "unknown format");
+
+            account.SetString(FakeStoreBackend.AccountKey,
+                "ballverse-fake-store v1\nnext 7\nowned unknown.product\nowned " + ProductIds.NoAds + "\nawaiting\nbogus line\n");
+            backend = new FakeStoreBackend(null, account);
+            CollectionAssert.AreEqual(new[] { ProductIds.NoAds }, backend.StoreOwned, "unknown ids and malformed lines skipped");
+            backend.AddUnconfirmed(ProductIds.RemoveExportAds);
+            StringAssert.Contains("awaiting fake-7 " + ProductIds.RemoveExportAds, account.GetString(FakeStoreBackend.AccountKey),
+                "transaction ids continue across restarts");
+
+            var memoryOnly = new FakeStoreBackend();
+            Assert.IsFalse(memoryOnly.IsPersistent);
+        }
+
+        // ---- restore: only its own read decides ----
+
+        [Test]
+        public void EarlierReadTimingOutWhileTheStoreRestoresDoesNotFailTheRestore()
+        {
+            var backend = new ScriptedStoreBackend { HoldRestore = true };
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            service.RefreshPurchases();                    // read 2, never answered
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);             // AppStore.sync() running
+            _clock.Advance(PurchaseService.FetchTimeoutMs);
+            service.Tick();
+            Assert.IsNull(outcome, "read 2 was not the restore's read");
+            Assert.AreEqual(3, backend.FetchRequests, "read 2 is retried as usual");
+
+            backend.FinishRestore();                       // restore's own read: 4
+            Assert.AreEqual(4, backend.FetchRequests);
+            Assert.IsNull(outcome);
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds));
+            Assert.IsTrue(outcome.Value.Success);
+            Assert.AreEqual(1, outcome.Value.OwnedCount);
+        }
+
+        [Test]
+        public void EarlierAnswersAndFailuresWhileTheStoreRestoresDoNotEndTheRestore()
+        {
+            var backend = new ScriptedStoreBackend { HoldRestore = true };
+            var service = Create(backend);
+            service.Initialize();
+            service.RefreshPurchases(); // coalesced with the connect read
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);
+            backend.Answer();
+            Assert.IsNull(outcome, "answer to the connect read");
+            service.RefreshPurchases();
+            backend.FailRead("Unknown");
+            Assert.IsNull(outcome, "failure of an earlier read");
+
+            backend.FinishRestore(ok: false, error: "UserCancelled");
+            backend.Answer();
+            Assert.IsFalse(outcome.Value.Success);
+            Assert.AreEqual("user_cancelled", outcome.Value.ErrorCode);
+        }
+
+        [Test]
+        public void RestoreReadTimeoutStillFailsAfterTheStoreRestoreFinished()
+        {
+            var backend = new ScriptedStoreBackend { HoldRestore = true };
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            RestoreOutcome? outcome = null;
+            service.Restore(o => outcome = o);
+            _clock.Advance(PurchaseService.FetchTimeoutMs * 3);
+            service.Tick();
+            Assert.IsNull(outcome, "no read of its own yet");
+            backend.FinishRestore();
+            _clock.Advance(PurchaseService.FetchTimeoutMs - 1);
+            service.Tick();
+            Assert.IsNull(outcome);
+            _clock.Advance(1);
+            service.Tick();
+            Assert.AreEqual("fetch_timeout", outcome.Value.ErrorCode);
         }
 
         static List<string> ProductIdsOf(IReadOnlyList<StoreProduct> products)

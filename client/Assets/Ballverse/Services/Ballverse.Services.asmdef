@@ -3,6 +3,7 @@
     "rootNamespace": "Ballverse.Services",
     "references": [
         "Ballverse.Core",
+        "Ballverse.Platform",
         "Unity.Purchasing",
         "Unity.Purchasing.Security",
         "Unity.Purchasing.SecurityCore"

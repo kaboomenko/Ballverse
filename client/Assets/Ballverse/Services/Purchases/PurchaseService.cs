@@ -15,12 +15,16 @@ namespace Ballverse.Services
     /// <item>every paid purchase is verified (<see cref="IReceiptValidator"/>) before it grants anything — new, interrupted and
     /// already confirmed ones alike (launch, reinstall, restore); a new one is granted, then confirmed ("grant then confirm",
     /// so a crash in between re-delivers it at the next start); an unverified one is neither granted nor confirmed;</item>
-    /// <item>rights are Core <c>Entitlements.From(owned, config, watermarkGrandfathered)</c>; the Core
-    /// <see cref="WatermarkGrandfathering"/> flag is updated and persisted on every recompute;</item>
+    /// <item>rights are Core <c>Entitlements.From(owned, config)</c> (NO_WATERMARK by Core's permanent rule: Ultimate, or
+    /// both ad rights from any products); nothing about them is stored besides the owned product ids;</item>
+    /// <item>the release catalog is a Core <see cref="MonetizationConfig"/> (<see cref="MonetizationConfig.Release1"/>, with
+    /// Remote Config <c>free_modes</c> / <c>modes_disabled</c> applied through <see cref="SetConfig"/>); it decides what is
+    /// sold and offered, never which rights owned products give;</item>
     /// <item>deferred purchases grant nothing and are listed in <see cref="PendingProductIds"/>;</item>
     /// <item>a purchases read that gets no answer within <see cref="FetchTimeoutMs"/> counts as failed, so later reads are not
     /// blocked, and an automatic one is retried once (Unity IAP on Google Play can hand the answer of an app read to its own
-    /// read on focus gain, which never reports back).</item>
+    /// read on focus gain, which never reports back); a restore fails with <c>fetch_timeout</c> only when its own read (the
+    /// one issued after the store's restore finished) goes unanswered.</item>
     /// </list>
     /// </summary>
     public sealed class PurchaseService : IPurchaseService, IStoreBackendListener, ITickable
@@ -49,7 +53,6 @@ namespace Ballverse.Services
         readonly IStoreBackend _backend;
         readonly EntitlementStore _cache;
         readonly IReceiptValidator _validator;
-        readonly MonetizationConfig _config;
         readonly IClock _clock;
         readonly IAnalyticsService _analytics;
         readonly IServiceLog _log;
@@ -62,13 +65,17 @@ namespace Ballverse.Services
         int _fetchesIssued;
         int _fetchesAnswered;
         int _consecutiveRereads;
-        bool _watermarkGrandfathered;
+        MonetizationConfig _config;
+        IReadOnlyList<StoreProduct> _fetchedProducts = Array.Empty<StoreProduct>();
         List<StoreProduct> _products = new List<StoreProduct>();
         string[] _ownedView = Array.Empty<string>();
         string[] _pendingView = Array.Empty<string>();
         ActivePurchase _active;
         Action<RestoreOutcome> _restoreWaiters;
         bool _restoring;
+        // The restore's own purchases read has been issued (after the store's restore call finished).
+        bool _restoreReadIssued;
+        int _restoreGeneration;
         string _restoreError;
         // Reads requested and not answered yet, minus those written off by a timeout; > 0 means a read is in flight.
         int _liveReads;
@@ -76,23 +83,23 @@ namespace Ballverse.Services
         long _fetchDeadlineMs;
         long _connectStartedMs;
 
-        /// <param name="config">Release catalog and rules; null means <see cref="MonetizationConfig.Release1"/> (what release
-        /// builds ship).</param>
+        /// <param name="config">
+        /// Release catalog (required, as everywhere in Core Monetization): <see cref="MonetizationConfig.Release1"/>, or
+        /// <c>Release1.WithFreeModes(...)</c> after Remote Config (<see cref="MonetizationConfigMapper"/>).
+        /// </param>
         public PurchaseService(IStoreBackend backend, EntitlementStore cache, IReceiptValidator validator, MonetizationConfig config,
             IClock clock, IAnalyticsService analytics, IServiceLog log)
         {
             _backend = backend ?? throw new ArgumentNullException(nameof(backend));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _validator = validator ?? AcceptAllReceiptValidator.Instance;
-            _config = config ?? MonetizationConfig.Release1;
+            _config = config ?? throw new ArgumentNullException(nameof(config));
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _analytics = analytics ?? throw new ArgumentNullException(nameof(analytics));
             _log = log ?? NullServiceLog.Instance;
 
-            _watermarkGrandfathered = _cache.LoadWatermarkGrandfathered();
             foreach (string id in _cache.Load()) _owned.Add(id);
             RefreshViews();
-            UpdateWatermarkGrandfathering();
             Entitlements = ComputeEntitlements();
             _backend.Listener = this;
         }
@@ -109,8 +116,6 @@ namespace Ballverse.Services
 
         public MonetizationConfig Config => _config;
 
-        public bool WatermarkGrandfathered => _watermarkGrandfathered;
-
         public bool IsPurchaseInProgress => _active != null;
 
         public long? LastStoreReadUnixMs => _cache.SavedAtUnixMs;
@@ -120,6 +125,26 @@ namespace Ballverse.Services
         public event Action ProductsChanged;
 
         public event Action<PurchaseServiceState> StateChanged;
+
+        public event Action<MonetizationConfig> ConfigChanged;
+
+        /// <summary>
+        /// Replaces the release catalog (Remote Config <c>free_modes</c> / <c>modes_disabled</c> changed, see
+        /// <see cref="MonetizationConfigMapper"/>). The shown products are re-filtered from the last store answer; rights do not
+        /// change (Core computes them from the owned products alone). A product that becomes sellable after the store connected
+        /// is listed once the store has returned it, at the latest after the next connect. Raises <see cref="ConfigChanged"/>.
+        /// </summary>
+        public void SetConfig(MonetizationConfig config)
+        {
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            if (MonetizationConfigMapper.SameCatalog(config, _config)) return;
+            _config = config;
+            var products = FilterSellable(_fetchedProducts);
+            bool productsChanged = !SameIds(products, _products);
+            _products = products;
+            ConfigChanged?.Invoke(config);
+            if (productsChanged) ProductsChanged?.Invoke();
+        }
 
         public bool TryGetProduct(string productId, out StoreProduct product)
         {
@@ -220,22 +245,46 @@ namespace Ballverse.Services
             _restoreWaiters += done;
             if (_restoring) return;
             _restoring = true;
+            _restoreReadIssued = false;
             _restoreError = null;
+            int generation = ++_restoreGeneration;
             try
             {
                 _backend.Restore((ok, error) =>
                 {
+                    if (generation != _restoreGeneration || !_restoring)
+                    {
+                        // A restore that already ended (store disconnected): its late answer only refreshes the purchases.
+                        if (State == PurchaseServiceState.Ready) FetchPurchasesNow(force: false);
+                        return;
+                    }
                     if (!ok) _restoreError = string.IsNullOrEmpty(error) ? "restore_failed" : ErrorCodes.FromStoreReason(error);
-                    FetchPurchasesNow(force: true);
+                    IssueRestoreRead();
                 });
             }
             catch (Exception e)
             {
                 _log.Error(Tag, "Store restore threw.", e);
-                _restoreError = "restore_failed";
-                FetchPurchasesNow(force: true);
+                if (generation == _restoreGeneration && _restoring && !_restoreReadIssued)
+                {
+                    _restoreError = "restore_failed";
+                    IssueRestoreRead();
+                }
             }
         }
+
+        /// <summary>The restore's own purchases read; only its answer, failure or timeout ends the restore.</summary>
+        void IssueRestoreRead()
+        {
+            _restoreReadIssued = true;
+            FetchPurchasesNow(force: true);
+        }
+
+        /// <summary>
+        /// A restore is waiting for the read it issued. Answers, failures and timeouts that come while the store's restore call
+        /// is still running belong to earlier reads and do not end the restore.
+        /// </summary>
+        bool RestoreAwaitsRead => _restoring && _restoreReadIssued;
 
         public void RefreshPurchases()
         {
@@ -276,6 +325,15 @@ namespace Ballverse.Services
 
         public void OnProductsFetched(IReadOnlyList<StoreProduct> products)
         {
+            _fetchedProducts = products ?? (IReadOnlyList<StoreProduct>)Array.Empty<StoreProduct>();
+            _products = FilterSellable(_fetchedProducts);
+            ProductsChanged?.Invoke();
+            FetchPurchasesNow(force: false);
+        }
+
+        /// <summary>The store's products that the current config sells, in its <see cref="MonetizationConfig.SellableProductIds"/> order.</summary>
+        List<StoreProduct> FilterSellable(IReadOnlyList<StoreProduct> products)
+        {
             var list = new List<StoreProduct>();
             foreach (string id in _config.SellableProductIds)
             {
@@ -288,9 +346,17 @@ namespace Ballverse.Services
                     }
                 }
             }
-            _products = list;
-            ProductsChanged?.Invoke();
-            FetchPurchasesNow(force: false);
+            return list;
+        }
+
+        static bool SameIds(List<StoreProduct> a, List<StoreProduct> b)
+        {
+            if (a.Count != b.Count) return false;
+            for (int i = 0; i < a.Count; i++)
+            {
+                if (!ReferenceEquals(a[i], b[i])) return false;
+            }
+            return true;
         }
 
         public void OnProductsFetchFailed(string reason)
@@ -340,7 +406,7 @@ namespace Ballverse.Services
             _pending.UnionWith(pending);
             ReplaceOwned(owned);
             foreach (var p in toConfirm) Confirm(p);
-            if (_restoring) CompleteRestore(_restoreError == null, _restoreError);
+            if (RestoreAwaitsRead) CompleteRestore(_restoreError == null, _restoreError);
             if (!reread)
             {
                 _consecutiveRereads = 0;
@@ -390,7 +456,7 @@ namespace Ballverse.Services
             if (_liveReads > 0) _liveReads--;
             if (_fetchesAnswered < _fetchesIssued) _fetchesAnswered++;
             _log.Warning(Tag, "Purchases fetch failed (" + reason + "); keeping cached rights.");
-            if (_restoring) CompleteRestore(false, "fetch_failed");
+            if (RestoreAwaitsRead) CompleteRestore(false, "fetch_failed");
         }
 
         public void OnPurchasePending(StorePurchase purchase)
@@ -496,7 +562,9 @@ namespace Ballverse.Services
             _liveReads = 0;
             // _fetchesAnswered is not advanced: a late answer then counts as this read; if none ever comes, later answers count
             // as older reads than they are, which only delays settling grants (KeepGrantsNewerThan stays conservative).
-            if (_restoring)
+            // The deadline is the latest read's: once the restore issued its read, that is the restore's own read. An earlier
+            // read that times out while the store's restore call is still running is an ordinary read (retried below).
+            if (RestoreAwaitsRead)
             {
                 _log.Warning(Tag, "Purchases read for restore got no answer in time.");
                 CompleteRestore(false, "fetch_timeout");
@@ -535,7 +603,6 @@ namespace Ballverse.Services
         {
             _cache.Save(_owned);
             RefreshViews();
-            UpdateWatermarkGrandfathering();
             var updated = ComputeEntitlements();
             if (updated == Entitlements) return;
             Entitlements = updated;
@@ -544,16 +611,7 @@ namespace Ballverse.Services
 
         EntitlementSet ComputeEntitlements()
         {
-            return Ballverse.Core.Monetization.Entitlements.From(_owned, _config, _watermarkGrandfathered);
-        }
-
-        /// <summary>Core <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{string}, MonetizationConfig)"/>, persisted.</summary>
-        void UpdateWatermarkGrandfathering()
-        {
-            if (_watermarkGrandfathered) return;
-            if (!WatermarkGrandfathering.Update(false, _owned, _config)) return;
-            _watermarkGrandfathered = true;
-            _cache.SaveWatermarkGrandfathered();
+            return Ballverse.Core.Monetization.Entitlements.From(_owned, _config);
         }
 
         /// <summary>True when the current rights already contain everything <paramref name="productId"/> grants.</summary>
@@ -594,6 +652,7 @@ namespace Ballverse.Services
         void CompleteRestore(bool success, string errorCode)
         {
             _restoring = false;
+            _restoreReadIssued = false;
             var waiters = _restoreWaiters;
             _restoreWaiters = null;
             LogRestore(success, errorCode);

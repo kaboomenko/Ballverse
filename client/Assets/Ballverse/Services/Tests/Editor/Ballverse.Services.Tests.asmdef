@@ -5,6 +5,7 @@
         "Ballverse.Services",
         "Ballverse.Services.Editor",
         "Ballverse.Core",
+        "Ballverse.Platform",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

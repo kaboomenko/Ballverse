@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Ballverse.Core;
 using Ballverse.Core.Config;
 using Ballverse.Core.Monetization;
 using NUnit.Framework;
@@ -31,7 +32,7 @@ namespace Ballverse.Services.Tests
                 DeveloperBuild = true,
                 Consent = _consent,
                 FakeStore = store,
-                FakeRemoteConfig = remote,
+                InitialRemoteConfig = remote,
             });
         }
 
@@ -558,9 +559,53 @@ namespace Ballverse.Services.Tests
         }
 
         [Test]
+        public void FakeStorePurchasesSurviveARestartOfTheServices()
+        {
+            // OwnerTest / Dev device builds without the store apps: the fake account lives in the app's key-value store.
+            var first = ServicesInstaller.Create(new ServicesOptions
+            {
+                Mode = ServicesMode.Fake, Clock = _clock, Store = _store, Log = new MemoryServiceLog(),
+                Connectivity = new FakeConnectivity(), Consent = _consent,
+            });
+            Assert.IsTrue(first.FakeStore.IsPersistent);
+            first.Tick();
+            first.Purchases.Purchase(ProductIds.NoAds, "shop", _ => { });
+            Assert.IsTrue(first.Entitlements.Contains(Entitlement.NoWatermark));
+
+            var keepOnlyTheAccount = new MemoryKeyValueStore();
+            keepOnlyTheAccount.SetString(FakeStoreBackend.AccountKey, _store.GetString(FakeStoreBackend.AccountKey));
+            var second = ServicesInstaller.Create(new ServicesOptions
+            {
+                Mode = ServicesMode.Fake, Clock = _clock, Store = keepOnlyTheAccount, Log = new MemoryServiceLog(),
+                Connectivity = new FakeConnectivity(), Consent = new FakeConsentService(new FakeTrackingAuthorization()),
+            });
+            Assert.IsTrue(second.Entitlements.IsEmpty, "no entitlement cache in this store");
+            second.Tick();
+            Assert.IsTrue(second.Entitlements.Contains(Entitlement.NoWatermark), "re-delivered by the fake store account");
+
+            // An explicit test setup starts from that setup, not from a persisted account.
+            var scripted = Create(new FakeStoreConfig());
+            Assert.IsFalse(scripted.FakeStore.IsPersistent);
+        }
+
+        [Test]
+        public void RemoteConfigModesReachThePurchasesCatalog()
+        {
+            var s = Create(remote: new Dictionary<string, string> { { RemoteConfigKeys.ModesDisabled, "[\"M05\"]" } });
+            Assert.IsTrue(MonetizationConfigMapper.SameCatalog(MonetizationConfig.Release1, s.Purchases.Config), "build defaults at frame 0");
+            int changes = 0;
+            s.Purchases.ConfigChanged += _ => changes++;
+            s.Tick(); // Remote Config applies the delivered values
+            Assert.AreEqual(1, changes);
+            Assert.IsFalse(s.Purchases.Config.IsReleased(ModeCode.M05));
+            Assert.IsTrue(s.Purchases.Config.IsFree(ModeCode.M05), "free set unchanged, availability is decided by release");
+            CollectionAssert.AreEqual(MonetizationConfig.Release1.SellableProductIds, s.Purchases.Config.SellableProductIds);
+        }
+
+        [Test]
         public void RemoteConfigIssuesAreReportedNotThrown()
         {
-            var remote = new FakeRemoteConfigService(new MemoryServiceLog());
+            var remote = new BuildDefaultsRemoteConfigService(new MemoryServiceLog());
             RemoteConfigValues seen = null;
             remote.Updated += v => seen = v;
             remote.Initialize();

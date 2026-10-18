@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
+using Ballverse.Core.Integration;
 using Ballverse.Core.Monetization;
+using Ballverse.Platform;
 using UnityEngine;
 
 namespace Ballverse.Services
@@ -27,7 +30,8 @@ namespace Ballverse.Services
     /// <see cref="BallverseServices.OnApplicationFocusChanged"/> (from <c>IAppLifecycle.FocusChanged</c>) — never both. Without the App
     /// (tests, sample scenes): <c>ServicesInstaller.CreateAndRun()</c>.
     /// <para>
-    /// Which implementations a build gets depends on its variant (spec §7.9, §8.9; <see cref="ServicesPolicy"/>): Store builds
+    /// Which implementations a build gets depends on its variant (spec §7.9, §8.9; the App's <see cref="BuildVariant"/>,
+    /// applied by <see cref="ServicesPolicy"/>): Store builds
     /// always use the real services and contain no fakes or test ad ids; Dev and OwnerTest use Google's test ad units and,
     /// on a device, the fake store unless <see cref="ServicesConfig.testBuildStore"/> selects the sandbox. Within that, the
     /// SDKs compiled in decide (spec §7.1 "every external dependency behind an interface with a fake"):
@@ -77,13 +81,13 @@ namespace Ballverse.Services
             var queue = new MainThreadQueue(log);
             var tickables = new List<ITickable>();
 
-            var variant = options.Variant ?? ServicesPolicy.CurrentVariant;
+            var variant = options.Variant ?? BuildVariants.Current;
             bool isEditor = Application.isEditor;
             bool auto = options.Mode == ServicesMode.Auto;
             // The config asset is read only when the answer depends on it.
             ServicesMode editorMode = auto && isEditor ? Config().editorMode : ServicesMode.Auto;
             TestBuildStore testStore = options.TestBuildStore
-                                       ?? (auto && !isEditor && variant != ServicesBuildVariant.Store ? Config().testBuildStore : TestBuildStore.Fake);
+                                       ?? (auto && !isEditor && BuildVariants.AllowsTestServices(variant) ? Config().testBuildStore : TestBuildStore.Fake);
             var plan = ServicesPolicy.Resolve(variant, options.Mode, isEditor, editorMode, testStore, out string planWarning);
             if (planWarning != null) log.Error(Tag, planWarning);
 
@@ -104,10 +108,10 @@ namespace Ballverse.Services
             else
 #endif
             {
-                // Without Firebase (release 1): log-based crash reports and analytics, build-default Remote Config.
+                // Without Firebase (release 1, every variant): log-based crash reports and analytics, build-default Remote Config.
                 crash = new LogCrashReporter(log);
                 analytics = new RecordingAnalyticsService(log);
-                remoteConfig = new FakeRemoteConfigService(log, options.FakeRemoteConfig);
+                remoteConfig = new BuildDefaultsRemoteConfigService(log, options.InitialRemoteConfig);
             }
 
             // ---- Consent (UMP) and ATT ----
@@ -187,7 +191,9 @@ namespace Ballverse.Services
             FakeStoreBackend fakeStore = null;
             if (backend == null && plan.FakeStore)
             {
-                fakeStore = new FakeStoreBackend(options.FakeStore);
+                // The fake account outlives restarts (OwnerTest builds keep their test purchases) unless a test sets it up.
+                bool persist = options.PersistFakeStore ?? options.FakeStore == null;
+                fakeStore = new FakeStoreBackend(options.FakeStore, persist ? store : null);
                 backend = fakeStore;
             }
 #endif
@@ -204,13 +210,16 @@ namespace Ballverse.Services
 #endif
             }
             var entitlementStore = new EntitlementStore(store, new PrefsDeviceKeyStore(store), clock, log);
-            var purchases = new PurchaseService(backend, entitlementStore, validator, options.Monetization ?? MonetizationConfig.Release1,
+            // Release catalog: the build's Core preset (Release1) with Remote Config free_modes / modes_disabled applied.
+            var release = options.Monetization ?? MonetizationConfig.Release1;
+            var purchases = new PurchaseService(backend, entitlementStore, validator, MonetizationFor(release, remoteConfig.Current, log),
                 clock, analytics, log);
             tickables.Add(purchases);
+            remoteConfig.Updated += values => purchases.SetConfig(MonetizationFor(release, values, log));
 
             // ---- Ad policies (Core) ----
-            var adPolicy = new AdPolicyStore(store, AdPolicyConfigMapper.From(remoteConfig.Current), log);
-            System.Func<EntitlementSet> rights = () => purchases.Entitlements;
+            var adPolicy = new AdPolicyStore(store, RemoteConfigAdapters.ToAdPolicyConfig(remoteConfig.Current), log);
+            Func<EntitlementSet> rights = () => purchases.Entitlements;
             var interstitials = new InterstitialCoordinator(ads, adPolicy, clock, analytics, rights, log);
             var rewarded = new RewardedExportCoordinator(ads, adPolicy, connectivity, clock, analytics, interstitials, rights, log);
             tickables.Add(rewarded);
@@ -226,6 +235,20 @@ namespace Ballverse.Services
                 fakeAds, fakeStore,
 #endif
                 tickables);
+        }
+
+        /// <summary><see cref="MonetizationConfigMapper.From"/>; a payload Core rejects keeps the preset (logged).</summary>
+        static MonetizationConfig MonetizationFor(MonetizationConfig release, Ballverse.Core.Config.RemoteConfigValues values, IServiceLog log)
+        {
+            try
+            {
+                return MonetizationConfigMapper.From(release, values);
+            }
+            catch (ArgumentException e)
+            {
+                log.Error(Tag, "Remote Config free_modes / modes_disabled rejected by Core Monetization; using the release preset.", e);
+                return release;
+            }
         }
 
 #if BALLVERSE_ADMOB

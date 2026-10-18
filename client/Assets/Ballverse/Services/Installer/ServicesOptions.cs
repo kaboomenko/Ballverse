@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Ballverse.Core.Monetization;
+using Ballverse.Platform;
 
 namespace Ballverse.Services
 {
@@ -22,8 +23,8 @@ namespace Ballverse.Services
     {
         public ServicesMode Mode { get; set; } = ServicesMode.Auto;
 
-        /// <summary>Build variant (default: the one compiled in, <see cref="ServicesPolicy.CurrentVariant"/>). Tests only.</summary>
-        public ServicesBuildVariant? Variant { get; set; }
+        /// <summary>Build variant (default: the one compiled in, <see cref="BuildVariants.Current"/>). Tests only.</summary>
+        public BuildVariant? Variant { get; set; }
 
         /// <summary>Purchases of Dev / OwnerTest device builds in Auto mode (default: <see cref="ServicesConfig.testBuildStore"/>).</summary>
         public TestBuildStore? TestBuildStore { get; set; }
@@ -64,22 +65,32 @@ namespace Ballverse.Services
         public bool? DeveloperBuild { get; set; }
 
         /// <summary>
-        /// Release catalog and entitlement rules (Core). Default: <see cref="MonetizationConfig.Release1"/> — sells only Remove
-        /// Export Ads, Remove Interstitial Ads and No Ads Bundle; No Ads or both removals also give NO_WATERMARK. The App may
-        /// pass <c>MonetizationConfig.Release1.WithFreeModes(...)</c> after resolving Remote Config <c>free_modes</c>.
+        /// The build's release catalog preset (Core). Default: <see cref="MonetizationConfig.Release1"/> — M01, M02, M05 free,
+        /// sells only Remove Export Ads, Remove Interstitial Ads and No Ads Bundle. The services apply Remote Config
+        /// <c>free_modes</c> / <c>modes_disabled</c> on top of it themselves (<see cref="MonetizationConfigMapper"/>), so the
+        /// App passes the preset, not an already widened config. Rights (NO_WATERMARK included) never depend on it.
         /// </summary>
         public MonetizationConfig Monetization { get; set; }
 
 #if !BALLVERSE_STORE
         /// <summary>Fake store setup when fakes are used.</summary>
         public FakeStoreConfig FakeStore { get; set; }
+
+        /// <summary>
+        /// Keep the fake store's account (purchases, deferred and unconfirmed orders) in <see cref="Store"/> across restarts.
+        /// Default: on, except with an explicit <see cref="FakeStore"/> setup (tests), whose account starts from that setup.
+        /// </summary>
+        public bool? PersistFakeStore { get; set; }
 #endif
 
         /// <summary>Overrides the store backend (tests).</summary>
         public IStoreBackend StoreBackend { get; set; }
 
-        /// <summary>Raw Remote Config delivered by the build-default service (no Firebase); tests.</summary>
-        public IReadOnlyDictionary<string, string> FakeRemoteConfig { get; set; }
+        /// <summary>
+        /// Raw Remote Config applied at start by <see cref="BuildDefaultsRemoteConfigService"/> (builds without Firebase) as if
+        /// fetched; tests only. Null (the app): the build defaults.
+        /// </summary>
+        public IReadOnlyDictionary<string, string> InitialRemoteConfig { get; set; }
 
         /// <summary>Overrides the platform ATT access (tests).</summary>
         public ITrackingAuthorization Tracking { get; set; }

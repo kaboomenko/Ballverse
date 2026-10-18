@@ -36,6 +36,21 @@ namespace Ballverse.Services.Tests
             }
         }
 
+        /// <summary>ATT whose system dialog stays open until the test answers (or never: lost native callback).</summary>
+        sealed class HeldTracking : ITrackingAuthorization
+        {
+            public Action<TrackingAuthorizationStatus> Pending;
+            public int RequestCount;
+
+            public TrackingAuthorizationStatus Status { get; set; } = TrackingAuthorizationStatus.NotDetermined;
+
+            public void Request(Action<TrackingAuthorizationStatus> done)
+            {
+                RequestCount++;
+                Pending = done;
+            }
+        }
+
         static readonly string AllPurposes = "11111111111";
         static readonly string NoPurposes = "00000000000";
 
@@ -123,6 +138,48 @@ namespace Ballverse.Services.Tests
             flow.Ensure(prePrompt, () => later++);
             Assert.AreEqual(1, later, "not asked again this session");
             Assert.AreEqual(1, prePrompt.Calls);
+        }
+
+        [Test]
+        public void AbandonWhileTheSystemDialogIsOpenLeavesTheAnsweredPrePromptAlone()
+        {
+            var tracking = new HeldTracking();
+            var flow = new TrackingDecisionFlow(tracking, new ManualClock(), new MemoryServiceLog());
+            var prePrompt = new ScriptedPrePrompt();
+            int done = 0;
+            flow.Ensure(prePrompt, () => done++);
+            prePrompt.Pending(true); // the user answered "continue": the screen closed itself, the system dialog is up
+            Assert.AreEqual(1, tracking.RequestCount);
+            Assert.IsTrue(flow.IsRunning);
+
+            flow.Abandon("watchdog");
+            Assert.AreEqual(1, done);
+            Assert.IsFalse(flow.IsRunning);
+            Assert.AreEqual(0, prePrompt.Dismissals, "an answered pre-prompt is not dismissed (the UI may show another screen)");
+
+            tracking.Pending(TrackingAuthorizationStatus.Denied); // the lost callback arrives late
+            Assert.AreEqual(1, done, "waiters are not called twice");
+        }
+
+        [Test]
+        public void DeclinedPrePromptIsNotDismissedLater()
+        {
+            var clock = new ManualClock();
+            var tracking = new HeldTracking();
+            var flow = new TrackingDecisionFlow(tracking, clock, new MemoryServiceLog());
+            var prePrompt = new ScriptedPrePrompt();
+            int first = 0, later = 0;
+            flow.Ensure(prePrompt, () => first++);
+            prePrompt.Pending(false); // "not now": the flow ends at once
+            Assert.AreEqual(1, first);
+            Assert.AreEqual(0, tracking.RequestCount);
+
+            var second = new ScriptedPrePrompt();
+            flow.Ensure(second, () => later++);
+            Assert.AreEqual(1, later, "asked once per session");
+            flow.Abandon("idle");
+            Assert.AreEqual(0, prePrompt.Dismissals + second.Dismissals);
+            Assert.AreEqual(0, second.Calls);
         }
 
         [Test]

@@ -1,24 +1,8 @@
+using Ballverse.Platform;
+
 namespace Ballverse.Services
 {
-    /// <summary>
-    /// Build variant of spec §7.9, mirroring <c>Ballverse.Platform.BuildVariant</c> (unity/bootstrap), which this assembly
-    /// cannot reference. The build script compiles exactly one symbol into the player: <c>BALLVERSE_DEV</c>,
-    /// <c>BALLVERSE_OWNERTEST</c> or <c>BALLVERSE_STORE</c>; none (editor, players built without the build script) counts
-    /// as <see cref="Dev"/>.
-    /// </summary>
-    public enum ServicesBuildVariant
-    {
-        /// <summary>Development player: Google test ad units, fake store, developer menu.</summary>
-        Dev = 0,
-
-        /// <summary>Release-optimised player for the owner's phones: Google test ad units, fake store or sandbox.</summary>
-        OwnerTest = 1,
-
-        /// <summary>Store release: real AdMob units and store billing; fakes and test ids are not compiled in (spec §8.9).</summary>
-        Store = 2,
-    }
-
-    /// <summary>Purchases in <see cref="ServicesBuildVariant.Dev"/> and <see cref="ServicesBuildVariant.OwnerTest"/> device builds.</summary>
+    /// <summary>Purchases in <see cref="BuildVariant.Dev"/> and <see cref="BuildVariant.OwnerTest"/> device builds.</summary>
     public enum TestBuildStore
     {
         /// <summary>The fake store (spec §7.9: until the apps exist in the stores).</summary>
@@ -31,7 +15,7 @@ namespace Ballverse.Services
     /// <summary>What <see cref="ServicesInstaller.Create"/> wires for one build (<see cref="ServicesPolicy.Resolve"/>).</summary>
     public sealed class ServicesPlan
     {
-        public ServicesPlan(ServicesBuildVariant variant, bool fakeAds, bool fakeConsent, bool fakeStore, bool fakeFirebase)
+        public ServicesPlan(BuildVariant variant, bool fakeAds, bool fakeConsent, bool fakeStore, bool fakeFirebase)
         {
             Variant = variant;
             FakeAds = fakeAds;
@@ -40,7 +24,7 @@ namespace Ballverse.Services
             FakeFirebase = fakeFirebase;
         }
 
-        public ServicesBuildVariant Variant { get; }
+        public BuildVariant Variant { get; }
 
         /// <summary>Instant scriptable ads (<c>FakeAdNetwork</c>) instead of the Google Mobile Ads SDK.</summary>
         public bool FakeAds { get; }
@@ -55,10 +39,10 @@ namespace Ballverse.Services
         public bool FakeFirebase { get; }
 
         /// <summary>Dev and OwnerTest always use Google's test ad units, whatever is configured (spec §7.9, §8 "Реклама").</summary>
-        public bool TestAdUnitsOnly => Variant != ServicesBuildVariant.Store;
+        public bool TestAdUnitsOnly => BuildVariants.AllowsTestServices(Variant);
 
         /// <summary>UMP debug settings (EEA test geography, test devices) apply in Dev and OwnerTest, never in Store.</summary>
-        public bool AllowConsentDebug => Variant != ServicesBuildVariant.Store;
+        public bool AllowConsentDebug => BuildVariants.AllowsTestServices(Variant);
 
         /// <summary><see cref="ServicesMode.Fake"/> when everything is fake, otherwise <see cref="ServicesMode.Real"/>.</summary>
         public ServicesMode Mode => FakeAds && FakeConsent && FakeStore && FakeFirebase ? ServicesMode.Fake : ServicesMode.Real;
@@ -71,7 +55,9 @@ namespace Ballverse.Services
     }
 
     /// <summary>
-    /// Build-variant policy of spec §7.9 / §8.9 as pure functions (the installer applies them; tests cover every variant):
+    /// Build-variant policy of spec §7.9 / §8.9 as pure functions (the installer applies them; tests cover every variant). The
+    /// variant itself is the App's <see cref="BuildVariant"/> (<see cref="BuildVariants.Current"/>, one scripting symbol per
+    /// player); this class only decides what the services wire for it:
     /// <list type="table">
     /// <item><term>Store</term><description>always the real services and the configured AdMob units; missing or test units
     /// switch ads off (exports run without ads, Р14) instead of serving test ads; fakes are not even compiled in.</description></item>
@@ -83,30 +69,15 @@ namespace Ballverse.Services
     /// </summary>
     public static class ServicesPolicy
     {
-        /// <summary>The variant this assembly was compiled as.</summary>
-        public static ServicesBuildVariant CurrentVariant
-        {
-            get
-            {
-#if BALLVERSE_STORE
-                return ServicesBuildVariant.Store;
-#elif BALLVERSE_OWNERTEST
-                return ServicesBuildVariant.OwnerTest;
-#else
-                return ServicesBuildVariant.Dev;
-#endif
-            }
-        }
-
         /// <summary>
         /// The implementations to wire. <paramref name="warning"/> is set when the request was overridden (fakes asked for in
         /// a Store build).
         /// </summary>
-        public static ServicesPlan Resolve(ServicesBuildVariant variant, ServicesMode requested, bool isEditor, ServicesMode editorMode,
+        public static ServicesPlan Resolve(BuildVariant variant, ServicesMode requested, bool isEditor, ServicesMode editorMode,
             TestBuildStore testStore, out string warning)
         {
             warning = null;
-            if (variant == ServicesBuildVariant.Store)
+            if (!BuildVariants.AllowsTestServices(variant))
             {
                 if (requested == ServicesMode.Fake) warning = "Fake services requested in a Store build; using the real ones (spec §8.9).";
                 return new ServicesPlan(variant, false, false, false, false);
@@ -130,10 +101,10 @@ namespace Ballverse.Services
         /// real ids are ignored. Store: <paramref name="configured"/> when complete, well-formed and not Google's test units;
         /// otherwise null (ads off) with <paramref name="problem"/> set.
         /// </summary>
-        public static AdUnitIds SelectAdUnits(ServicesBuildVariant variant, AdUnitIds configured, AdUnitIds testUnits, out string problem)
+        public static AdUnitIds SelectAdUnits(BuildVariant variant, AdUnitIds configured, AdUnitIds testUnits, out string problem)
         {
             problem = null;
-            if (variant != ServicesBuildVariant.Store)
+            if (BuildVariants.AllowsTestServices(variant))
             {
                 if (testUnits == null)
                 {

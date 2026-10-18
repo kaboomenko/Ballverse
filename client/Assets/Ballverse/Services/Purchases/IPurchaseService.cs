@@ -26,19 +26,17 @@ namespace Ballverse.Services
         IReadOnlyList<string> PendingProductIds { get; }
 
         /// <summary>
-        /// Rights of the owned products: Core <c>Entitlements.From(OwnedProductIds, Config, WatermarkGrandfathered)</c>
-        /// (release 1: No Ads Bundle, or both ad removals, also give NO_WATERMARK).
+        /// Rights of the owned products: Core <c>Entitlements.From(OwnedProductIds, Config)</c>. NO_WATERMARK follows Core's
+        /// permanent rule (Ultimate, or NO_EXPORT_ADS + NO_INTERSTITIALS from any products: No Ads Bundle or both ad removals);
+        /// the export sheet row comes from Core <c>WatermarkRowPolicy.GetRow(Entitlements, watermark_enabled)</c>.
         /// </summary>
         EntitlementSet Entitlements { get; }
 
-        /// <summary>The release catalog and entitlement rules in force (pass it to Core <c>Storefront</c> functions).</summary>
-        MonetizationConfig Config { get; }
-
         /// <summary>
-        /// Persisted Core <see cref="WatermarkGrandfathering"/> flag: the user obtained NO_WATERMARK under the release-1 No Ads
-        /// rule, which keeps applying to them if a later release turns the rule off (pass it to Core <c>Storefront</c> functions).
+        /// The release catalog in force: Core <see cref="MonetizationConfig.Release1"/> with Remote Config <c>free_modes</c> /
+        /// <c>modes_disabled</c> applied. Pass it to Core <c>Storefront</c>, <c>ModeAvailability</c> and <c>SalePointPolicy</c>.
         /// </summary>
-        bool WatermarkGrandfathered { get; }
+        MonetizationConfig Config { get; }
 
         bool IsPurchaseInProgress { get; }
 
@@ -50,6 +48,9 @@ namespace Ballverse.Services
         event Action ProductsChanged;
 
         event Action<PurchaseServiceState> StateChanged;
+
+        /// <summary><see cref="Config"/> was replaced (Remote Config changed); storefront and mode cards should be rebuilt.</summary>
+        event Action<MonetizationConfig> ConfigChanged;
 
         /// <summary>Connects to the store in the background (spec §7.9 frame 1+). Returns immediately.</summary>
         void Initialize();

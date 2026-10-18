@@ -82,7 +82,8 @@ namespace Ballverse.Services
         public FakeAdNetwork FakeAds { get; }
 
         /// <summary>
-        /// The fake store when it is used (developer menu "имитация покупок и возвратов", tests), else null. Not in Store builds.
+        /// The fake store when it is used (developer menu "имитация покупок и возвратов", tests), else null. Its account is
+        /// persisted across restarts (<see cref="FakeStoreBackend.IsPersistent"/>). Not in Store builds.
         /// </summary>
         public FakeStoreBackend FakeStore { get; }
 #endif

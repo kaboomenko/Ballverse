@@ -1,4 +1,5 @@
 using System;
+using Ballverse.Core.Integration;
 using Ballverse.Core.Monetization;
 
 namespace Ballverse.Services
@@ -88,10 +89,10 @@ namespace Ballverse.Services
             _crash.Initialize();
             _crash.Log("services: frame 0");
 
-            _adPolicy.ApplyConfig(AdPolicyConfigMapper.From(_remoteConfig.Current));
+            _adPolicy.ApplyConfig(RemoteConfigAdapters.ToAdPolicyConfig(_remoteConfig.Current));
             _remoteConfig.Updated += values =>
             {
-                _adPolicy.ApplyConfig(AdPolicyConfigMapper.From(values));
+                _adPolicy.ApplyConfig(RemoteConfigAdapters.ToAdPolicyConfig(values));
                 RefreshAdPreload();
             };
             _purchases.EntitlementsChanged += entitlements =>

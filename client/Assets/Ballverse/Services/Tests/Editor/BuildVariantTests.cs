@@ -1,4 +1,5 @@
 using System;
+using Ballverse.Platform;
 using Ballverse.Services.Editor;
 using NUnit.Framework;
 
@@ -9,11 +10,11 @@ namespace Ballverse.Services.Tests
     {
         static readonly AdUnitIds RealUnits = new AdUnitIds("ca-app-pub-1234567890123456/1111111111", "ca-app-pub-1234567890123456/2222222222");
 
-        static ServicesPlan Resolve(ServicesBuildVariant variant, ServicesMode mode, bool editor,
+        static ServicesPlan Resolve(BuildVariant variant, ServicesMode mode, bool editor,
             TestBuildStore store = TestBuildStore.Fake, ServicesMode editorMode = ServicesMode.Fake)
         {
             var plan = ServicesPolicy.Resolve(variant, mode, editor, editorMode, store, out string warning);
-            if (variant != ServicesBuildVariant.Store || mode != ServicesMode.Fake) Assert.IsNull(warning);
+            if (variant != BuildVariant.Store || mode != ServicesMode.Fake) Assert.IsNull(warning);
             return plan;
         }
 
@@ -26,7 +27,7 @@ namespace Ballverse.Services.Tests
             {
                 foreach (bool editor in new[] { false, true })
                 {
-                    var plan = ServicesPolicy.Resolve(ServicesBuildVariant.Store, mode, editor, ServicesMode.Fake, TestBuildStore.Fake, out string warning);
+                    var plan = ServicesPolicy.Resolve(BuildVariant.Store, mode, editor, ServicesMode.Fake, TestBuildStore.Fake, out string warning);
                     Assert.IsFalse(plan.FakeAds || plan.FakeConsent || plan.FakeStore || plan.FakeFirebase, mode + " editor=" + editor);
                     Assert.AreEqual(ServicesMode.Real, plan.Mode);
                     Assert.IsFalse(plan.TestAdUnitsOnly);
@@ -34,14 +35,14 @@ namespace Ballverse.Services.Tests
                     Assert.AreEqual(mode == ServicesMode.Fake, warning != null);
                 }
             }
-            var sandbox = Resolve(ServicesBuildVariant.Store, ServicesMode.Auto, false, TestBuildStore.Fake);
+            var sandbox = Resolve(BuildVariant.Store, ServicesMode.Auto, false, TestBuildStore.Fake);
             Assert.IsFalse(sandbox.FakeStore, "the test-build store setting does not apply to Store");
         }
 
         [Test]
         public void DevAndOwnerTestDevicesUseTestAdsRealSdksAndTheFakeStoreByDefault()
         {
-            foreach (var variant in new[] { ServicesBuildVariant.Dev, ServicesBuildVariant.OwnerTest })
+            foreach (var variant in new[] { BuildVariant.Dev, BuildVariant.OwnerTest })
             {
                 var plan = Resolve(variant, ServicesMode.Auto, editor: false);
                 Assert.IsFalse(plan.FakeAds, variant + ": the Google SDK with test units");
@@ -69,18 +70,27 @@ namespace Ballverse.Services.Tests
         [Test]
         public void EditorFollowsTheConfiguredEditorMode()
         {
-            Assert.AreEqual(ServicesMode.Fake, Resolve(ServicesBuildVariant.Dev, ServicesMode.Auto, true, editorMode: ServicesMode.Fake).Mode);
-            Assert.AreEqual(ServicesMode.Fake, Resolve(ServicesBuildVariant.Dev, ServicesMode.Auto, true, editorMode: ServicesMode.Auto).Mode);
-            var real = Resolve(ServicesBuildVariant.Dev, ServicesMode.Auto, true, editorMode: ServicesMode.Real);
+            Assert.AreEqual(ServicesMode.Fake, Resolve(BuildVariant.Dev, ServicesMode.Auto, true, editorMode: ServicesMode.Fake).Mode);
+            Assert.AreEqual(ServicesMode.Fake, Resolve(BuildVariant.Dev, ServicesMode.Auto, true, editorMode: ServicesMode.Auto).Mode);
+            var real = Resolve(BuildVariant.Dev, ServicesMode.Auto, true, editorMode: ServicesMode.Real);
             Assert.IsFalse(real.FakeStore);
             Assert.IsTrue(real.TestAdUnitsOnly);
         }
 
         [Test]
-        public void CompiledVariantWithoutASymbolIsDev()
+        public void TheVariantIsTheAppsBuildVariant()
         {
-            // The editor and test assemblies get no variant symbol.
-            Assert.AreEqual(ServicesBuildVariant.Dev, ServicesPolicy.CurrentVariant);
+            // One definition of the variant (Ballverse.Platform); the editor and test assemblies get no variant symbol.
+            Assert.AreEqual(BuildVariant.Dev, BuildVariants.Current);
+            var s = ServicesInstaller.Create(new ServicesOptions
+            {
+                Mode = ServicesMode.Fake,
+                Clock = new ManualClock(),
+                Store = new MemoryKeyValueStore(),
+                Log = new MemoryServiceLog(),
+                Connectivity = new FakeConnectivity(),
+            });
+            Assert.AreEqual(BuildVariants.Current, s.Plan.Variant, "the installer defaults to the compiled-in variant");
         }
 
         // ---- ad units ----
@@ -88,7 +98,7 @@ namespace Ballverse.Services.Tests
         [Test]
         public void DevAndOwnerTestAlwaysUseGoogleTestUnits()
         {
-            foreach (var variant in new[] { ServicesBuildVariant.Dev, ServicesBuildVariant.OwnerTest })
+            foreach (var variant in new[] { BuildVariant.Dev, BuildVariant.OwnerTest })
             {
                 var units = ServicesPolicy.SelectAdUnits(variant, RealUnits, AdUnitIds.AndroidTest, out string problem);
                 Assert.IsTrue(units.AreTestIds, variant + ": configured real ids are ignored");
@@ -102,16 +112,16 @@ namespace Ballverse.Services.Tests
         [Test]
         public void StoreUsesOnlyRealUnitsAndOtherwiseSwitchesAdsOff()
         {
-            Assert.AreSame(RealUnits, ServicesPolicy.SelectAdUnits(ServicesBuildVariant.Store, RealUnits, null, out string problem));
+            Assert.AreSame(RealUnits, ServicesPolicy.SelectAdUnits(BuildVariant.Store, RealUnits, null, out string problem));
             Assert.IsNull(problem);
 
-            Assert.IsNull(ServicesPolicy.SelectAdUnits(ServicesBuildVariant.Store, null, AdUnitIds.AndroidTest, out problem), "no fallback to test units");
+            Assert.IsNull(ServicesPolicy.SelectAdUnits(BuildVariant.Store, null, AdUnitIds.AndroidTest, out problem), "no fallback to test units");
             Assert.IsNotNull(problem);
-            Assert.IsNull(ServicesPolicy.SelectAdUnits(ServicesBuildVariant.Store, AdUnitIds.AndroidTest, null, out problem));
+            Assert.IsNull(ServicesPolicy.SelectAdUnits(BuildVariant.Store, AdUnitIds.AndroidTest, null, out problem));
             Assert.IsNotNull(problem);
             var mixed = new AdUnitIds(RealUnits.Rewarded, AdUnitIds.TestAndroidInterstitial);
-            Assert.IsNull(ServicesPolicy.SelectAdUnits(ServicesBuildVariant.Store, mixed, null, out problem), "one test unit is enough to refuse");
-            Assert.IsNull(ServicesPolicy.SelectAdUnits(ServicesBuildVariant.Store, new AdUnitIds("rewarded", "interstitial"), null, out problem));
+            Assert.IsNull(ServicesPolicy.SelectAdUnits(BuildVariant.Store, mixed, null, out problem), "one test unit is enough to refuse");
+            Assert.IsNull(ServicesPolicy.SelectAdUnits(BuildVariant.Store, new AdUnitIds("rewarded", "interstitial"), null, out problem));
             Assert.IsNotNull(problem);
         }
 
@@ -129,25 +139,38 @@ namespace Ballverse.Services.Tests
         [Test]
         public void StoreVariantInstallerWiresNoFakesEvenWhenAskedTo()
         {
+            // Must hold whichever SDK packages are installed: the project manifest has Google Mobile Ads 11.6.0 and Unity IAP
+            // 5.4.4 (BALLVERSE_ADMOB / BALLVERSE_UNITY_IAP defined), the dotnet harness also builds without them. Tick() is
+            // not called, so no real SDK is started from an EditMode test.
             var log = new MemoryServiceLog();
             var s = ServicesInstaller.Create(new ServicesOptions
             {
-                Variant = ServicesBuildVariant.Store,
+                Variant = BuildVariant.Store,
                 Mode = ServicesMode.Fake,
                 Clock = new ManualClock(),
                 Store = new MemoryKeyValueStore(),
                 Log = log,
                 Connectivity = new FakeConnectivity(),
+                AdUnits = AdUnitIds.AndroidTest, // test units handed to a Store build are refused
             });
-            Assert.AreEqual(ServicesBuildVariant.Store, s.Plan.Variant);
+            Assert.AreEqual(BuildVariant.Store, s.Plan.Variant);
             Assert.AreEqual(ServicesMode.Real, s.Mode);
+            Assert.IsFalse(s.Plan.FakeAds || s.Plan.FakeConsent || s.Plan.FakeStore || s.Plan.FakeFirebase);
             Assert.IsNull(s.FakeAds);
             Assert.IsNull(s.FakeStore);
-            Assert.IsInstanceOf<NoConsentService>(s.Consent, "no UMP package in this test build");
-            Assert.Greater(log.ErrorCount, 0, "the fake request is reported");
+            Assert.IsNotInstanceOf<FakeConsentService>(s.Consent);
+            CollectionAssert.Contains(new[] { "UmpConsentService", "NoConsentService" }, s.Consent.GetType().Name,
+                "UMP when the ads package is installed, otherwise consent not required");
+            Assert.IsInstanceOf<BuildDefaultsRemoteConfigService>(s.RemoteConfig, "build defaults while Firebase is off, no test values");
+            Assert.AreSame(Ballverse.Core.Config.RemoteConfigValues.Defaults, s.RemoteConfig.Current);
+            Assert.IsTrue(MonetizationConfigMapper.SameCatalog(Ballverse.Core.Monetization.MonetizationConfig.Release1, s.Purchases.Config));
+            Assert.IsTrue(new System.Collections.Generic.List<string>(log.Lines)
+                .Exists(l => l.StartsWith("E [Installer] Fake services requested in a Store build", StringComparison.Ordinal)),
+                "the fake request is reported");
+            Assert.AreEqual(PurchaseServiceState.NotInitialized, s.Purchases.State, "nothing connects before the first Tick");
 
-            s.Tick();
-            Assert.AreEqual(PurchaseServiceState.Unavailable, s.Purchases.State, "no store SDK here: unavailable, never fake");
+            s.Ads.Initialize();
+            Assert.AreEqual(AdsServiceState.Unavailable, s.Ads.State, "test units in a Store build: ads off (exports without ads), never test ads");
         }
 
         // ---- build steps ----

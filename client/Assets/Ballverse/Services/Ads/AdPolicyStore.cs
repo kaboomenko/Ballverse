@@ -1,31 +1,9 @@
 using System;
 using System.IO;
 using Ballverse.Core.Ads;
-using Ballverse.Core.Config;
 
 namespace Ballverse.Services
 {
-    /// <summary>Maps the typed Remote Config (spec §9.3) to the Core ad policy config.</summary>
-    public static class AdPolicyConfigMapper
-    {
-        /// <summary>
-        /// The §9.3 ad keys; <c>InterstitialQuietAfterRewardedSec</c> (IN3, 30 s) has no Remote Config key and keeps its default.
-        /// The result is clamped (<see cref="AdPolicyConfig.Validated"/>).
-        /// </summary>
-        public static AdPolicyConfig From(RemoteConfigValues values)
-        {
-            if (values == null) throw new ArgumentNullException(nameof(values));
-            var c = AdPolicyConfig.CreateDefault();
-            c.InterstitialEveryNGames = values.InterstitialEveryNGames;
-            c.InterstitialMinIntervalSec = values.InterstitialMinIntervalSec;
-            c.InterstitialGraceGames = values.InterstitialGraceGames;
-            c.RewardedExportEnabled = values.RewardedExportEnabled;
-            c.RewardedWaitTimeoutSec = values.RewardedWaitTimeoutSec;
-            c.RewardedRetryWindowMin = values.RewardedRetryWindowMin;
-            return c.Validated();
-        }
-    }
-
     /// <summary>
     /// Holds the Core ad policies (<see cref="RewardedExportGate"/>, <see cref="InterstitialPolicy"/>) and persists their state
     /// JSON between sessions (IN1 counter, RW4 retry credits). Unreadable state starts fresh and is logged; it never throws.

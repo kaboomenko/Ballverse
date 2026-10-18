@@ -1,4 +1,5 @@
 using System;
+using Ballverse.Platform;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
@@ -36,14 +37,17 @@ namespace Ballverse.Services.Editor
             if (problem != null) throw new BuildFailedException("[Ballverse] " + problem);
         }
 
-        /// <summary>True when the command line selects the Store variant (<c>-ballverseVariant Store</c>, case-insensitive).</summary>
+        /// <summary>
+        /// True when the command line selects the Store variant (<c>-ballverseVariant Store</c>; the value is parsed by
+        /// <see cref="BuildVariants.TryParse"/>, as the bootstrap build script does).
+        /// </summary>
         public static bool IsStoreVariant(string[] args)
         {
             if (args == null) return false;
             for (int i = 0; i + 1 < args.Length; i++)
             {
                 if (string.Equals(args[i], VariantOption, StringComparison.OrdinalIgnoreCase))
-                    return string.Equals(args[i + 1]?.Trim(), "Store", StringComparison.OrdinalIgnoreCase);
+                    return BuildVariants.TryParse(args[i + 1], out BuildVariant variant) && variant == BuildVariant.Store;
             }
             return false;
         }
@@ -51,7 +55,7 @@ namespace Ballverse.Services.Editor
         /// <summary>Why these ad units cannot ship in a Store build, or null when they can.</summary>
         public static string StoreAdUnitsProblem(string rewarded, string interstitial)
         {
-            ServicesPolicy.SelectAdUnits(ServicesBuildVariant.Store, ServicesConfig.UnitsOrNull(rewarded, interstitial), null, out string problem);
+            ServicesPolicy.SelectAdUnits(BuildVariant.Store, ServicesConfig.UnitsOrNull(rewarded, interstitial), null, out string problem);
             return problem;
         }
     }

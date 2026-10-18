@@ -50,8 +50,9 @@ namespace Ballverse.Services
     /// once; a flow that has not finished after <see cref="FlowTimeoutMs"/> (pre-prompt closed by navigation without an
     /// answer, native callback lost) is abandoned by the next <see cref="Ensure"/> call, which then continues immediately.
     /// The ads service's watchdog (<see cref="AdsService.BeforeShowTimeoutMs"/>) abandons it through <see cref="Abandon"/>
-    /// as soon as it stops waiting. Abandoning dismisses the pre-prompt (<see cref="IAttPrePrompt.Dismiss"/>), and answers
-    /// that arrive after the flow ended are ignored, so the system dialog never appears after the ad was skipped.
+    /// as soon as it stops waiting. Abandoning dismisses a pre-prompt that has not answered yet (<see cref="IAttPrePrompt.Dismiss"/>;
+    /// never one that answered and is waiting on the system dialog), and answers that arrive after the flow ended are
+    /// ignored, so the system dialog never appears after the ad was skipped.
     /// </para>
     /// </summary>
     public sealed class TrackingDecisionFlow
@@ -109,6 +110,9 @@ namespace Ballverse.Services
                 prePrompt.Show(proceed =>
                 {
                     if (generation != _generation || !_running) return; // answered twice, or after the flow ended
+                    // Answered: the screen has done its job and closes itself, so an abandon from here on (system dialog
+                    // or its callback lost) must not dismiss it — the UI may already show something else.
+                    if (ReferenceEquals(_prePrompt, prePrompt)) _prePrompt = null;
                     if (proceed) RequestSystem(generation);
                     else Finish(generation);
                 });
@@ -121,8 +125,9 @@ namespace Ballverse.Services
         }
 
         /// <summary>
-        /// Ends a running flow now: waiters continue, the pre-prompt is dismissed, later answers are ignored, and ATT is not
-        /// asked again this session. No-op when no flow is running.
+        /// Ends a running flow now: waiters continue, a pre-prompt that is still waiting for its answer is dismissed (one that
+        /// already answered is left alone), later answers are ignored, and ATT is not asked again this session. No-op when no
+        /// flow is running.
         /// </summary>
         public void Abandon(string reason)
         {
