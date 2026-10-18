@@ -37,7 +37,7 @@
 | `share_tap` | Кнопка «Сохранить» / «Поделиться» / площадка | `target` |
 | `ad_rewarded_offer` / `_show` / `_reward` / `_fail` / `_decline` | Rewarded-шлюз | `placement=export`, `error_code`, `wait_ms` |
 | `ad_interstitial_show` / `_skip` | Interstitial | `trigger` (retry / generate / back), `reason` для пропуска |
-| `paywall_view` | Показ витрины или листа режима | `source`, `variant` |
+| `paywall_view` | Показ витрины или листа режима | `source` (в т.ч. `watermark_export_sheet`, `watermark_done_screen`), `variant` |
 | `purchase_start` / `purchase_success` / `purchase_fail` / `purchase_pending` | Покупка | `product_id`, `source`, `error_code` |
 | `restore_purchases` | Восстановление | `result`, `restored_count` |
 | `quest_step` | Шаг квеста первого ролика | `step` |
@@ -71,7 +71,7 @@
 | `remote_presets` | `[]` | Новые пресеты режимов (JSON) |
 | `remote_melodies` | `[]` | Новые мелодии (JSON нот) |
 | `text_templates` | список | Шаблоны текста по языкам |
-| `watermark_default_on` | `true` | §3.10, вопрос В1 |
+| `watermark_enabled` | `true` | Аварийный выключатель водяного знака для всех (§3.10, Р13) |
 | `rate_prompt_after_exports` | `2` | Запрос оценки после N-го успешного экспорта |
 
 ## 9.4. Ключевые воронки
@@ -93,7 +93,8 @@
 | Успешность экспорта | ≥ 99% |
 | Пользователи без сбоев | ≥ 99,5% |
 | Средняя оценка в сторах | ≥ 4,5 |
-| Доля роликов с водяным знаком (если В1 принят) | ≥ 50% — индикатор органического охвата |
+| Доля роликов с водяным знаком | ≥ 85% — индикатор органического охвата (Р13) |
+| Доля покупок Ultimate среди всех покупок | ≥ 25% — индикатор того, что водяной знак мотивирует, а не отталкивает |
 
 ## 9.6. Первые A/B-тесты (после запуска)
 
