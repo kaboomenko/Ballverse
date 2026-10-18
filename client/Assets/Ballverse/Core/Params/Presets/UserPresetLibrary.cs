@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Newtonsoft.Json.Linq;
 
 namespace Ballverse.Core.Params.Presets
@@ -15,6 +16,19 @@ namespace Ballverse.Core.Params.Presets
         public const int SchemaVersion = 1;
 
         readonly List<Preset> _presets = new List<Preset>();
+
+        /// <summary>
+        /// <c>schemaVersion</c> of the JSON this library was loaded from (<see cref="SchemaVersion"/> for a new library
+        /// or when the file had none or an invalid one; <see cref="int.MaxValue"/> for a version too large for an int).
+        /// </summary>
+        public int LoadedSchemaVersion { get; private set; } = SchemaVersion;
+
+        /// <summary>
+        /// True when the library was loaded from a file written by a newer build (<see cref="LoadedSchemaVersion"/> &gt;
+        /// <see cref="SchemaVersion"/>). Its presets were read best-effort; saving it with <see cref="ToJson"/> would
+        /// stamp version 1 and drop fields this build does not know, so <see cref="ToJson"/> refuses unless forced.
+        /// </summary>
+        public bool IsFromNewerVersion => LoadedSchemaVersion > SchemaVersion;
 
         /// <summary>All presets in insertion order (read-only view).</summary>
         public IReadOnlyList<Preset> All => _presets.AsReadOnly();
@@ -86,8 +100,18 @@ namespace Ballverse.Core.Params.Presets
             return true;
         }
 
-        public string ToJson(bool indented = true)
+        /// <summary>
+        /// Serializes the library as version <see cref="SchemaVersion"/>. Throws <see cref="InvalidOperationException"/>
+        /// when <see cref="IsFromNewerVersion"/> and <paramref name="allowDowngrade"/> is false, so a save does not
+        /// silently overwrite a newer build's file with a downgraded one (the caller decides, e.g. after asking the user).
+        /// </summary>
+        public string ToJson(bool indented = true, bool allowDowngrade = false)
         {
+            if (IsFromNewerVersion && !allowDowngrade)
+                throw new InvalidOperationException("The preset library was written by a newer build (schemaVersion "
+                    + LoadedSchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + "); saving it as version " + SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + " would drop data. Pass allowDowngrade: true to save anyway.");
             var dto = new LibraryDto { SchemaVersion = SchemaVersion, Presets = new List<PresetDto>() };
             foreach (var p in _presets) dto.Presets.Add(PresetJson.ToDto(p, null));
             return CoreJson.Serialize(dto, indented);
@@ -98,7 +122,8 @@ namespace Ballverse.Core.Params.Presets
         /// their mode are skipped and described in <paramref name="problems"/>. Malformed JSON yields an empty library.
         /// <c>schemaVersion</c> is checked: a missing one is read as version 1; a version newer than
         /// <see cref="SchemaVersion"/> (written by a newer build) or an invalid one is reported, and the presets are
-        /// still read best-effort so the user does not lose them (values are sanitized when applied).
+        /// still read best-effort so the user does not lose them (values are sanitized when applied). The version read
+        /// is exposed as <see cref="LoadedSchemaVersion"/> / <see cref="IsFromNewerVersion"/>.
         /// </summary>
         public static UserPresetLibrary FromJson(string json, out IReadOnlyList<string> problems)
         {
@@ -121,9 +146,14 @@ namespace Ballverse.Core.Params.Presets
                 object raw = (version as JValue)?.Value;
                 if (version.Type != JTokenType.Integer)
                     list.Add("Invalid schemaVersion; reading as version " + SchemaVersion);
-                else if (!(raw is long v) || v < 1 || v > SchemaVersion)
-                    list.Add("Unsupported schemaVersion " + version.ToString(Newtonsoft.Json.Formatting.None) + " (this build reads "
-                        + SchemaVersion + "); presets read best-effort");
+                else
+                {
+                    if (raw is long v) lib.LoadedSchemaVersion = v > int.MaxValue ? int.MaxValue : v < int.MinValue ? int.MinValue : (int)v;
+                    else if (raw is BigInteger big) lib.LoadedSchemaVersion = big.Sign > 0 ? int.MaxValue : int.MinValue;
+                    if (lib.LoadedSchemaVersion < 1 || lib.LoadedSchemaVersion > SchemaVersion)
+                        list.Add("Unsupported schemaVersion " + version.ToString(Newtonsoft.Json.Formatting.None) + " (this build reads "
+                            + SchemaVersion + "); presets read best-effort");
+                }
             }
             for (int i = 0; i < array.Count; i++)
             {

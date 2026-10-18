@@ -75,16 +75,16 @@ namespace Ballverse.Core.Params
         internal override void Validate()
         {
             ValidateCommon();
-            if (Min > Max) throw Error("min " + Min + " is greater than max " + Max);
-            if (Step <= 0) throw Error("step must be > 0, got " + Step);
-            if (Max >= UnlimitedValue) throw Error("max must be below " + UnlimitedValue + " (reserved for 'unlimited')");
+            if (Min > Max) throw Error("min " + I(Min) + " is greater than max " + I(Max));
+            if (Step <= 0) throw Error("step must be > 0, got " + I(Step));
+            if (Max >= UnlimitedValue) throw Error("max must be below " + I(UnlimitedValue) + " (reserved for 'unlimited')");
             if (Default.Kind != ParamValueKind.Int) throw Error("default must be an integer");
             long d = Default.AsInt;
             bool unlimitedDefault = AllowUnlimited && d == UnlimitedValue;
             if (!unlimitedDefault)
             {
-                if (d < Min || d > Max) throw Error("default " + d + " is outside [" + Min + ", " + Max + "]");
-                if ((d - Min) % Step != 0) throw Error("default " + d + " is not on the step grid");
+                if (d < Min || d > Max) throw Error("default " + I(d) + " is outside [" + I(Min) + ", " + I(Max) + "]");
+                if ((d - Min) % Step != 0) throw Error("default " + I(d) + " is not on the step grid");
             }
             if (TierCap != null)
             {
@@ -94,7 +94,7 @@ namespace Ballverse.Core.Params
                     if (!cap.HasValue) continue;
                     if (double.IsNaN(cap.Value) || cap.Value != Math.Floor(cap.Value) || cap.Value < Min)
                         throw Error("tier " + tier + " cap " + cap.Value.ToString(CultureInfo.InvariantCulture)
-                            + " must be an integer >= min " + Min);
+                            + " must be an integer >= min " + I(Min));
                 }
             }
         }
@@ -153,21 +153,21 @@ namespace Ballverse.Core.Params
 
             if (below)
             {
-                issues.Add(new ParamIssue(Id, ParamIssueCode.OutOfRange, original + " is below min " + Min));
+                issues.Add(new ParamIssue(Id, ParamIssueCode.OutOfRange, original + " is below min " + I(Min)));
                 k = 0;
             }
             else if (above)
             {
                 issues.Add(aboveMax
-                    ? new ParamIssue(Id, ParamIssueCode.OutOfRange, original + " is above max " + Max)
-                    : new ParamIssue(Id, ParamIssueCode.TierCapped, original + " is above the tier " + tier + " cap " + effMax));
+                    ? new ParamIssue(Id, ParamIssueCode.OutOfRange, original + " is above max " + I(Max))
+                    : new ParamIssue(Id, ParamIssueCode.TierCapped, original + " is above the tier " + tier + " cap " + I(effMax)));
                 k = kMax;
             }
             else
             {
                 if (k > kMax) k = kMax;
                 issues.Add(new ParamIssue(Id, ParamIssueCode.Snapped,
-                    original + " snapped to " + (Min + k * Step).ToString(CultureInfo.InvariantCulture)));
+                    original + " snapped to " + I(Min + k * Step)));
             }
             return ParamValue.Int(Min + k * Step);
         }
@@ -186,9 +186,9 @@ namespace Ballverse.Core.Params
         /// "unlimited" stays allowed when the common parameter allows it (a mode cannot drop a §2.2 range value such as
         /// targetDuration "Без ограничения" by overriding only the default).
         /// </summary>
-        internal override ParamDef ApplyOverride(ParamDef modeDef)
+        internal override ParamDef ApplyOverride(ParamDef modeDef, VisibleIf visibleIf)
         {
-            var merged = (IntParam)base.ApplyOverride(modeDef);
+            var merged = (IntParam)base.ApplyOverride(modeDef, visibleIf);
             if (merged.Unit == null) merged.Unit = Unit;
             merged.AllowUnlimited = merged.AllowUnlimited || AllowUnlimited;
             return merged;
@@ -198,6 +198,12 @@ namespace Ballverse.Core.Params
         {
             double? cap = TierCap?.For(tier);
             return cap.HasValue && cap.Value < Max ? (long)cap.Value : Max;
+        }
+
+        /// <summary>Culture-invariant integer text for messages (no locale minus sign such as U+2212).</summary>
+        static string I(long v)
+        {
+            return v.ToString(CultureInfo.InvariantCulture);
         }
     }
 }

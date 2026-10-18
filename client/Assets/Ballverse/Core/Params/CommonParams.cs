@@ -174,15 +174,31 @@ namespace Ballverse.Core.Params
         }
 
         /// <summary>
-        /// The common schema for one mode: <see cref="ForcedWinner"/> only exists in the modes of spec §2.5
-        /// (<see cref="SupportsForcedWinner"/>). Merge the mode layer on top of this.
+        /// The common schema for one mode built from the built-in theme and melody lists (<see cref="Schema"/>):
+        /// <see cref="ForcedWinner"/> only exists in the modes of spec §2.5 (<see cref="SupportsForcedWinner"/>).
+        /// Merge the mode layer on top of this. When themes or melodies arrive as data (spec §2.7, §2.10, §9.3
+        /// <c>remote_melodies</c>), use <see cref="ForMode(ModeInfo, ParamSchema)"/> with <see cref="Build"/> instead.
         /// </summary>
         public static ParamSchema ForMode(ModeInfo mode)
         {
+            return ForMode(mode, Schema);
+        }
+
+        /// <summary>
+        /// The common schema for one mode from a given complete common schema, typically
+        /// <c>CommonParams.Build(dataThemes, dataMelodies)</c> so that themes and melodies delivered as data (spec §2.7,
+        /// §2.10) are valid options in every mode and in presets naming them: <see cref="ForcedWinner"/> is removed
+        /// unless <see cref="SupportsForcedWinner"/> (spec §2.5). Returns <paramref name="common"/> itself when nothing
+        /// is removed. Merge the mode layer on top of the result.
+        /// </summary>
+        public static ParamSchema ForMode(ModeInfo mode, ParamSchema common)
+        {
             if (mode == null) throw new ArgumentNullException(nameof(mode));
-            if (SupportsForcedWinner(mode)) return Schema;
+            if (common == null) throw new ArgumentNullException(nameof(common));
+            if (common.IsLayer) throw new ArgumentException("The common schema must be complete, not a layer", nameof(common));
+            if (SupportsForcedWinner(mode) || !common.Contains(ForcedWinner)) return common;
             var b = new ParamSchemaBuilder();
-            foreach (var d in Schema.Params)
+            foreach (var d in common.Params)
                 if (d.Id != ForcedWinner) b.Add(d);
             return b.Build();
         }

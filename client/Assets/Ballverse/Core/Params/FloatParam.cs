@@ -155,9 +155,9 @@ namespace Ballverse.Core.Params
             return ParamValue.Float(SnapCore(Default.AsFloat, EffectiveMax(tier)));
         }
 
-        internal override ParamDef ApplyOverride(ParamDef modeDef)
+        internal override ParamDef ApplyOverride(ParamDef modeDef, VisibleIf visibleIf)
         {
-            var merged = (FloatParam)base.ApplyOverride(modeDef);
+            var merged = (FloatParam)base.ApplyOverride(modeDef, visibleIf);
             if (merged.Unit == null) merged.Unit = Unit;
             return merged;
         }

@@ -27,6 +27,12 @@ namespace Ballverse.Core.Params
         /// <summary>Default value; always a sanitized value of this parameter once the schema is built.</summary>
         public ParamValue Default { get; protected set; }
 
+        // Which attributes were set explicitly (InGroup / AsLive / WithLabelKey), so Merge can tell a mode override
+        // that restates or changes them from one that leaves them at their defaults.
+        bool _groupSet;
+        bool _liveSet;
+        bool _labelKeySet;
+
         protected ParamDef(string id, ParamValue defaultValue)
         {
             Id = id;
@@ -41,6 +47,7 @@ namespace Ballverse.Core.Params
             var c = Clone();
             c.Group = group;
             c.Order = order;
+            c._groupSet = true;
             return c;
         }
 
@@ -49,6 +56,7 @@ namespace Ballverse.Core.Params
         {
             var c = Clone();
             c.Live = live;
+            c._liveSet = true;
             return c;
         }
 
@@ -64,6 +72,7 @@ namespace Ballverse.Core.Params
             if (string.IsNullOrEmpty(labelKey)) throw new ArgumentException("Label key is required", nameof(labelKey));
             var c = Clone();
             c.LabelKey = labelKey;
+            c._labelKeySet = true;
             return c;
         }
 
@@ -92,10 +101,33 @@ namespace Ballverse.Core.Params
         /// <summary>
         /// Copy of this (common) definition taking the overridable attributes (range, step, default, tier caps, options)
         /// from <paramref name="modeDef"/>, which has the same id and type (spec §7.6 "параметры режима поверх общих").
+        /// Group, order and <c>live</c> stay those of the common definition; a mode override that explicitly sets them
+        /// to other values is an error rather than silently ignored. An explicit label key of the override wins
+        /// (e.g. a team label in M08). <c>visibleIf</c>: the override may add a condition when the common parameter has
+        /// none (e.g. M09 shows forcedWinner only in the team variant, spec §2.5); conflicts are checked by
+        /// <see cref="ParamSchema.Merge"/>, which passes the condition to keep in <paramref name="visibleIf"/>.
         /// </summary>
-        internal virtual ParamDef ApplyOverride(ParamDef modeDef)
+        internal virtual ParamDef ApplyOverride(ParamDef modeDef, VisibleIf visibleIf)
         {
-            return modeDef.CopyAttributesFrom(this);
+            if (modeDef._groupSet && (modeDef.Group != Group || modeDef.Order != Order))
+                throw Error("mode override cannot move a common parameter to " + modeDef.Group + "/"
+                    + modeDef.Order.ToString(System.Globalization.CultureInfo.InvariantCulture) + " (group and order come from the common definition)");
+            if (modeDef._liveSet && modeDef.Live != Live)
+                throw Error("mode override cannot make a " + (Live ? "live" : "structural") + " common parameter "
+                    + (Live ? "structural" : "live") + " (spec §2.2 panel rules)");
+            var c = modeDef.Clone();
+            c.Group = Group;
+            c.Order = Order;
+            c.Live = Live;
+            c._groupSet = _groupSet;
+            c._liveSet = _liveSet;
+            if (!modeDef._labelKeySet)
+            {
+                c.LabelKey = LabelKey;
+                c._labelKeySet = _labelKeySet;
+            }
+            c.VisibleIf = visibleIf;
+            return c;
         }
 
         /// <summary>
@@ -118,17 +150,6 @@ namespace Ballverse.Core.Params
         internal ParamDef Clone()
         {
             return (ParamDef)MemberwiseClone();
-        }
-
-        internal ParamDef CopyAttributesFrom(ParamDef source)
-        {
-            var c = Clone();
-            c.Group = source.Group;
-            c.Order = source.Order;
-            c.Live = source.Live;
-            c.VisibleIf = source.VisibleIf;
-            c.LabelKey = source.LabelKey;
-            return c;
         }
 
         internal void ValidateCommon()
