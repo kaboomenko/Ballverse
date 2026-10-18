@@ -140,12 +140,24 @@ namespace Ballverse.Core.RenderGeometry
         public float TiltRadians => Math.Max(5f, Math.Min(60f, TiltDegrees)) * (MathF.PI / 180f);
 
         /// <summary>
-        /// View height of the default Helix camera, metres: <see cref="VisiblePlatforms"/> spacings as projected (heights
-        /// compress by cos(tilt)), so the frame shows 12 platforms whatever <see cref="PlatformSpacing"/> is; 0 when the
-        /// spacing is unknown (zoom-1 arena view).
+        /// Height of <see cref="VisiblePlatforms"/> platform spacings as projected (heights compress by cos(tilt)), metres;
+        /// 0 when the spacing is unknown. The default camera uses <see cref="ViewHeightFor"/>, which caps this.
         /// </summary>
-        public float ViewHeight => PlatformSpacing > 0f && !float.IsInfinity(PlatformSpacing)
+        public float VisiblePlatformsHeight => PlatformSpacing > 0f && !float.IsInfinity(PlatformSpacing)
             ? VisiblePlatforms * PlatformSpacing * MathF.Cos(TiltRadians)
             : 0f;
+
+        /// <summary>
+        /// View height of the default Helix camera on a <paramref name="width"/> × <paramref name="height"/> canvas, metres:
+        /// the zoom-1 view (<see cref="ViewMapping.Fixed"/>, 16 m on 9:16) capped by <see cref="VisiblePlatformsHeight"/>.
+        /// «Видно до 12 платформ» is an upper bound: small spacings zoom in so that no more than 12 are visible, large
+        /// spacings keep the zoom-1 view (fewer platforms, never smaller than the arena scale).
+        /// </summary>
+        public float ViewHeightFor(int width, int height)
+        {
+            float zoomOne = ViewMapping.Fixed(width, height).Height;
+            float twelve = VisiblePlatformsHeight;
+            return twelve > 0f && twelve < zoomOne ? twelve : zoomOne;
+        }
     }
 }

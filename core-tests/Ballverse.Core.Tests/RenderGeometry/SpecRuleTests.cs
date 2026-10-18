@@ -81,6 +81,32 @@ namespace Ballverse.Core.Tests.RenderGeometry
         }
 
         [Theory]
+        [InlineData(28f, 0.8f)]
+        [InlineData(28f, 1.4f)]
+        [InlineData(40f, 1.4f)]
+        [InlineData(15f, -1.4f)]
+        public void HelixDriftedBallStillSitsAt38PercentFromTheTop(float tilt, float ballX)
+        {
+            // M05 ballDrift: the stream X of the ball is R_path · sin α (|X| ≤ 1.5 m); a drifted ball sits higher on its path
+            // ellipse, and the anchor must follow it (QA round 2: 33.9 % at X = 1.4 before the fix).
+            var q = new RenderQuantization(64f, 8f);
+            var shapes = HelixShapes(q);
+            var f = new RenderFrame();
+            for (int k = 0; k < 6; k++) f.AddBody(q.QuantizeBody(10 + k, 1, 0f, -k * 1.2f, 0f, 1f, PaletteSlots.Arena, BodyFlags.Visible));
+            f.AddBody(q.QuantizeBody(1, 0, ballX, -3.0f, 0f, 0.25f, 0, BodyFlags.Visible));
+            f.Sort();
+            var (c, s) = HelixComposer(q, shapes);
+            s.Helix.TiltDegrees = tilt;
+            s.Helix.PlatformSpacing = 1.2f;
+            s.Helix.CameraDistance = 14f;
+            for (int t = 0; t < 300; t++) c.Sync(t, f, null, s);
+            c.Compose(299, f, ReadOnlySpan<RenderEvent>.Empty, s);
+            BallInstance b = c.Balls[0];
+            float fromTop = (c.View.MaxY - b.Y) / c.View.Height;
+            Assert.InRange(fromTop, 0.375f, 0.385f);
+        }
+
+        [Theory]
         [InlineData(1.2f)]
         [InlineData(1.8f)]
         [InlineData(3.0f)]
@@ -94,8 +120,14 @@ namespace Ballverse.Core.Tests.RenderGeometry
             s.Helix.PlatformSpacing = spacing;
             c.Sync(0, f, null, s);
             c.Compose(0, f, ReadOnlySpan<RenderEvent>.Empty, s);
-            float expected = HelixViewSettings.VisiblePlatforms * spacing * MathF.Cos(s.Helix.TiltRadians);
+            // «Видно до 12 платформ» is a cap: small spacings zoom in to 12 spacings, larger ones keep the zoom-1 16 m view
+            // (1.2 m → 12.71 m; the 1.8 m default and 3.0 m → 16 m, never zooming out past the arena).
+            float twelve = HelixViewSettings.VisiblePlatforms * spacing * MathF.Cos(s.Helix.TiltRadians);
+            float expected = Math.Min(16f, twelve);
             Assert.Equal(expected, c.View.Height, 3);
+            Assert.True(c.View.Height <= 16f + 1e-4f);
+            Assert.True(c.View.Height / (spacing * MathF.Cos(s.Helix.TiltRadians)) <= HelixViewSettings.VisiblePlatforms + 1e-3f);
+            if (spacing >= 1.8f) Assert.Equal(16f, c.View.Height, 3);
             // Unknown spacing keeps the arena height.
             s.Helix.PlatformSpacing = 0f;
             c.Compose(0, f, ReadOnlySpan<RenderEvent>.Empty, s);
@@ -467,7 +499,7 @@ namespace Ballverse.Core.Tests.RenderGeometry
             Assert.Equal((byte)ReplayEventType.Spawn, (byte)RenderEventType.Spawn);
             foreach (RenderEventType t in (RenderEventType[])Enum.GetValues(typeof(RenderEventType)))
             {
-                if (t == RenderEventType.Splat)
+                if (t == RenderEventType.Splat || t == RenderEventType.Grow)
                 {
                     Assert.False(RenderEventTypes.TryGetReplayType(t, out _));
                     Assert.Throws<ArgumentException>(() => RenderEventTypes.ToReplayType(t));
@@ -556,6 +588,44 @@ namespace Ballverse.Core.Tests.RenderGeometry
         }
 
         [Fact]
+        public void GrowthPulsesTheBallWithoutTheBirthBubble()
+        {
+            // M02 «пульсация шара при росте; «пузырь» при рождении шара»: Grow drives only the pulse, Spawn adds the bubble.
+            var settings = new VfxSettings { Impact = ImpactFx.Off, Palette = new uint[256] };
+            new LookSettings().ResolvePalette(settings.Palette);
+            var output = new Particle[64];
+            var vfx = new VfxSystem();
+            RenderEvent grow = RenderEvent.Grow(10, 0, 7, 1f, 2f, 1.6f, 3);
+            Assert.Equal(0, vfx.Evaluate(new[] { grow }, 12, settings, null, Q, output, output.Length));
+            Assert.True(VfxSystem.GetPulse(new[] { grow }, 15, 7) > 1.05f);
+            Assert.Equal(1f, VfxSystem.GetPulse(new[] { grow }, 15, 8));
+            RenderEvent birth = RenderEvent.Spawn(10, 0, 7, 1f, 2f, 0.3f, 3);
+            Assert.True(vfx.Evaluate(new[] { birth }, 12, settings, null, Q, output, output.Length) > 0);
+            Assert.True(VfxSystem.GetPulse(new[] { birth }, 15, 7) > 1.05f);
+
+            // The composer draws the grown ball pulsing and no particles.
+            var shapes = Shapes(ShapeDefinition.Circle);
+            var f = Frame(Q.QuantizeBody(7, 0, 1f, 2f, 0f, 1.5f, 0, BodyFlags.Visible));
+            var c = new RenderComposer();
+            c.SetStream(Q, shapes);
+            var s = new ComposeSettings();
+            s.Look.Impact = ImpactFx.Off;
+            c.Sync(15, f, null, s);
+            c.Compose(15, f, new[] { grow }, s);
+            Assert.True(c.Balls[0].RadiusX > 1.55f);
+            Assert.Equal(0, c.Particles.Length);
+
+            // Grow is a persisted kind: it round-trips through clip.bve.
+            var log = new RenderEventLog();
+            log.Add(grow);
+            var ms = new MemoryStream();
+            log.WriteTo(ms);
+            ms.Position = 0;
+            RenderEventLog back = RenderEventLog.ReadFrom(ms);
+            Assert.Equal(grow, back.Events[0]);
+        }
+
+        [Fact]
         public void SpawnPulsesTheNamedBall()
         {
             RenderEvent e = RenderEvent.Create(10, RenderEventType.Spawn, 0, 0f, 0f, 0, 1f);
@@ -584,8 +654,13 @@ namespace Ballverse.Core.Tests.RenderGeometry
         {
             var catalog = new RenderThemeCatalog();
             RenderTheme mono = catalog.GetOrDefault("Mono");
-            Assert.Equal(0f, mono.Saturation);
+            // Mono is black and white through its palette; the grade keeps saturation 1 so user-picked colours survive.
+            Assert.Equal(1f, mono.Saturation);
             Assert.True(mono.HasGrade);
+            foreach (RenderTheme t in RenderThemeCatalog.BuiltIn)
+            {
+                Assert.InRange(t.Saturation, RenderTheme.MinSaturation, RenderTheme.MaxSaturation);
+            }
             RenderTheme sunset = catalog.GetOrDefault("Sunset");
             RenderTheme back = RenderThemeJson.Parse(RenderThemeJson.ToJson(sunset));
             Assert.Equal(sunset.Saturation, back.Saturation);
@@ -594,6 +669,8 @@ namespace Ballverse.Core.Tests.RenderGeometry
             RenderTheme plain = RenderThemeJson.Parse("{\"id\":\"x\",\"palette\":[\"#FF0000\"]}");
             Assert.False(plain.HasGrade);
             Assert.Throws<FormatException>(() => RenderThemeJson.Parse("{\"id\":\"x\",\"palette\":[\"#FF0000\"],\"saturation\":3}"));
+            // A greyscale grade would discard the user's ballColors / background colour: rejected.
+            Assert.Throws<FormatException>(() => RenderThemeJson.Parse("{\"id\":\"x\",\"palette\":[\"#FF0000\"],\"saturation\":0}"));
             Assert.Throws<FormatException>(() => RenderThemeJson.Parse("{\"id\":\"x\",\"palette\":[\"#FF0000\"],\"tint\":\"blue\"}"));
         }
     }

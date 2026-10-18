@@ -77,7 +77,7 @@ namespace Ballverse.Core.RenderGeometry
             Vignette = Check(vignette, 0f, 1f, nameof(vignette));
             HelixBackShade = Check(helixBackShade, 0f, 1f, nameof(helixBackShade));
             FontKey = string.IsNullOrEmpty(fontKey) ? "default" : fontKey;
-            Saturation = Check(saturation, 0f, 2f, nameof(saturation));
+            Saturation = Check(saturation, MinSaturation, MaxSaturation, nameof(saturation));
             Contrast = Check(contrast, 0.5f, 2f, nameof(contrast));
             Tint = tint | 0xFFu;
         }
@@ -118,8 +118,17 @@ namespace Ballverse.Core.RenderGeometry
         public float HelixBackShade { get; }
         /// <summary>Font key for labels and HUD; the renderer maps it to a font asset ("default", "pixel", "rounded").</summary>
         public string FontKey { get; }
-        /// <summary>Colour grade (spec §7.7 «цветокоррекция по теме»): saturation, 0 = grey, 1 = unchanged, up to 2.</summary>
+        /// <summary>
+        /// Colour grade (spec §7.7 «цветокоррекция по теме»): saturation, 1 = unchanged, limited to
+        /// [<see cref="MinSaturation"/>, <see cref="MaxSaturation"/>]. The grade runs on the whole composited frame, including
+        /// colours the user chose explicitly (§2.2 <c>ballColors</c>, <c>background</c> = colour), so it may only nuance them:
+        /// a theme that wants to look desaturated (Mono) does it with its palette, not with the grade.
+        /// </summary>
         public float Saturation { get; }
+        /// <summary>Lowest allowed <see cref="Saturation"/> (user colours keep at least 75 % of their chroma).</summary>
+        public const float MinSaturation = 0.75f;
+        /// <summary>Highest allowed <see cref="Saturation"/>.</summary>
+        public const float MaxSaturation = 1.25f;
         /// <summary>Colour grade: contrast around mid-grey (linear 0.18), 0.5–2, 1 = unchanged.</summary>
         public float Contrast { get; }
         /// <summary>Colour grade: multiplicative tint / white balance (sRGB 0xRRGGBBFF; white = unchanged).</summary>

@@ -212,17 +212,18 @@ namespace Ballverse.Core.RenderGeometry
             _cache.BeginFrame();
 
             bool helix = settings.View == ModeView.Helix;
-            if (helix && settings.Camera == null) _helixCamera.ViewHeight = settings.Helix.ViewHeight;
-            CameraSettings cam = settings.Camera ?? (helix ? _helixCamera : _fixedCamera);
             int w = settings.CanvasWidth, h = settings.CanvasHeight;
-            ViewRect view = _camera.Evaluate(tick, cam, w, h, out float focusY);
+            if (helix && settings.Camera == null) _helixCamera.ViewHeight = settings.Helix.ViewHeightFor(w, h);
+            CameraSettings cam = settings.Camera ?? (helix ? _helixCamera : _fixedCamera);
+            ViewRect view = _camera.Evaluate(tick, cam, w, h, out float focusY, out float focusX);
             float towerAxis = helix ? TowerAxisX(frame) : 0f;
             if (helix && cam.Mode == CameraMode.Follow)
             {
                 // The follow anchor (38 % from the top, M05) applies to the ball as drawn: the projection puts the ball on the
-                // front of its path circle, below the focus height, so shift the view by that drop.
+                // front of its path circle, below the focus height (lower for a centred ball, higher for one drifted sideways,
+                // M05 ballDrift), so shift the view by that drop, evaluated at the smoothed follow target's lateral position.
                 var focus = new HelixProjection(towerAxis, focusY, settings.Helix.TiltRadians, settings.Helix.CameraDistance, settings.Helix.BallPathRadius);
-                focus.ProjectBody(towerAxis, focusY, out _, out float drawnY, out _);
+                focus.ProjectBody(focusX, focusY, out _, out float drawnY, out _);
                 view.CenterY -= focusY - drawnY;
             }
             if (VfxSystem.TryGetShake(events, tick, settings.ReduceMotion, out float shakeX, out float shakeY))

@@ -19,7 +19,7 @@ namespace Ballverse.Core.RenderGeometry
         Eliminate = 2,
         /// <summary>Finale burst at the winner / finish (<c>finaleStyle</c> confetti): confetti and a shockwave.</summary>
         Finish = 3,
-        /// <summary>A ball is born (M02 multiply) or grows (M02 growth variant): bubble pop / growth pulse.</summary>
+        /// <summary>A ball is born (M02 «Размножение»): bubble ring + dots and a birth pulse of the new ball.</summary>
         Spawn = 4,
         /// <summary>Colour blot left on the target body at the contact (M05), fades in 3 s. Render-only.</summary>
         Splat = 16,
@@ -27,6 +27,11 @@ namespace Ballverse.Core.RenderGeometry
         Escape = 17,
         /// <summary>Fireball smash (M05 pierce): fiery burst and a short camera shake.</summary>
         Pierce = 18,
+        /// <summary>
+        /// A ball grew (M02 «Рост»): only the radius pulse of <see cref="RenderEvent.BodyId"/> («пульсация шара при росте»),
+        /// no particles — the bubble belongs to birth. Render-only (its sound is the wall Hit that caused the growth).
+        /// </summary>
+        Grow = 19,
     }
 
     /// <summary>Helpers for <see cref="RenderEventType"/>: validity and the mapping to the replay's simulation event kinds.</summary>
@@ -45,6 +50,7 @@ namespace Ballverse.Core.RenderGeometry
                 case RenderEventType.Splat:
                 case RenderEventType.Escape:
                 case RenderEventType.Pierce:
+                case RenderEventType.Grow:
                     return true;
                 default:
                     return false;
@@ -55,7 +61,8 @@ namespace Ballverse.Core.RenderGeometry
         /// The simulation event kind (<c>.bvr</c> EVNT record, sound and haptics) a render event corresponds to: shared kinds
         /// map to themselves, <see cref="RenderEventType.Escape"/> is the run's <see cref="ReplayEventType.Finish"/>,
         /// <see cref="RenderEventType.Pierce"/> breaks platforms (<see cref="ReplayEventType.Break"/>). Returns false for
-        /// <see cref="RenderEventType.Splat"/>, which is purely visual (its contact is the accompanying Hit).
+        /// <see cref="RenderEventType.Splat"/> and <see cref="RenderEventType.Grow"/>, which are purely visual (their sound
+        /// is the accompanying / causing Hit).
         /// </summary>
         public static bool TryGetReplayType(RenderEventType type, out ReplayEventType replayType)
         {
@@ -104,9 +111,9 @@ namespace Ballverse.Core.RenderGeometry
         public byte ColorIndex;
         /// <summary>Strength in [0, 1] (Hit: impulse normalized by the mode; scales particle count, speed, squash).</summary>
         public float Intensity;
-        /// <summary>Characteristic size, metres (Hit / Spawn: ball radius; Splat: blot radius; Finish / Escape: burst radius).</summary>
+        /// <summary>Characteristic size, metres (Hit / Spawn / Grow: ball radius; Splat: blot radius; Finish / Escape: burst radius).</summary>
         public float Size;
-        /// <summary>The ball the effect attaches to (Hit squash, Spawn), or −1.</summary>
+        /// <summary>The ball the effect attaches to (Hit squash, Spawn / Grow pulse), or −1.</summary>
         public int BodyId;
         /// <summary>The body that was hit / receives a splat (Hit flash, Splat), or −1.</summary>
         public int TargetBodyId;
@@ -153,6 +160,27 @@ namespace Ballverse.Core.RenderGeometry
             e.TargetBodyId = targetId;
             e.Feature = feature;
             e.LocalAngle = localAngle;
+            return e;
+        }
+
+        /// <summary>
+        /// Ball <paramref name="ballId"/> at (x, y) grew to <paramref name="newRadius"/> (M02 «Рост»): radius pulse only,
+        /// no particles.
+        /// </summary>
+        public static RenderEvent Grow(int tick, int id, int ballId, float x, float y, float newRadius, byte colorIndex)
+        {
+            RenderEvent e = Create(tick, RenderEventType.Grow, id, x, y, colorIndex, 1f);
+            e.BodyId = ballId;
+            e.Size = newRadius;
+            return e;
+        }
+
+        /// <summary>A ball <paramref name="ballId"/> of radius <paramref name="radius"/> is born at (x, y) (M02 «Размножение»).</summary>
+        public static RenderEvent Spawn(int tick, int id, int ballId, float x, float y, float radius, byte colorIndex)
+        {
+            RenderEvent e = Create(tick, RenderEventType.Spawn, id, x, y, colorIndex, 1f);
+            e.BodyId = ballId;
+            e.Size = radius;
             return e;
         }
 

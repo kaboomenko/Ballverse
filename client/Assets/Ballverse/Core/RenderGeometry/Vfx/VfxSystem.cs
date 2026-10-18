@@ -626,12 +626,12 @@ namespace Ballverse.Core.RenderGeometry
             return amount > 0f;
         }
 
-        /// <summary>Duration of the growth / birth pulse of a ball (Spawn event with its BodyId), seconds.</summary>
+        /// <summary>Duration of the growth / birth pulse of a ball (Grow or Spawn event with its BodyId), seconds.</summary>
         public const float PulseSeconds = 0.3f;
 
         /// <summary>
-        /// Radius pulse of ball <paramref name="bodyId"/> at <paramref name="tick"/> from recent Spawn events naming it
-        /// (M02 «пульсация шара при росте»; a newborn ball pops in the same way): a scale factor ≥ 1 (up to 1.22) that
+        /// Radius pulse of ball <paramref name="bodyId"/> at <paramref name="tick"/> from recent Grow events naming it
+        /// (M02 «пульсация шара при росте», no particles) and Spawn events (a newborn ball pops in the same way, with its bubble): a scale factor ≥ 1 (up to 1.22) that
         /// overshoots and settles within <see cref="PulseSeconds"/>. 1 when none. Pure function of the events.
         /// </summary>
         public static float GetPulse(ReadOnlySpan<RenderEvent> events, int tick, int bodyId)
@@ -643,7 +643,7 @@ namespace Ballverse.Core.RenderGeometry
                 RenderEvent e = events[i];
                 if (e.Tick > tick) continue;
                 if (tick - e.Tick > window) break;
-                if (e.Type != RenderEventType.Spawn || e.BodyId != bodyId) continue;
+                if ((e.Type != RenderEventType.Grow && e.Type != RenderEventType.Spawn) || e.BodyId != bodyId) continue;
                 float u = (tick - e.Tick) * Dt / PulseSeconds;
                 if (u >= 1f) continue;
                 float a = 0.22f * MathF.Sin(MathF.PI * u) * (1f - u) * (0.5f + 0.5f * Clamp01(e.Intensity > 0f ? e.Intensity : 1f));

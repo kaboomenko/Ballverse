@@ -83,12 +83,13 @@ namespace Ballverse.Core.RenderGeometry
                     gold: "#F2C14E", top: "#FFF7F0", bottom: "#F1E6FF", bg: BackgroundStyle.Gradient, grid: "#4A3F5514", stars: "#FFFFFF",
                     finish: BallFinish.None, bloom: 0f, threshold: 1f, ballEm: 1f, shapeEm: 1f, trailEm: 1f,
                     pixelGrid: 0, vignette: 0f, backShade: 0.75f, font: "rounded", saturation: 0.92f, contrast: 0.95f, tint: "#FFF8F2"),
-                // Black and white, high contrast, minimal.
+                // Black and white, high contrast, minimal. The palette itself is grey; the grade keeps saturation 1 so colours the
+                // user picks (ballColors, background colour) survive (the grade runs on the whole frame).
                 Make("Mono", new[] { "#FFFFFF", "#BDBDBD", "#8C8C8C", "#E0E0E0", "#A6A6A6", "#F5F5F5", "#737373", "#CFCFCF" },
                     arena: "#FFFFFF", arenaAlt: "#9E9E9E", danger: "#FFFFFF", accent: "#FFFFFF", muted: "#3D3D3D", text: "#FFFFFF",
                     gold: "#FFFFFF", top: "#000000", bottom: "#000000", bg: BackgroundStyle.Solid, grid: "#FFFFFF10", stars: "#FFFFFF",
                     finish: BallFinish.None, bloom: 0.25f, threshold: 1f, ballEm: 1f, shapeEm: 1f, trailEm: 1f,
-                    pixelGrid: 0, vignette: 0f, backShade: 0.5f, font: "default", saturation: 0f, contrast: 1.12f),
+                    pixelGrid: 0, vignette: 0f, backShade: 0.5f, font: "default", contrast: 1.12f),
                 // Bright candy gradients, gloss.
                 Make("Candy", new[] { "#FF4F9A", "#FFB000", "#7CE85B", "#3DD6FF", "#B66BFF", "#FF6B6B", "#FFE66D", "#4ECDC4" },
                     arena: "#FFFFFF", arenaAlt: "#FFD1E8", danger: "#E8173C", accent: "#FFE66D", muted: "#F3B8D4", text: "#5B1F48",

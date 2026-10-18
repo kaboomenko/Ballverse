@@ -192,14 +192,25 @@ namespace Ballverse.Core.RenderGeometry
         /// </summary>
         public ViewRect Evaluate(int tick, CameraSettings settings, int width, int height, out float targetY)
         {
+            return Evaluate(tick, settings, width, height, out targetY, out _);
+        }
+
+        /// <summary>
+        /// <see cref="Evaluate(int, CameraSettings, int, int, out float)"/> that also returns the smoothed follow target's
+        /// x (<paramref name="targetX"/>; Follow only, else 0). The Helix view uses it to anchor the ball as drawn at its
+        /// lateral drift. Both values come from the recorded samples only, so they are deterministic per tick.
+        /// </summary>
+        public ViewRect Evaluate(int tick, CameraSettings settings, int width, int height, out float targetY, out float targetX)
+        {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
             ViewRect baseView = ViewMapping.Fixed(width, height);
             if (settings.ViewHeight > 0f) baseView = ViewMapping.WithHeight(width, height, 0f, 0f, settings.ViewHeight);
             targetY = 0f;
+            targetX = 0f;
             switch (settings.Mode)
             {
                 case CameraMode.Follow:
-                    return EvaluateFollow(tick, settings, baseView, out targetY);
+                    return EvaluateFollow(tick, settings, baseView, out targetY, out targetX);
                 case CameraMode.AutoZoom:
                     return EvaluateAutoZoom(tick, settings, baseView, width, height);
                 default:
@@ -220,7 +231,7 @@ namespace Ballverse.Core.RenderGeometry
             return Math.Min(MaxFilterTicks, (int)Math.Ceiling(6.0 * smoothingSeconds * SimConstants.TickRate - 1e-4));
         }
 
-        ViewRect EvaluateFollow(int tick, CameraSettings s, ViewRect baseView, out float targetY)
+        ViewRect EvaluateFollow(int tick, CameraSettings s, ViewRect baseView, out float targetY, out float targetX)
         {
             float a = Alpha(s.SmoothingSeconds);
             int minWindow = s.FollowOnlyDown ? MinWindowTicks : 0;
@@ -253,6 +264,7 @@ namespace Ballverse.Core.RenderGeometry
                 }
             }
             targetY = haveOut ? outY : 0f;
+            targetX = init ? fx : 0f;
             float cx = s.FollowVerticalOnly || !init ? baseView.CenterX : fx;
             float anchor = Clamp(s.FollowAnchorFromTop, 0f, 1f);
             float cy = targetY + (anchor - 0.5f) * baseView.Height;
