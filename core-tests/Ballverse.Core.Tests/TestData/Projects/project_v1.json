@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "6f1c2a9e-3b7d-4c11-9a0e-5d2f8b7c4e10",
+  "name": "Ring Escape 12",
+  "createdAt": "2026-10-18T12:00:00Z",
+  "updatedAt": "2026-10-18T12:05:00Z",
+  "clip": { "replay": "clip.bvr", "modeId": "ring_escape", "trimInTick": 0, "trimOutTick": 1800,
+            "speed": 1.0, "finaleSlowMo": { "seconds": 2, "factor": 0.5 }, "afterEnd": "freeze",
+            "soundPack": "Melody", "melody": "ode_to_joy" },
+  "userVideo": { "file": "media/user.mp4", "trimInUs": 0, "trimOutUs": 30000000, "offsetUs": 0,
+                 "rotation": 0, "mirror": false, "fill": "cover", "pan": [0, 0], "zoom": 1.0,
+                 "volume": 1.0, "afterEnd": "freeze" },
+  "layout": { "type": "L1", "swap": false, "ratio": 0.55, "divider": { "px": 6, "color": "#FFFFFF33", "glass": true },
+              "cornerRadius": 24, "padding": 0, "pip": null },
+  "texts": [ { "id": "t1", "template": "which_wins", "text": "Какой шар победит?", "font": "manrope_black",
+               "size": 72, "fill": "#FFFFFF", "stroke": { "px": 4, "color": "#000000" }, "plate": "glass",
+               "pos": [0.5, 0.12], "inUs": 0, "outUs": 4000000, "anim": "pop" } ],
+  "audio": { "sim": 0.9, "user": 1.0, "music": null, "normalize": true },
+  "output": { "aspect": "9:16", "durationMode": "auto", "watermark": true },
+  "exports": [ { "at": "2026-10-18T12:06:00Z", "res": 1080, "fps": 60, "ms": 28400, "file": null } ]
+}
