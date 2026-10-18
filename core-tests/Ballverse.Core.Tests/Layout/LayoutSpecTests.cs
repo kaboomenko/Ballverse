@@ -21,6 +21,18 @@ namespace Ballverse.Core.Tests.Layout
         }
 
         [Fact]
+        public void ConstructorDefaultsMatchDefaultSpec()
+        {
+            var s = new LayoutSpec(LayoutType.L1);
+            Assert.Equal(LayoutSpec.Default.DividerPx, s.DividerPx);
+            Assert.Equal(LayoutSpec.Default.CornerRadiusPx, s.CornerRadiusPx);
+            Assert.Equal(LayoutSpec.Default.PaddingPx, s.PaddingPx);
+            Assert.Equal(LayoutSpec.Default.Ratio, s.Ratio);
+            Assert.Equal(6, s.DividerPx);
+            Assert.Equal(24, s.CornerRadiusPx);
+        }
+
+        [Fact]
         public void ValuesAreClampedToRanges()
         {
             var s = new LayoutSpec(LayoutType.L2, true, 0.9f, 99, -3, 100);
@@ -40,19 +52,20 @@ namespace Ballverse.Core.Tests.Layout
             Assert.Throws<ArgumentOutOfRangeException>(() => new LayoutSpec((LayoutType)0));
             Assert.Throws<ArgumentOutOfRangeException>(() => new LayoutSpec((LayoutType)6));
             Assert.Throws<ArgumentException>(() => new LayoutSpec(LayoutType.L1, false, float.NaN));
-            Assert.Throws<ArgumentException>(() => new PipSpec(PipShape.Circle, float.PositiveInfinity, FloatVec2.Zero));
-            Assert.Throws<ArgumentException>(() => new PipSpec(PipShape.Circle, 0.3f, new FloatVec2(float.NaN, 0f)));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new PipSpec((PipShape)7, 0.3f, FloatVec2.Zero));
+            Assert.Throws<ArgumentException>(() => new PipSpec(SlotShape.Circle, float.PositiveInfinity, FloatVec2.Zero));
+            Assert.Throws<ArgumentException>(() => new PipSpec(SlotShape.Circle, 0.3f, new FloatVec2(float.NaN, 0f)));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new PipSpec((SlotShape)7, 0.3f, FloatVec2.Zero));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new PipSpec(SlotShape.Rect, 0.3f, FloatVec2.Zero));
         }
 
         [Fact]
         public void PipSpecClamps()
         {
-            var p = new PipSpec(PipShape.Circle, 0.9f, new FloatVec2(-1f, 2f));
+            var p = new PipSpec(SlotShape.Circle, 0.9f, new FloatVec2(-1f, 2f));
             Assert.Equal(0.60f, p.SizeFraction);
             Assert.Equal(new FloatVec2(0f, 1f), p.Center);
             Assert.Equal(0.20f, p.WithSizeFraction(0.01f).SizeFraction);
-            Assert.Equal(PipShape.RoundedRect, p.WithShape(PipShape.RoundedRect).Shape);
+            Assert.Equal(SlotShape.RoundedRect, p.WithShape(SlotShape.RoundedRect).Shape);
         }
 
         [Theory]
@@ -71,17 +84,26 @@ namespace Ballverse.Core.Tests.Layout
 
         [Theory]
         [InlineData(0.50f, 0.5f)]
-        [InlineData(0.515f, 0.5f)]
-        [InlineData(0.52f, 0.5f)]
-        [InlineData(0.48f, 0.5f)]
+        [InlineData(0.504f, 0.5f)]
+        [InlineData(0.496f, 0.5f)]
+        [InlineData(0.51f, 0.51f)]
+        [InlineData(0.49f, 0.49f)]
+        [InlineData(0.52f, 0.52f)]
+        [InlineData(0.48f, 0.48f)]
         [InlineData(0.53f, 0.53f)]
-        [InlineData(0.47f, 0.47f)]
-        [InlineData(0.34f, 1f / 3f)]
-        [InlineData(0.3134f, 1f / 3f)]
+        [InlineData(0.33f, 1f / 3f)]
+        [InlineData(0.3283f, 1f / 3f)]
+        [InlineData(0.334f, 1f / 3f)]
+        [InlineData(0.32f, 0.32f)]
+        [InlineData(0.34f, 0.34f)]
+        [InlineData(0.35f, 0.35f)]
         [InlineData(0.31f, 0.31f)]
         [InlineData(0.30f, 0.30f)]
-        [InlineData(0.65f, 2f / 3f)]
-        [InlineData(0.6866f, 2f / 3f)]
+        [InlineData(0.65f, 0.65f)]
+        [InlineData(0.66f, 0.66f)]
+        [InlineData(0.67f, 2f / 3f)]
+        [InlineData(0.6666f, 2f / 3f)]
+        [InlineData(0.68f, 0.68f)]
         [InlineData(0.69f, 0.69f)]
         [InlineData(0.70f, 0.70f)]
         [InlineData(0.95f, 0.70f)]
@@ -90,7 +112,26 @@ namespace Ballverse.Core.Tests.Layout
         [InlineData(0.4451f, 0.45f)]
         public void RatioMagnetsSnap(float raw, float expected)
         {
-            Assert.Equal(expected, RatioMagnets.Snap(raw), 5);
+            Assert.Equal(expected, RatioMagnets.Snap(raw), 6);
+        }
+
+        [Fact]
+        public void EveryOnePercentStepIsReachable()
+        {
+            // Spec §3.3: 30-70% in 1% steps; 33/50/67 are represented by the exact magnets 1/3, 1/2, 2/3.
+            var reached = new bool[101];
+            for (int i = 0; i <= 100000; i++)
+            {
+                float s = RatioMagnets.Snap(i / 100000f);
+                reached[(int)Math.Round(s * 100.0)] = true;
+            }
+            for (int p = 30; p <= 70; p++) Assert.True(reached[p], "unreachable percent " + p);
+            for (int p = 30; p <= 70; p++)
+            {
+                float s = RatioMagnets.Snap(p / 100f);
+                float expected = p == 33 ? 1f / 3f : p == 50 ? 0.5f : p == 67 ? 2f / 3f : p / 100f;
+                Assert.Equal(expected, s);
+            }
         }
 
         [Fact]
@@ -98,10 +139,13 @@ namespace Ballverse.Core.Tests.Layout
         {
             Assert.Equal(0.55f, RatioMagnets.Snap(0.55f, 0.02f), 5);
             Assert.Equal(0.5f, RatioMagnets.Snap(0.55f, 0.05f), 5);
+            Assert.Equal(0.5f, RatioMagnets.Snap(0.52f, 0.02f), 5); // a stickier drag window is the caller's choice
             Assert.Equal(0.51f, RatioMagnets.Snap(0.51f, 0f), 5);
             Assert.Equal(0.5f, RatioMagnets.Snap(0.5f, 0f), 5);
+            Assert.Equal(1f / 3f, RatioMagnets.Snap(0.33f, 0f), 6);
             Assert.Throws<ArgumentOutOfRangeException>(() => RatioMagnets.Snap(0.5f, -0.1f));
             Assert.Throws<ArgumentException>(() => RatioMagnets.Snap(float.NaN));
+            Assert.Throws<ArgumentException>(() => RatioMagnets.Snap(0.5f, float.NaN));
             Assert.True(RatioMagnets.IsMagnet(RatioMagnets.Snap(0.33f)));
             Assert.False(RatioMagnets.IsMagnet(0.55f));
             Assert.Equal(3, RatioMagnets.Magnets.Length);

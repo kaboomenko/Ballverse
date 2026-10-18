@@ -1,18 +1,24 @@
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
+using System.Collections.ObjectModel;
 
 namespace Ballverse.Core.Layout
 {
     /// <summary>
-    /// Platform UI zones (spec §3.3 "Подсказки площадок"; Remote Config key <c>platform_safe_zones</c>, spec §9.3):
-    /// platform id -&gt; normalized rectangles (0..1 of a 9:16 frame) covered by that platform's interface. Immutable.
+    /// Platform UI zones (spec §3.3 "Подсказки площадок"): platform id -&gt; normalized rectangles (0..1 of a 9:16 frame)
+    /// covered by that platform's interface. Immutable geometry model only.
     /// <para>
-    /// The built-in <see cref="Default"/> values are rough, deliberately conservative approximations of the TikTok, Reels and
-    /// Shorts overlays (top tabs, right action rail, bottom caption, bottom bar) and are meant to be replaced through
-    /// Remote Config (<see cref="FromJson"/>, <see cref="WithOverrides"/>) when the platforms change their UI.
+    /// Ownership: the Remote Config key <c>platform_safe_zones</c> (spec §9.3), its JSON shape (platform map at the root,
+    /// <c>{"tiktok":[{"x":0,"y":0,"w":1,"h":0.08}, ...]}</c>), its validation and its offline defaults belong to the Config
+    /// module. The app builds this model from Config's parsed zones with the constructor (one entry per platform, plain
+    /// normalized rects); this module has no parser of its own.
     /// </para>
-    /// Platform ids are lower-cased; all enumeration is in ordinal id order so results never depend on input order.
+    /// <para>
+    /// <see cref="Default"/> mirrors Config's offline defaults value for value (rough approximations of the TikTok, Reels and
+    /// Shorts overlays: top tabs, right action rail, bottom caption + navigation). It exists so pure geometry callers and
+    /// tests have masks without a Config instance; Remote Config values replace it at runtime.
+    /// </para>
+    /// Platform ids are trimmed and lower-cased; all enumeration is in ordinal id order so results never depend on input order.
     /// </summary>
     public sealed class PlatformUiMasks
     {
@@ -20,18 +26,20 @@ namespace Ballverse.Core.Layout
         public const string Reels = "reels";
         public const string Shorts = "shorts";
 
-        /// <summary>JSON schema version written by <see cref="ToJson"/>.</summary>
-        public const int JsonVersion = 1;
+        static readonly ReadOnlyCollection<FloatRect> s_none = Array.AsReadOnly(new FloatRect[0]);
 
-        /// <summary>Built-in approximations (see class remarks).</summary>
+        /// <summary>Built-in approximations, identical to the Config module's offline defaults (see class remarks).</summary>
         public static readonly PlatformUiMasks Default = CreateDefault();
 
         readonly string[] _ids;
         readonly FloatRect[][] _rects;
+        readonly ReadOnlyCollection<string> _idsView;
+        readonly ReadOnlyCollection<FloatRect>[] _rectViews;
 
         /// <summary>
-        /// Builds the model. Rectangles are clipped to [0,1]; empty or non-finite ones are dropped. Ids are trimmed and
-        /// lower-cased; blank ids and duplicates (after that normalization) throw.
+        /// Builds the model (input copied). Rectangles are clipped to [0,1] (in-range ones are kept unchanged); empty or
+        /// non-finite ones are dropped. Ids are trimmed and
+        /// lower-cased; blank ids and duplicates (after that normalization) throw <see cref="ArgumentException"/>.
         /// </summary>
         public PlatformUiMasks(IEnumerable<KeyValuePair<string, IEnumerable<FloatRect>>> platforms)
         {
@@ -45,28 +53,31 @@ namespace Ballverse.Core.Layout
             }
             _ids = new string[map.Count];
             _rects = new FloatRect[map.Count][];
+            _rectViews = new ReadOnlyCollection<FloatRect>[map.Count];
             int i = 0;
             foreach (var kv in map)
             {
                 _ids[i] = kv.Key;
                 _rects[i] = kv.Value;
+                _rectViews[i] = Array.AsReadOnly(kv.Value);
                 i++;
             }
+            _idsView = Array.AsReadOnly(_ids);
         }
 
-        /// <summary>Platform ids in ordinal order.</summary>
-        public IReadOnlyList<string> PlatformIds => _ids;
+        /// <summary>Platform ids in ordinal order (read-only view).</summary>
+        public IReadOnlyList<string> PlatformIds => _idsView;
 
         public bool Contains(string platformId)
         {
             return IndexOf(platformId) >= 0;
         }
 
-        /// <summary>Normalized mask rectangles of a platform; empty for an unknown id.</summary>
+        /// <summary>Normalized mask rectangles of a platform (read-only view); empty for an unknown id.</summary>
         public IReadOnlyList<FloatRect> Get(string platformId)
         {
             int i = IndexOf(platformId);
-            return i >= 0 ? _rects[i] : new FloatRect[0];
+            return i >= 0 ? _rectViews[i] : s_none;
         }
 
         /// <summary>
@@ -89,75 +100,43 @@ namespace Ballverse.Core.Layout
         }
 
         /// <summary>
-        /// Union query: masks of the given platforms (all platforms when null; unknown ids ignored) in canvas pixels,
-        /// each edge rounded half-up (<see cref="FloatRect.ToPixels"/>). Rect order follows ordinal platform id order.
+        /// Union query in normalized coordinates: rectangles of the given platforms (all platforms when null; unknown and
+        /// blank ids ignored), in ordinal platform id order. This is the canvas-independent form <see cref="FrameRequest"/> takes.
+        /// </summary>
+        public IReadOnlyList<FloatRect> Union(IEnumerable<string> platformIds = null)
+        {
+            bool[] wanted = Wanted(platformIds);
+            var rects = new List<FloatRect>();
+            for (int i = 0; i < _ids.Length; i++)
+            {
+                if (wanted[i]) rects.AddRange(_rects[i]);
+            }
+            return rects.AsReadOnly();
+        }
+
+        /// <summary>
+        /// Union query in canvas pixels: <see cref="Union"/> with each edge rounded half-up (<see cref="FloatRect.ToPixels"/>).
         /// </summary>
         public RectUnion ToPixels(int canvasWidth, int canvasHeight, IEnumerable<string> platformIds = null)
         {
             PixelMath.RequireCanvas(canvasWidth, canvasHeight);
+            return RectUnion.FromNormalized(Union(platformIds), canvasWidth, canvasHeight);
+        }
+
+        bool[] Wanted(IEnumerable<string> platformIds)
+        {
             var wanted = new bool[_ids.Length];
             if (platformIds == null)
             {
                 for (int i = 0; i < wanted.Length; i++) wanted[i] = true;
+                return wanted;
             }
-            else
+            foreach (string id in platformIds)
             {
-                foreach (string id in platformIds)
-                {
-                    if (string.IsNullOrWhiteSpace(id)) continue;
-                    int i = IndexOf(id);
-                    if (i >= 0) wanted[i] = true;
-                }
+                int i = IndexOf(id);
+                if (i >= 0) wanted[i] = true;
             }
-            var rects = new List<IntRect>();
-            for (int i = 0; i < _ids.Length; i++)
-            {
-                if (!wanted[i]) continue;
-                foreach (FloatRect r in _rects[i]) rects.Add(r.ToPixels(canvasWidth, canvasHeight));
-            }
-            return new RectUnion(rects);
-        }
-
-        /// <summary>
-        /// Parses the Remote Config payload (CoreJson): <c>{"version":1,"platforms":{"tiktok":[{"x":0,"y":0,"w":1,"h":0.065}]}}</c>.
-        /// Invalid rectangles are dropped (see constructor); malformed JSON throws <see cref="JsonException"/>.
-        /// </summary>
-        public static PlatformUiMasks FromJson(string json)
-        {
-            if (json == null) throw new ArgumentNullException(nameof(json));
-            var dto = CoreJson.Deserialize<PlatformUiMasksJson>(json);
-            if (dto == null || dto.Platforms == null) throw new JsonSerializationException("platform masks: missing 'platforms'");
-            var list = new List<KeyValuePair<string, IEnumerable<FloatRect>>>();
-            foreach (var kv in dto.Platforms)
-            {
-                var rects = new List<FloatRect>();
-                if (kv.Value != null)
-                {
-                    foreach (MaskRectJson r in kv.Value)
-                    {
-                        if (r != null) rects.Add(new FloatRect(r.X, r.Y, r.W, r.H));
-                    }
-                }
-                list.Add(new KeyValuePair<string, IEnumerable<FloatRect>>(kv.Key, rects));
-            }
-            return new PlatformUiMasks(list);
-        }
-
-        /// <summary>Serializes with CoreJson; platform keys in ordinal order (stable bytes).</summary>
-        public string ToJson(bool indented = true)
-        {
-            var dto = new PlatformUiMasksJson
-            {
-                Version = JsonVersion,
-                Platforms = new SortedDictionary<string, List<MaskRectJson>>(StringComparer.Ordinal),
-            };
-            for (int i = 0; i < _ids.Length; i++)
-            {
-                var list = new List<MaskRectJson>();
-                foreach (FloatRect r in _rects[i]) list.Add(new MaskRectJson { X = r.X, Y = r.Y, W = r.Width, H = r.Height });
-                dto.Platforms.Add(_ids[i], list);
-            }
-            return CoreJson.Serialize(dto, indented);
+            return wanted;
         }
 
         int IndexOf(string platformId)
@@ -184,7 +163,9 @@ namespace Ballverse.Core.Layout
                 float t = PixelMath.ClampF(r.Y, 0f, 1f);
                 float rr = PixelMath.ClampF(r.X + r.Width, 0f, 1f);
                 float b = PixelMath.ClampF(r.Y + r.Height, 0f, 1f);
-                if (rr > l && b > t) list.Add(FloatRect.FromEdges(l, t, rr, b));
+                if (!(rr > l && b > t)) continue;
+                bool inside = l == r.X && t == r.Y && rr == r.X + r.Width && b == r.Y + r.Height;
+                list.Add(inside ? r : FloatRect.FromEdges(l, t, rr, b)); // keep in-range rects bit-exact
             }
             return list.ToArray();
         }
@@ -196,48 +177,32 @@ namespace Ballverse.Core.Layout
 
         static PlatformUiMasks CreateDefault()
         {
-            // Normalized (x, y, w, h) approximations at 9:16. Conservative: full-width top tabs and bottom bar.
-            var tiktok = new[]
-            {
-                new FloatRect(0f, 0f, 1f, 0.065f),      // top tabs (Following / For You, LIVE, search)
-                new FloatRect(0.86f, 0.33f, 0.14f, 0.55f), // right rail (avatar, like, comment, save, share, disc)
-                new FloatRect(0f, 0.77f, 0.86f, 0.15f),  // caption, username, sound
-                new FloatRect(0f, 0.92f, 1f, 0.08f),     // bottom navigation
-            };
+            // Normalized (x, y, w, h) at 9:16, the same numbers as Config's RemoteConfigDefaults.PlatformSafeZones:
+            // top tab bar, right action column, bottom caption + navigation (full width).
             var reels = new[]
             {
-                new FloatRect(0f, 0f, 1f, 0.06f),
-                new FloatRect(0.87f, 0.48f, 0.13f, 0.42f),
-                new FloatRect(0f, 0.80f, 0.87f, 0.12f),
-                new FloatRect(0f, 0.92f, 1f, 0.08f),
+                new FloatRect(0f, 0f, 1f, 0.07f),
+                new FloatRect(0.85f, 0.45f, 0.15f, 0.375f),
+                new FloatRect(0f, 0.825f, 1f, 0.175f),
             };
             var shorts = new[]
             {
-                new FloatRect(0f, 0f, 1f, 0.06f),
-                new FloatRect(0.85f, 0.42f, 0.15f, 0.46f),
-                new FloatRect(0f, 0.79f, 0.85f, 0.13f),
-                new FloatRect(0f, 0.92f, 1f, 0.08f),
+                new FloatRect(0f, 0f, 1f, 0.07f),
+                new FloatRect(0.85f, 0.425f, 0.15f, 0.375f),
+                new FloatRect(0f, 0.8f, 1f, 0.2f),
+            };
+            var tiktok = new[]
+            {
+                new FloatRect(0f, 0f, 1f, 0.08f),
+                new FloatRect(0.85f, 0.4f, 0.15f, 0.4f),
+                new FloatRect(0f, 0.8f, 1f, 0.2f),
             };
             return new PlatformUiMasks(new[]
             {
-                new KeyValuePair<string, IEnumerable<FloatRect>>(TikTok, tiktok),
                 new KeyValuePair<string, IEnumerable<FloatRect>>(Reels, reels),
                 new KeyValuePair<string, IEnumerable<FloatRect>>(Shorts, shorts),
+                new KeyValuePair<string, IEnumerable<FloatRect>>(TikTok, tiktok),
             });
-        }
-
-        sealed class PlatformUiMasksJson
-        {
-            public int Version { get; set; }
-            public IDictionary<string, List<MaskRectJson>> Platforms { get; set; }
-        }
-
-        sealed class MaskRectJson
-        {
-            public float X { get; set; }
-            public float Y { get; set; }
-            public float W { get; set; }
-            public float H { get; set; }
         }
     }
 }

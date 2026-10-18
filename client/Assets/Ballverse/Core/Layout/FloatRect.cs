@@ -35,14 +35,26 @@ namespace Ballverse.Core.Layout
         /// <summary>
         /// Converts a normalized rectangle to canvas pixels by rounding each edge half-up independently
         /// (spec §3.3 masks), clipped to the canvas. Adjacent normalized rects therefore stay adjacent in pixels.
+        /// Each normalized edge is clamped to [0, 1] before scaling, so huge finite values cannot overflow. NaN throws.
         /// </summary>
         public IntRect ToPixels(int canvasWidth, int canvasHeight)
         {
-            int l = Clamp(PixelMath.RoundHalfUp((double)X * canvasWidth), 0, canvasWidth);
-            int t = Clamp(PixelMath.RoundHalfUp((double)Y * canvasHeight), 0, canvasHeight);
-            int r = Clamp(PixelMath.RoundHalfUp(((double)X + Width) * canvasWidth), 0, canvasWidth);
-            int b = Clamp(PixelMath.RoundHalfUp(((double)Y + Height) * canvasHeight), 0, canvasHeight);
+            int l = Edge(X, canvasWidth);
+            int t = Edge(Y, canvasHeight);
+            int r = Edge((double)X + Width, canvasWidth);
+            int b = Edge((double)Y + Height, canvasHeight);
             return IntRect.FromEdges(l, t, r, b);
+        }
+
+        /// <summary>
+        /// Normalized rect (fractions of the canvas) of a pixel rect, e.g. a text box measured by the Unity renderer at some
+        /// canvas size (spec §3.5), so it can be passed to <see cref="FrameRequest"/>.
+        /// </summary>
+        public static FloatRect FromPixels(IntRect rect, int canvasWidth, int canvasHeight)
+        {
+            if (canvasWidth <= 0 || canvasHeight <= 0) throw new ArgumentOutOfRangeException(nameof(canvasWidth), "canvas must be > 0");
+            return new FloatRect((float)((double)rect.X / canvasWidth), (float)((double)rect.Y / canvasHeight),
+                (float)((double)rect.Width / canvasWidth), (float)((double)rect.Height / canvasHeight));
         }
 
         public bool ApproximatelyEquals(FloatRect other, float epsilon)
@@ -81,9 +93,11 @@ namespace Ballverse.Core.Layout
             return string.Format(CultureInfo.InvariantCulture, "[{0},{1} {2}x{3}]", X, Y, Width, Height);
         }
 
-        static int Clamp(int v, int min, int max)
+        static int Edge(double normalized, int size)
         {
-            return v < min ? min : (v > max ? max : v);
+            if (double.IsNaN(normalized)) throw new ArgumentException("rect must not be NaN");
+            double n = normalized < 0.0 ? 0.0 : (normalized > 1.0 ? 1.0 : normalized);
+            return PixelMath.RoundHalfUp(n * size);
         }
     }
 }

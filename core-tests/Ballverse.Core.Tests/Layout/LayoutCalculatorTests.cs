@@ -114,7 +114,7 @@ namespace Ballverse.Core.Tests.Layout
         [Fact]
         public void L3PutsVideoInWindow()
         {
-            var pip = new PipSpec(PipShape.RoundedRect, 0.35f, new FloatVec2(0.75f, 0.25f));
+            var pip = new PipSpec(SlotShape.RoundedRect, 0.35f, new FloatVec2(0.75f, 0.25f));
             FrameLayout f = LayoutCalculator.ComputeSlots(1080, 1920, new LayoutSpec(LayoutType.L3, false, 0.5f, 6, 24, 0, pip));
             Assert.Equal(LayoutType.L3, f.EffectiveType);
             Assert.True(f.HasWindow);
@@ -129,7 +129,7 @@ namespace Ballverse.Core.Tests.Layout
         [Fact]
         public void L5AndSwappedL3PutSimulationInWindow()
         {
-            var pip = new PipSpec(PipShape.Circle, 0.4f, new FloatVec2(0.5f, 0.5f));
+            var pip = new PipSpec(SlotShape.Circle, 0.4f, new FloatVec2(0.5f, 0.5f));
             FrameLayout l5 = LayoutCalculator.ComputeSlots(1080, 1920, new LayoutSpec(LayoutType.L5, false, 0.5f, 0, 24, 0, pip));
             FrameLayout l3s = LayoutCalculator.ComputeSlots(1080, 1920, new LayoutSpec(LayoutType.L3, true, 0.5f, 0, 24, 0, pip));
             foreach (FrameLayout f in new[] { l5, l3s })
@@ -151,7 +151,7 @@ namespace Ballverse.Core.Tests.Layout
         {
             foreach (var c in s_canvases)
             {
-                foreach (PipShape shape in new[] { PipShape.RoundedRect, PipShape.Circle })
+                foreach (SlotShape shape in new[] { SlotShape.RoundedRect, SlotShape.Circle })
                 {
                     foreach (float size in new[] { 0.2f, 0.37f, 0.6f })
                     {
@@ -161,7 +161,7 @@ namespace Ballverse.Core.Tests.Layout
                             IntRect r = LayoutCalculator.PipWindowRect(c[0], c[1], pip);
                             Assert.True(new IntRect(0, 0, c[0], c[1]).Contains(r), r + " in " + c[0] + "x" + c[1]);
                             Assert.False(r.IsEmpty);
-                            if (shape == PipShape.Circle) Assert.Equal(r.Width, r.Height);
+                            if (shape == SlotShape.Circle) Assert.Equal(r.Width, r.Height);
                         }
                     }
                 }
@@ -171,18 +171,18 @@ namespace Ballverse.Core.Tests.Layout
         [Fact]
         public void WindowKeepsCanvasAspect()
         {
-            IntVec2 s1080 = LayoutCalculator.PipWindowSize(1080, 1920, new PipSpec(PipShape.RoundedRect, 0.5f, FloatVec2.Zero));
+            IntVec2 s1080 = LayoutCalculator.PipWindowSize(1080, 1920, new PipSpec(SlotShape.RoundedRect, 0.5f, FloatVec2.Zero));
             Assert.Equal(new IntVec2(540, 960), s1080);
-            IntVec2 s720 = LayoutCalculator.PipWindowSize(720, 1280, new PipSpec(PipShape.RoundedRect, 0.3f, FloatVec2.Zero));
+            IntVec2 s720 = LayoutCalculator.PipWindowSize(720, 1280, new PipSpec(SlotShape.RoundedRect, 0.3f, FloatVec2.Zero));
             Assert.Equal(new IntVec2(216, 384), s720);
-            IntVec2 wide = LayoutCalculator.PipWindowSize(2000, 100, new PipSpec(PipShape.Circle, 0.6f, FloatVec2.Zero));
+            IntVec2 wide = LayoutCalculator.PipWindowSize(2000, 100, new PipSpec(SlotShape.Circle, 0.6f, FloatVec2.Zero));
             Assert.Equal(new IntVec2(100, 100), wide);
         }
 
         [Fact]
         public void RoundedWindowRadiusIsClamped()
         {
-            var pip = new PipSpec(PipShape.RoundedRect, 0.2f, FloatVec2.Zero);
+            var pip = new PipSpec(SlotShape.RoundedRect, 0.2f, FloatVec2.Zero);
             FrameLayout f = LayoutCalculator.ComputeSlots(40, 71, new LayoutSpec(LayoutType.L3, false, 0.5f, 0, 48, 0, pip));
             Assert.Equal(new IntRect(0, 0, 8, 14), f.Window.Rect);
             Assert.Equal(2, f.Window.CornerRadius); // 48 * 40/1080 = 1.78 -> 2, <= 8/2
@@ -197,7 +197,7 @@ namespace Ballverse.Core.Tests.Layout
             for (int i = 0; i < 500; i++)
             {
                 int w = rng.NextInt(8, 3000), h = rng.NextInt(8, 3000);
-                var pip = new PipSpec(rng.NextBool() ? PipShape.Circle : PipShape.RoundedRect, rng.NextFloat(0.2f, 0.6f),
+                var pip = new PipSpec(rng.NextBool() ? SlotShape.Circle : SlotShape.RoundedRect, rng.NextFloat(0.2f, 0.6f),
                     new FloatVec2(rng.NextFloat(-0.2f, 1.2f), rng.NextFloat(-0.2f, 1.2f)));
                 IntRect r = LayoutCalculator.PipWindowRect(w, h, pip);
                 IntRect again = LayoutCalculator.PipWindowRect(w, h, pip.WithCenter(LayoutCalculator.PipCenterOf(r, w, h)));
@@ -287,8 +287,6 @@ namespace Ballverse.Core.Tests.Layout
             Assert.False(s.Intersects(d), ctx);
             Assert.False(v.Intersects(d), ctx);
             Assert.Equal(content.Area, s.Area + v.Area + d.Area);
-            // Padding + content = canvas.
-            Assert.Equal(canvas.Area, content.Area + (canvas.Area - content.Area));
             bool stacked = spec.Type == LayoutType.L1;
             if (stacked)
             {
@@ -388,7 +386,7 @@ namespace Ballverse.Core.Tests.Layout
             var rng = Rng.FromSeed(99, 2);
             for (int i = 0; i < 2000; i++)
             {
-                var pip = new PipSpec(rng.NextBool() ? PipShape.Circle : PipShape.RoundedRect, rng.NextFloat(0.2f, 0.6f),
+                var pip = new PipSpec(rng.NextBool() ? SlotShape.Circle : SlotShape.RoundedRect, rng.NextFloat(0.2f, 0.6f),
                     new FloatVec2(rng.NextFloat(0f, 1f), rng.NextFloat(0f, 1f)));
                 var spec = new LayoutSpec(rng.NextBool() ? LayoutType.L3 : LayoutType.L5, rng.NextBool(), 0.5f, 0, rng.NextInt(0, 49), 0, pip);
                 FrameLayout hi = LayoutCalculator.ComputeSlots(1080, 1920, spec);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace Ballverse.Core.Layout
 {
@@ -10,6 +11,7 @@ namespace Ballverse.Core.Layout
     public sealed class FrameLayout
     {
         readonly SlotGeometry[] _slotsBackToFront;
+        readonly ReadOnlyCollection<SlotGeometry> _slotsView;
 
         public int CanvasWidth { get; }
         public int CanvasHeight { get; }
@@ -40,8 +42,8 @@ namespace Ballverse.Core.Layout
         /// <summary>The floating window slot for L3/L5 (video in L3, simulation in L5).</summary>
         public SlotGeometry Window => HasWindow ? _slotsBackToFront[1] : throw new InvalidOperationException("layout has no window");
 
-        /// <summary>Slots in draw order (ascending z-index; ties in S, V order).</summary>
-        public IReadOnlyList<SlotGeometry> SlotsBackToFront => _slotsBackToFront;
+        /// <summary>Slots in draw order (ascending z-index; ties in S, V order). Read-only view.</summary>
+        public IReadOnlyList<SlotGeometry> SlotsBackToFront => _slotsView;
 
         internal FrameLayout(int canvasWidth, int canvasHeight, LayoutType effectiveType, SlotGeometry simulation,
             bool hasVideo, SlotGeometry video, IntRect divider, IntRect content, bool hasWindow)
@@ -68,6 +70,7 @@ namespace Ballverse.Core.Layout
             {
                 _slotsBackToFront = new[] { simulation, video };
             }
+            _slotsView = Array.AsReadOnly(_slotsBackToFront);
         }
     }
 }

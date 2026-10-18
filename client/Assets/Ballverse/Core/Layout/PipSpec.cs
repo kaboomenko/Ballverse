@@ -14,9 +14,10 @@ namespace Ballverse.Core.Layout
         public const float DefaultSizeFraction = 0.35f;
 
         /// <summary>Default: rounded rectangle, 35% width, near the top-right corner (magnets snap it on first drag).</summary>
-        public static readonly PipSpec Default = new PipSpec(PipShape.RoundedRect, DefaultSizeFraction, new FloatVec2(0.75f, 0.25f));
+        public static readonly PipSpec Default = new PipSpec(SlotShape.RoundedRect, DefaultSizeFraction, new FloatVec2(0.75f, 0.25f));
 
-        public PipShape Shape { get; }
+        /// <summary>Window shape: <see cref="SlotShape.RoundedRect"/> or <see cref="SlotShape.Circle"/> (spec §3.3).</summary>
+        public SlotShape Shape { get; }
 
         /// <summary>Window width as a fraction of the canvas width (RoundedRect) or circle diameter (Circle), 0.20–0.60.</summary>
         public float SizeFraction { get; }
@@ -24,9 +25,10 @@ namespace Ballverse.Core.Layout
         /// <summary>Window center normalized to the canvas; clamped to [0,1]. The window itself is kept inside the canvas.</summary>
         public FloatVec2 Center { get; }
 
-        public PipSpec(PipShape shape, float sizeFraction, FloatVec2 center)
+        /// <summary>Throws for a shape other than RoundedRect/Circle or non-finite values; clamps size and center.</summary>
+        public PipSpec(SlotShape shape, float sizeFraction, FloatVec2 center)
         {
-            if (shape != PipShape.RoundedRect && shape != PipShape.Circle)
+            if (shape != SlotShape.RoundedRect && shape != SlotShape.Circle)
                 throw new ArgumentOutOfRangeException(nameof(shape), shape, "unknown PiP shape");
             PixelMath.RequireFinite(sizeFraction, nameof(sizeFraction));
             if (!center.IsFinite) throw new ArgumentException("center must be finite", nameof(center));
@@ -45,7 +47,7 @@ namespace Ballverse.Core.Layout
             return new PipSpec(Shape, sizeFraction, Center);
         }
 
-        public PipSpec WithShape(PipShape shape)
+        public PipSpec WithShape(SlotShape shape)
         {
             return new PipSpec(shape, SizeFraction, Center);
         }

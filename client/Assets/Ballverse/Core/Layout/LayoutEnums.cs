@@ -1,12 +1,5 @@
 namespace Ballverse.Core.Layout
 {
-    /// <summary>Shape of the floating window in L3/L5 (spec §3.3).</summary>
-    public enum PipShape
-    {
-        RoundedRect = 0,
-        Circle = 1,
-    }
-
     /// <summary>Content shown by a slot: S (simulation) or V (user video), spec §3.3.</summary>
     public enum SlotKind
     {
@@ -14,7 +7,10 @@ namespace Ballverse.Core.Layout
         Video = 1,
     }
 
-    /// <summary>How the compositor clips a slot.</summary>
+    /// <summary>
+    /// How the compositor clips a slot. Also the L3/L5 window shape of <see cref="PipSpec.Shape"/> (RoundedRect or Circle,
+    /// spec §3.3); the module deliberately has no separate PiP shape enum so it never clashes with the project model's one.
+    /// </summary>
     public enum SlotShape
     {
         /// <summary>Plain rectangle (full-frame slots).</summary>

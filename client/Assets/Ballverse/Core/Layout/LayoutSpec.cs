@@ -15,9 +15,11 @@ namespace Ballverse.Core.Layout
         public const int MaxDividerPx = 16;
         public const int MaxCornerRadiusPx = 48;
         public const int MaxPaddingPx = 48;
+        public const int DefaultDividerPx = 6;
+        public const int DefaultCornerRadiusPx = 24;
 
         /// <summary>Default layout: L1, S on top, 50/50, 6 px divider, 24 px corners, no padding.</summary>
-        public static readonly LayoutSpec Default = new LayoutSpec(LayoutType.L1, false, DefaultRatio, 6, 24, 0, null);
+        public static readonly LayoutSpec Default = new LayoutSpec(LayoutType.L1, false, DefaultRatio, DefaultDividerPx, DefaultCornerRadiusPx, 0, null);
 
         public LayoutType Type { get; }
 
@@ -46,8 +48,9 @@ namespace Ballverse.Core.Layout
         /// <summary>Floating window settings for L3/L5. Never null (defaults to <see cref="PipSpec.Default"/>).</summary>
         public PipSpec Pip { get; }
 
-        public LayoutSpec(LayoutType type, bool swap = false, float ratio = DefaultRatio, int dividerPx = 0,
-            int cornerRadiusPx = 0, int paddingPx = 0, PipSpec pip = null)
+        /// <summary>Optional parameters default to the values of <see cref="Default"/> (6 px divider, 24 px corners, spec §7.4 example).</summary>
+        public LayoutSpec(LayoutType type, bool swap = false, float ratio = DefaultRatio, int dividerPx = DefaultDividerPx,
+            int cornerRadiusPx = DefaultCornerRadiusPx, int paddingPx = 0, PipSpec pip = null)
         {
             if (type < LayoutType.L1 || type > LayoutType.L5)
                 throw new ArgumentOutOfRangeException(nameof(type), type, "unknown layout");

@@ -154,5 +154,57 @@ namespace Ballverse.Core.Tests.Layout
                 Assert.Equal(brute, new RectUnion(rects).IntersectionArea(q));
             }
         }
+
+        [Fact]
+        public void RoundHalfUpSaturatesOutOfRangeValues()
+        {
+            Assert.Equal(int.MaxValue, PixelMath.RoundHalfUp(3e9));
+            Assert.Equal(int.MinValue, PixelMath.RoundHalfUp(-3e9));
+            Assert.Equal(int.MaxValue, PixelMath.RoundHalfUp(double.MaxValue));
+            Assert.Equal(int.MinValue, PixelMath.RoundHalfUp(-double.MaxValue));
+            Assert.Equal(3, PixelMath.RoundHalfUp(2.5));
+            Assert.Equal(-2, PixelMath.RoundHalfUp(-2.5));
+            Assert.Throws<ArgumentException>(() => PixelMath.RoundHalfUp(double.PositiveInfinity));
+        }
+
+        [Fact]
+        public void ToPixelsClampsHugeNormalizedRects()
+        {
+            Assert.Equal(new IntRect(0, 0, 1080, 1920), new FloatRect(0f, 0f, 1e7f, 1f).ToPixels(1080, 1920));
+            Assert.Equal(new IntRect(0, 0, 1080, 1920), new FloatRect(-1e30f, -1e30f, 3e30f, 3e30f).ToPixels(1080, 1920));
+            Assert.True(new FloatRect(5f, 0f, 1f, 1f).ToPixels(1080, 1920).IsEmpty);
+            Assert.True(new FloatRect(-3e9f, 0f, 1f, 1f).ToPixels(1080, 1920).IsEmpty);
+            Assert.Throws<ArgumentException>(() => new FloatRect(float.NaN, 0f, 1f, 1f).ToPixels(1080, 1920));
+        }
+
+        [Fact]
+        public void FromPixelsRoundTripsThroughToPixels()
+        {
+            var px = new IntRect(40, 204, 600, 90);
+            FloatRect n = FloatRect.FromPixels(px, 1080, 1920);
+            Assert.Equal(px, n.ToPixels(1080, 1920));
+            Assert.Equal(new IntRect(27, 136, 400, 60), n.ToPixels(720, 1280));
+            Assert.Throws<ArgumentOutOfRangeException>(() => FloatRect.FromPixels(px, 0, 1920));
+        }
+
+        [Fact]
+        public void ReturnedCollectionsAreReadOnly()
+        {
+            var src = new List<IntRect> { new IntRect(0, 0, 5, 5) };
+            var u = new RectUnion(src);
+            src[0] = new IntRect(0, 0, 9, 9);
+            Assert.Equal(new IntRect(0, 0, 5, 5), u[0]);
+            Assert.False(u.Rects is IntRect[]);
+            Assert.Throws<NotSupportedException>(() => ((IList<IntRect>)u.Rects)[0] = IntRect.Empty);
+
+            FrameLayout f = LayoutCalculator.ComputeSlots(1080, 1920, LayoutSpec.Default);
+            Assert.False(f.SlotsBackToFront is SlotGeometry[]);
+            Assert.Throws<NotSupportedException>(() => ((IList<SlotGeometry>)f.SlotsBackToFront)[0] = default(SlotGeometry));
+
+            var pip = new PipSpec(SlotShape.RoundedRect, 0.35f, new FloatVec2(0.5f, 0.5f));
+            PipSnapResult r = PipMagnets.Snap(1080, 1920, pip, pip.Center, RectUnion.Empty);
+            Assert.False(r.Anchors is PipAnchor[]);
+            Assert.Throws<NotSupportedException>(() => ((IList<PipAnchor>)r.Anchors)[0] = default(PipAnchor));
+        }
     }
 }

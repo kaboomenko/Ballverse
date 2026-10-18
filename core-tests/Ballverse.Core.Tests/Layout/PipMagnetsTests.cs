@@ -7,7 +7,7 @@ namespace Ballverse.Core.Tests.Layout
 {
     public class PipMagnetsTests
     {
-        static readonly PipSpec s_pip = new PipSpec(PipShape.RoundedRect, 0.35f, new FloatVec2(0.5f, 0.5f));
+        static readonly PipSpec s_pip = new PipSpec(SlotShape.RoundedRect, 0.35f, new FloatVec2(0.5f, 0.5f));
 
         [Fact]
         public void WithoutMasksSnapsToNearestSafeCorner()
@@ -37,11 +37,11 @@ namespace Ballverse.Core.Tests.Layout
             RectUnion masks = PlatformUiMasks.Default.ToPixels(1080, 1920);
             PipAnchor[] a = PipMagnets.ComputeAnchors(1080, 1920, s_pip, masks);
             Assert.Equal(PipCorner.TopLeft, a[0].Corner);
-            // Top-left slides below the tallest top bar (125) + 32 px gap.
-            Assert.Equal(new IntRect(32, 157, 378, 672), a[0].Rect);
+            // Top-left slides below the tallest top bar (TikTok 154) + 32 px gap.
+            Assert.Equal(new IntRect(32, 186, 378, 672), a[0].Rect);
             Assert.Equal(0L, a[0].MaskOverlap);
-            // Bottom-left slides above the highest caption (1478) - 32 px gap.
-            Assert.Equal(new IntRect(32, 774, 378, 672), a[2].Rect);
+            // Bottom-left slides above the highest bottom zone (1536) - 32 px gap.
+            Assert.Equal(new IntRect(32, 832, 378, 672), a[2].Rect);
             Assert.Equal(0L, a[2].MaskOverlap);
             // Right corners cannot escape the right action rails: they stay in the corner and overlap.
             Assert.Equal(new IntRect(670, 32, 378, 672), a[1].Rect);
@@ -87,7 +87,7 @@ namespace Ballverse.Core.Tests.Layout
             for (int i = 0; i < 300; i++)
             {
                 int w = rng.NextInt(100, 2000), h = rng.NextInt(100, 3000);
-                var pip = new PipSpec(rng.NextBool() ? PipShape.Circle : PipShape.RoundedRect, rng.NextFloat(0.2f, 0.6f), FloatVec2.Zero);
+                var pip = new PipSpec(rng.NextBool() ? SlotShape.Circle : SlotShape.RoundedRect, rng.NextFloat(0.2f, 0.6f), FloatVec2.Zero);
                 RectUnion m = PlatformUiMasks.Default.ToPixels(w, h);
                 PipSnapResult r = PipMagnets.Snap(w, h, pip, new FloatVec2(rng.NextFloat(-0.5f, 1.5f), rng.NextFloat(-0.5f, 1.5f)), m);
                 var spec = new LayoutSpec(LayoutType.L3, false, 0.5f, 0, 24, 0, r.Pip);
@@ -101,17 +101,17 @@ namespace Ballverse.Core.Tests.Layout
         [Fact]
         public void CircleWindowAnchorsAreSquare()
         {
-            var circle = new PipSpec(PipShape.Circle, 0.3f, FloatVec2.Zero);
+            var circle = new PipSpec(SlotShape.Circle, 0.3f, FloatVec2.Zero);
             PipSnapResult r = PipMagnets.Snap(720, 1280, circle, new FloatVec2(1f, 1f), RectUnion.Empty);
             // 216 px circle, margin 21 px at 720 width.
             Assert.Equal(new IntRect(720 - 21 - 216, 1280 - 21 - 216, 216, 216), r.Rect);
-            Assert.Equal(PipShape.Circle, r.Pip.Shape);
+            Assert.Equal(SlotShape.Circle, r.Pip.Shape);
         }
 
         [Fact]
         public void HugeWindowOnSmallCanvasStillFits()
         {
-            var big = new PipSpec(PipShape.RoundedRect, 0.6f, FloatVec2.Zero);
+            var big = new PipSpec(SlotShape.RoundedRect, 0.6f, FloatVec2.Zero);
             PipSnapResult r = PipMagnets.Snap(40, 40, big, new FloatVec2(1f, 0f), RectUnion.Empty);
             Assert.True(new IntRect(0, 0, 40, 40).Contains(r.Rect));
         }

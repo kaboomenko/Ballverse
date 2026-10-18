@@ -74,7 +74,7 @@ namespace Ballverse.Core.Layout
             PixelMath.RequireCanvas(canvasWidth, canvasHeight);
             if (pip == null) throw new ArgumentNullException(nameof(pip));
             int w = PixelMath.Clamp(PixelMath.RoundHalfUp((double)pip.SizeFraction * canvasWidth), 1, canvasWidth);
-            if (pip.Shape == PipShape.Circle)
+            if (pip.Shape == SlotShape.Circle)
             {
                 int d = Math.Min(w, canvasHeight);
                 return new IntVec2(d, d);
@@ -108,7 +108,7 @@ namespace Ballverse.Core.Layout
         static SlotGeometry WindowSlot(int w, int h, LayoutSpec spec, SlotKind kind)
         {
             IntRect rect = PipWindowRect(w, h, spec.Pip);
-            if (spec.Pip.Shape == PipShape.Circle)
+            if (spec.Pip.Shape == SlotShape.Circle)
             {
                 return new SlotGeometry(kind, rect, SlotShape.Circle, rect.Width / 2, 1);
             }

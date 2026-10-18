@@ -19,11 +19,18 @@ namespace Ballverse.Core.Layout
         /// <summary>Height of the reference canvas.</summary>
         public const int ReferenceHeight = 1920;
 
-        /// <summary>floor(v + 0.5). NaN and infinities are rejected.</summary>
+        /// <summary>
+        /// floor(v + 0.5), saturated to [int.MinValue, int.MaxValue] so out-of-range finite values give the same result on
+        /// every platform (an unchecked out-of-range double-to-int cast is unspecified in C# and undefined under IL2CPP).
+        /// NaN and infinities are rejected.
+        /// </summary>
         public static int RoundHalfUp(double v)
         {
             if (double.IsNaN(v) || double.IsInfinity(v)) throw new ArgumentException("value must be finite", nameof(v));
-            return (int)Math.Floor(v + 0.5);
+            double f = Math.Floor(v + 0.5);
+            if (f <= int.MinValue) return int.MinValue;
+            if (f >= int.MaxValue) return int.MaxValue;
+            return (int)f;
         }
 
         /// <summary>floor(a / b) for b &gt; 0 (C# integer division truncates towards zero).</summary>

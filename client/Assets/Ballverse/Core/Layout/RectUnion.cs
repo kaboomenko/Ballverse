@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace Ballverse.Core.Layout
 {
@@ -13,8 +14,9 @@ namespace Ballverse.Core.Layout
         public static readonly RectUnion Empty = new RectUnion(new IntRect[0]);
 
         readonly IntRect[] _rects;
+        readonly ReadOnlyCollection<IntRect> _view;
 
-        /// <summary>Empty rectangles are dropped.</summary>
+        /// <summary>Empty rectangles are dropped. The input is copied.</summary>
         public RectUnion(IEnumerable<IntRect> rects)
         {
             if (rects == null) throw new ArgumentNullException(nameof(rects));
@@ -24,11 +26,24 @@ namespace Ballverse.Core.Layout
                 if (!r.IsEmpty) list.Add(r);
             }
             _rects = list.ToArray();
+            _view = Array.AsReadOnly(_rects);
+        }
+
+        /// <summary>Normalized rects (0..1 of the canvas) converted with <see cref="FloatRect.ToPixels"/>, in input order.</summary>
+        public static RectUnion FromNormalized(IEnumerable<FloatRect> normalized, int canvasWidth, int canvasHeight)
+        {
+            if (normalized == null) throw new ArgumentNullException(nameof(normalized));
+            PixelMath.RequireCanvas(canvasWidth, canvasHeight);
+            var list = new List<IntRect>();
+            foreach (FloatRect r in normalized) list.Add(r.ToPixels(canvasWidth, canvasHeight));
+            return new RectUnion(list);
         }
 
         public int Count => _rects.Length;
         public IntRect this[int index] => _rects[index];
-        public IReadOnlyList<IntRect> Rects => _rects;
+
+        /// <summary>The rectangles (read-only view).</summary>
+        public IReadOnlyList<IntRect> Rects => _view;
 
         /// <summary>True if <paramref name="query"/> shares a positive area with any rectangle of the union.</summary>
         public bool Intersects(IntRect query)
@@ -43,7 +58,19 @@ namespace Ballverse.Core.Layout
         /// <summary>Exact pixel area of query ∩ union (overlapping rectangles are not double counted).</summary>
         public long IntersectionArea(IntRect query)
         {
-            var clips = new List<IntRect>();
+            // Fast paths without allocation: no clipped rect, or exactly one.
+            int hits = 0;
+            IntRect only = IntRect.Empty;
+            for (int i = 0; i < _rects.Length; i++)
+            {
+                IntRect c = _rects[i].Intersection(query);
+                if (c.IsEmpty) continue;
+                hits++;
+                only = c;
+            }
+            if (hits == 0) return 0;
+            if (hits == 1) return only.Area;
+            var clips = new List<IntRect>(hits);
             for (int i = 0; i < _rects.Length; i++)
             {
                 IntRect c = _rects[i].Intersection(query);

@@ -49,20 +49,20 @@ namespace Ballverse.Core.Tests.Layout
         {
             WatermarkPlacement p = WatermarkLayout.Place(1080, 1920, Aspect, PlatformUiMasks.Default.ToPixels(1080, 1920), null);
             Assert.Equal(WatermarkCorner.TopLeft, p.Corner);
-            Assert.Equal(new IntRect(32, 157, 216, 48), p.Rect);
+            Assert.Equal(new IntRect(32, 186, 216, 48), p.Rect); // TikTok top bar 154 + 32
             Assert.True(p.IsClear);
             WatermarkPlacement p720 = WatermarkLayout.Place(720, 1280, Aspect, PlatformUiMasks.Default.ToPixels(720, 1280), null);
-            Assert.Equal(new IntRect(21, 104, 144, 32), p720.Rect); // tiktok top bar 83 + 21
+            Assert.Equal(new IntRect(21, 123, 144, 32), p720.Rect); // TikTok top bar 102 + 21
         }
 
         [Fact]
         public void PipWindowAtTopLeftMovesWatermarkToTopRight()
         {
             RectUnion masks = PlatformUiMasks.Default.ToPixels(1080, 1920);
-            var pip = new IntRect(32, 157, 378, 672);
+            var pip = new IntRect(32, 186, 378, 672);
             WatermarkPlacement p = WatermarkLayout.Place(1080, 1920, Aspect, masks, new[] { pip });
             Assert.Equal(WatermarkCorner.TopRight, p.Corner);
-            Assert.Equal(new IntRect(832, 157, 216, 48), p.Rect);
+            Assert.Equal(new IntRect(832, 186, 216, 48), p.Rect);
             Assert.True(p.IsClear);
         }
 
@@ -170,9 +170,38 @@ namespace Ballverse.Core.Tests.Layout
         }
 
         [Fact]
+        public void ChooseCornerDecidesOnTheReferenceCanvas()
+        {
+            RectUnion refMasks = PlatformUiMasks.Default.ToPixels(1080, 1920);
+            Assert.Equal(WatermarkCorner.TopLeft, WatermarkLayout.ChooseCorner(Aspect, refMasks, null));
+            // Touching the reference watermark bottom (186 + 48) is no conflict; one pixel of overlap is.
+            Assert.Equal(WatermarkCorner.TopLeft, WatermarkLayout.ChooseCorner(Aspect, refMasks, new[] { new IntRect(0, 234, 400, 300) }));
+            Assert.Equal(WatermarkCorner.TopRight, WatermarkLayout.ChooseCorner(Aspect, refMasks, new[] { new IntRect(0, 233, 400, 300) }));
+            Assert.Equal(WatermarkLayout.Place(1080, 1920, Aspect, refMasks, new[] { new IntRect(0, 233, 400, 300) }).Corner,
+                WatermarkLayout.ChooseCorner(Aspect, refMasks, new[] { new IntRect(0, 233, 400, 300) }));
+        }
+
+        [Fact]
+        public void PlaceAtUsesTheGivenCornerOnAnyCanvas()
+        {
+            RectUnion masks720 = PlatformUiMasks.Default.ToPixels(720, 1280);
+            // The corner is forced even though top-left would be clear here; overlaps are reported for this canvas.
+            WatermarkPlacement p = WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, null, WatermarkCorner.TopRight);
+            Assert.Equal(WatermarkCorner.TopRight, p.Corner);
+            Assert.Equal(new IntRect(555, 123, 144, 32), p.Rect);
+            Assert.True(p.IsClear);
+            WatermarkPlacement q = WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, new[] { new IntRect(0, 150, 50, 10) }, WatermarkCorner.TopLeft);
+            Assert.Equal(new IntRect(21, 123, 144, 32), q.Rect);
+            Assert.Equal(29L * 5, q.OccupiedOverlap);
+            Assert.Throws<ArgumentOutOfRangeException>(() => WatermarkLayout.PlaceAt(720, 1280, Aspect, masks720, null, (WatermarkCorner)5));
+            Assert.Throws<ArgumentNullException>(() => WatermarkLayout.PlaceAt(720, 1280, Aspect, null, null, WatermarkCorner.TopLeft));
+        }
+
+        [Fact]
         public void NullMasksThrow()
         {
             Assert.Throws<ArgumentNullException>(() => WatermarkLayout.Place(1080, 1920, Aspect, null, null));
+            Assert.Throws<ArgumentNullException>(() => WatermarkLayout.ChooseCorner(Aspect, null, null));
         }
     }
 }
