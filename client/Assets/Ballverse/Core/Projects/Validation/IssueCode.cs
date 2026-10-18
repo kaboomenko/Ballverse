@@ -31,5 +31,11 @@ namespace Ballverse.Core.Projects
         TooNew,
         /// <summary>Repository: the main file was unusable and the backup was used.</summary>
         UsedBackup,
+        /// <summary>Reel shorter than 1 s (spec §3.8); the trim was lengthened.</summary>
+        DurationTooShort,
+        /// <summary>Repository: the file could not be read because of an I/O error (may be temporary); nothing was used instead.</summary>
+        Unavailable,
+        /// <summary>Repository: a project folder with neither project.json nor its backup (e.g. an interrupted create or duplicate).</summary>
+        Orphan,
     }
 }

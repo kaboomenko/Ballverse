@@ -205,6 +205,12 @@ namespace Ballverse.Core.Projects
             _dirs.RemoveWhere(d => d == p || d.StartsWith(prefix, StringComparison.Ordinal));
         }
 
+        public long GetFileSize(string path)
+        {
+            Check(FileOp.GetFileSize, path);
+            return Get(path).Current.LongLength;
+        }
+
         public IReadOnlyList<string> ListDirectories(string path)
         {
             Check(FileOp.ListDirectories, path);

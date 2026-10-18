@@ -18,6 +18,8 @@ namespace Ballverse.Core.Projects
         public const string ClipRenderFile = "clip.bvs";
         public const string MediaDir = "media";
         public const string ThumbsDir = "thumbs";
+        /// <summary>Conventional folder of exported videos kept with the project (not in the §7.4 layout; see <see cref="ExportRecord.File"/>).</summary>
+        public const string ExportsDir = "exports";
         public const string DefaultUserVideoFile = "media/user.mp4";
 
         /// <summary>

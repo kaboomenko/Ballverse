@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace Ballverse.Core.Projects
 {
@@ -8,9 +9,10 @@ namespace Ballverse.Core.Projects
     /// <para>Save is atomic: temp file -> flush -> previous good version copied to <c>project.json.bak</c> (via its own
     /// temp + flush + atomic replace) -> atomic replace of <c>project.json</c>. After a failure at any single step, Load
     /// returns either the previous or the new document, never a broken one.</para>
-    /// <para>Load parses, migrates and sanitizes; a missing or unusable main file falls back to the backup
-    /// (reported via <see cref="LoadResult.Source"/>). A file from a newer schema is refused without fallback, so it is never
-    /// silently replaced by an older backup.</para>
+    /// <para>Load parses, migrates and sanitizes; a missing main file or one with unusable content falls back to the backup
+    /// (reported via <see cref="LoadResult.Source"/>). A file from a newer schema, or one that cannot be read because of an I/O
+    /// error (<see cref="LoadStatus.Unavailable"/>), is refused without fallback, so the newer main file is never silently
+    /// replaced by an older backup and then erased by the next saves (spec §8 ST6).</para>
     /// Ids and timestamps are always passed in by the caller (Core is pure).
     /// </summary>
     public sealed class ProjectRepository
@@ -52,6 +54,7 @@ namespace Ballverse.Core.Projects
         /// Atomically writes <paramref name="document"/> (sanitized first; timestamps are not touched).
         /// Throws <see cref="ArgumentException"/> when the document has unrepairable errors,
         /// <see cref="ProjectMigrationException"/> when the existing file is from a newer schema,
+        /// <see cref="IOException"/> when the existing file cannot be read (nothing is written, so it is not lost),
         /// and the store's exception when a write fails (the previous version then stays loadable).
         /// </summary>
         /// <returns>The sanitized document that was written and the warnings applied.</returns>
@@ -80,6 +83,11 @@ namespace Ballverse.Core.Projects
                 {
                     throw new ProjectMigrationException(MigrationError.TooNew, current.FileVersion,
                         "Refusing to overwrite " + main + " written by a newer schema.");
+                }
+                if (current.Status == LoadStatus.Unavailable)
+                {
+                    // Without reading it we cannot tell whether it is the newest good version; keep it and let the caller retry.
+                    throw new IOException("Cannot read " + main + "; save aborted so the existing version is kept.", current.Error);
                 }
                 // Only a good main becomes the backup; a corrupt main must not replace a good backup.
                 rotateBackup = current.Status == LoadStatus.Ok;
@@ -113,9 +121,9 @@ namespace Ballverse.Core.Projects
                 return new LoadResult(LoadStatus.Ok, first.Document, LoadSource.Main, first.FileVersion, mainIssues);
             }
             issues.AddRange(mainIssues);
-            if (first.Status == LoadStatus.TooNew)
+            if (first.Status == LoadStatus.TooNew || first.Status == LoadStatus.Unavailable)
             {
-                return new LoadResult(LoadStatus.TooNew, null, LoadSource.None, first.FileVersion, issues);
+                return new LoadResult(first.Status, null, LoadSource.None, first.FileVersion, issues);
             }
 
             var bakIssues = new List<ValidationIssue>();
@@ -128,17 +136,19 @@ namespace Ballverse.Core.Projects
                 return new LoadResult(LoadStatus.Ok, second.Document, LoadSource.Backup, second.FileVersion, issues);
             }
             issues.AddRange(bakIssues);
-            if (second.Status == LoadStatus.TooNew)
+            if (second.Status == LoadStatus.TooNew || second.Status == LoadStatus.Unavailable)
             {
-                return new LoadResult(LoadStatus.TooNew, null, LoadSource.None, second.FileVersion, issues);
+                return new LoadResult(second.Status, null, LoadSource.None, second.FileVersion, issues);
             }
             var status = first.Status == LoadStatus.NotFound && second.Status == LoadStatus.NotFound ? LoadStatus.NotFound : LoadStatus.Corrupt;
             return new LoadResult(status, null, LoadSource.None, -1, issues);
         }
 
         /// <summary>
-        /// Enumerates project folders (spec §3.9 project list). Broken folders, folders with unsafe names and projects from a
-        /// newer schema are skipped and reported in <see cref="ProjectListResult.Skipped"/>.
+        /// Enumerates project folders (spec §3.9 project list). Broken folders, folders with unsafe names, unreadable ones and
+        /// projects from a newer schema are skipped and reported in <see cref="ProjectListResult.Skipped"/>. A folder with neither
+        /// project.json nor its backup (interrupted create or duplicate) is reported as <see cref="IssueCode.Orphan"/>
+        /// (warning); <see cref="CleanupOrphans"/> removes such folders.
         /// </summary>
         public ProjectListResult List()
         {
@@ -164,7 +174,12 @@ namespace Ballverse.Core.Projects
                 }
                 if (!r.Success)
                 {
-                    var code = r.Status == LoadStatus.TooNew ? IssueCode.TooNew : IssueCode.Corrupt;
+                    if (r.Status == LoadStatus.NotFound)
+                    {
+                        skipped.Add(new ValidationIssue(path, IssueCode.Orphan, IssueSeverity.Warning, "Folder without project.json or backup."));
+                        continue;
+                    }
+                    var code = r.Status == LoadStatus.TooNew ? IssueCode.TooNew : r.Status == LoadStatus.Unavailable ? IssueCode.Unavailable : IssueCode.Corrupt;
                     skipped.Add(new ValidationIssue(path, code, IssueSeverity.Error, "Project skipped: " + r.Status + "."));
                     continue;
                 }
@@ -179,6 +194,26 @@ namespace Ballverse.Core.Projects
                 return c != 0 ? c : string.CompareOrdinal(a.Id, b.Id);
             });
             return new ProjectListResult(projects, skipped);
+        }
+
+        /// <summary>
+        /// Deletes project folders that hold neither project.json nor project.json.bak (status <see cref="LoadStatus.NotFound"/>,
+        /// both confirmed missing without I/O errors): leftovers of a create or duplicate interrupted by a crash, which never
+        /// became a project. Call at app start (as for temporary export files, spec §3.9), never while a create, duplicate or
+        /// media import runs. Folders with unsafe names are left alone.
+        /// </summary>
+        /// <returns>Ids of the removed folders, in name order.</returns>
+        public IReadOnlyList<string> CleanupOrphans()
+        {
+            var removed = new List<string>();
+            foreach (var name in _store.ListDirectories(_root))
+            {
+                if (!ProjectPaths.IsSafeId(name)) continue;
+                if (Load(name).Status != LoadStatus.NotFound) continue;
+                _store.DeleteDirectory(ProjectDir(name));
+                removed.Add(name);
+            }
+            return removed;
         }
 
         /// <summary>
@@ -206,8 +241,10 @@ namespace Ballverse.Core.Projects
 
         /// <summary>
         /// Copies project <paramref name="sourceId"/> with all its media to <paramref name="newId"/> (spec §3.9 "дублировать").
-        /// The copy gets new timestamps, an empty export history and the source name unless <paramref name="newName"/> is given.
-        /// project.json is written last, so an interrupted duplicate is skipped by <see cref="List"/>; partial copies are removed.
+        /// The copy gets new timestamps, an empty export history and the source name unless <paramref name="newName"/> is given;
+        /// exported videos referenced by the source history are therefore not copied.
+        /// project.json is written last, so an interrupted duplicate is never listed as a project; partial copies are removed,
+        /// and a folder left by a crash is reported as <see cref="IssueCode.Orphan"/> and removed by <see cref="CleanupOrphans"/>.
         /// </summary>
         public ProjectDocument Duplicate(string sourceId, string newId, string nowIso, string newName = null)
         {
@@ -225,10 +262,16 @@ namespace Ballverse.Core.Projects
             doc.CreatedAt = nowIso;
             doc.UpdatedAt = nowIso;
             doc.Exports = new List<ExportRecord>();
+            // Membership only; never enumerated.
+            var skip = new HashSet<string>(StringComparer.Ordinal) { ProjectPaths.ProjectFile, ProjectPaths.BackupFile, ProjectPaths.TempFile, ProjectPaths.BackupTempFile };
+            foreach (var e in src.Document.Exports)
+            {
+                if (e.File != null) skip.Add(e.File);
+            }
             try
             {
                 _store.CreateDirectory(newDir);
-                CopyTree(ProjectDir(sourceId), newDir, true);
+                CopyTree(ProjectDir(sourceId), newDir, "", skip);
                 return Save(doc).Document;
             }
             catch
@@ -250,6 +293,29 @@ namespace Ballverse.Core.Projects
             return Save(doc).Document;
         }
 
+        /// <summary>
+        /// Bytes used by the folder of project <paramref name="id"/>, by category (spec §3.9 "Хранилище": projects, clips, user
+        /// videos, thumbnail cache). Categories follow the §7.4 layout and, when the project loads, its <c>userVideo.file</c>
+        /// and <c>exports[].file</c> references.
+        /// </summary>
+        public ProjectStorageUsage GetStorageUsage(string id)
+        {
+            string dir = ProjectDir(id);
+            var r = Load(id);
+            string userVideo = r.Success && r.Document.UserVideo != null ? r.Document.UserVideo.File : null;
+            var exports = new HashSet<string>(StringComparer.Ordinal); // membership only
+            if (r.Success)
+            {
+                foreach (var e in r.Document.Exports)
+                {
+                    if (e.File != null) exports.Add(e.File);
+                }
+            }
+            var usage = new long[(int)StorageCategory.Other + 1];
+            AddUsage(dir, "", userVideo, exports, usage);
+            return new ProjectStorageUsage(usage);
+        }
+
         /// <summary>Deletes the whole project folder (spec §3.9 "удалить"). Returns false when it did not exist.</summary>
         public bool Delete(string id)
         {
@@ -266,6 +332,7 @@ namespace Ballverse.Core.Projects
             public LoadStatus Status;
             public ProjectDocument Document;
             public int FileVersion;
+            public Exception Error;
         }
 
         FileAttempt TryLoadFile(string id, string path, List<ValidationIssue> issues)
@@ -300,9 +367,18 @@ namespace Ballverse.Core.Projects
                 attempt.Document = sanitized.Document;
                 return attempt;
             }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                // The store could not read the file: maybe temporary, says nothing about its content.
+                issues.Add(new ValidationIssue(path, IssueCode.Unavailable, IssueSeverity.Error, e.GetType().Name + ": " + e.Message));
+                attempt.Status = LoadStatus.Unavailable;
+                attempt.Document = null;
+                attempt.Error = e;
+                return attempt;
+            }
             catch (Exception e) when (!(e is OutOfMemoryException))
             {
-                // Unreadable, non-UTF-8, malformed JSON or wrong value types: the file is unusable.
+                // Non-UTF-8, malformed JSON or wrong value types: the file content is unusable.
                 issues.Add(new ValidationIssue(path, IssueCode.Corrupt, IssueSeverity.Error, e.GetType().Name + ": " + e.Message));
                 attempt.Status = LoadStatus.Corrupt;
                 attempt.Document = null;
@@ -310,11 +386,12 @@ namespace Ballverse.Core.Projects
             }
         }
 
-        void CopyTree(string from, string to, bool isProjectRoot)
+        /// <summary>Copies the tree under <paramref name="from"/>, skipping files whose project-relative path is in <paramref name="skip"/>.</summary>
+        void CopyTree(string from, string to, string relPrefix, HashSet<string> skip)
         {
             foreach (var file in _store.ListFiles(from))
             {
-                if (isProjectRoot && IsProjectMetaFile(file)) continue;
+                if (skip.Contains(relPrefix + file)) continue;
                 string dst = to + "/" + file;
                 _store.Copy(from + "/" + file, dst);
                 _store.Flush(dst);
@@ -322,14 +399,34 @@ namespace Ballverse.Core.Projects
             foreach (var dir in _store.ListDirectories(from))
             {
                 _store.CreateDirectory(to + "/" + dir);
-                CopyTree(from + "/" + dir, to + "/" + dir, false);
+                CopyTree(from + "/" + dir, to + "/" + dir, relPrefix + dir + "/", skip);
             }
         }
 
-        static bool IsProjectMetaFile(string name)
+        void AddUsage(string dir, string relPrefix, string userVideo, HashSet<string> exports, long[] usage)
         {
-            return name == ProjectPaths.ProjectFile || name == ProjectPaths.BackupFile
-                || name == ProjectPaths.TempFile || name == ProjectPaths.BackupTempFile;
+            foreach (var file in _store.ListFiles(dir))
+            {
+                usage[(int)Categorize(relPrefix + file, userVideo, exports)] += _store.GetFileSize(dir + "/" + file);
+            }
+            foreach (var sub in _store.ListDirectories(dir))
+            {
+                AddUsage(dir + "/" + sub, relPrefix + sub + "/", userVideo, exports, usage);
+            }
+        }
+
+        static StorageCategory Categorize(string rel, string userVideo, HashSet<string> exports)
+        {
+            if (rel == ProjectPaths.ProjectFile || rel == ProjectPaths.BackupFile || rel == ProjectPaths.TempFile || rel == ProjectPaths.BackupTempFile)
+            {
+                return StorageCategory.ProjectFile;
+            }
+            if (rel == ProjectPaths.ClipReplayFile) return StorageCategory.Replay;
+            if (rel == ProjectPaths.ClipRenderFile) return StorageCategory.RenderCache;
+            if (rel == userVideo || rel.StartsWith(ProjectPaths.MediaDir + "/", StringComparison.Ordinal)) return StorageCategory.Media;
+            if (rel.StartsWith(ProjectPaths.ThumbsDir + "/", StringComparison.Ordinal)) return StorageCategory.Thumbs;
+            if (exports.Contains(rel) || rel.StartsWith(ProjectPaths.ExportsDir + "/", StringComparison.Ordinal)) return StorageCategory.Exports;
+            return StorageCategory.Other;
         }
 
         void TryDeleteDirectory(string dir)

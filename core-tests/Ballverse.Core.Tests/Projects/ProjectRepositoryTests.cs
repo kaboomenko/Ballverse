@@ -124,15 +124,20 @@ namespace Ballverse.Core.Tests.Projects
         }
 
         [Fact]
-        public void UnreadableMainFallsBack()
+        public void UnreadableMainIsUnavailableWithoutFallback()
         {
             var (store, repo) = NewRepo();
             repo.Save(Doc("p1", "old"));
             repo.Save(Doc("p1", "new"));
             store.FailWhen((op, path) => op == FileOp.ReadText && path == Main);
             var r = repo.Load("p1");
-            Assert.Equal(LoadSource.Backup, r.Source);
-            Assert.Equal("old", r.Document.Name);
+            Assert.Equal(LoadStatus.Unavailable, r.Status);
+            Assert.Equal(LoadSource.None, r.Source);
+            Assert.Null(r.Document);
+            Assert.Contains(r.Issues, i => i.Code == IssueCode.Unavailable && i.Path == Main);
+            Assert.DoesNotContain(r.Issues, i => i.Code == IssueCode.UsedBackup);
+            store.ClearFailures();
+            Assert.Equal("new", repo.Load("p1").Document.Name);
         }
 
         [Fact]
@@ -300,6 +305,7 @@ namespace Ballverse.Core.Tests.Projects
             repo.Create("d", "D", "2026-10-18T12:00:00Z"); // ties with b, ordered by id
             store.WriteAllText("projects/broken/project.json", "{");
             store.CreateDirectory("projects/empty");
+            Assert.Equal(IssueCode.Orphan, repo.List().Skipped.Single(i => i.Path == "projects/empty").Code);
             store.CreateDirectory("projects/bad.name");
             store.WriteAllText("projects/stray.txt", "not a folder");
             var tooNew = ProjectJson.ParseObject(ProjectJson.Serialize(Doc("future")));
@@ -522,9 +528,32 @@ namespace Ballverse.Core.Tests.Projects
             var repo = new ProjectRepository(store);
             repo.Save(Doc("p1", "n0"));
             var committed = new List<string> { "n0" };
+            var lastSource = LoadSource.Main;
+            int corruptedMain = 0, corruptedBak = 0;
             for (int i = 1; i <= 200; i++)
             {
                 string name = "n" + i;
+                int c = rng.NextInt(0, 8);
+                if (c == 0 && lastSource == LoadSource.Main && store.FileExists(Bak))
+                {
+                    // Garbage in the backup: the good main file is still used.
+                    store.WriteAllText(Bak, rng.NextInt(0, 2) == 0 ? "" : "{\"schemaVersion\":1,");
+                    corruptedBak++;
+                    var rb = repo.Load("p1");
+                    Assert.Equal(LoadSource.Main, rb.Source);
+                    Assert.Equal(committed[committed.Count - 1], rb.Document.Name);
+                }
+                else if (c == 1 && lastSource == LoadSource.Main && BackupLoads(store))
+                {
+                    // Garbage in the main file: the backup (an older committed version) is used and becomes the current state.
+                    store.WriteAllBytes(Main, new byte[] { 0xC3, 0x28 });
+                    corruptedMain++;
+                    var rm = repo.Load("p1");
+                    Assert.Equal(LoadStatus.Ok, rm.Status);
+                    Assert.Equal(LoadSource.Backup, rm.Source);
+                    Assert.Contains(rm.Document.Name, committed);
+                    committed.Add(rm.Document.Name);
+                }
                 if (rng.NextInt(0, 3) == 0) store.FailAtMutation(store.MutationCount + rng.NextInt(0, 6), (FailureKind)rng.NextInt(0, 3));
                 try
                 {
@@ -541,6 +570,21 @@ namespace Ballverse.Core.Tests.Projects
                 // Old or new: the result is the last committed version, or the one just attempted (failure after the final rename).
                 Assert.True(r.Document.Name == committed[committed.Count - 1] || r.Document.Name == name, "iteration " + i + ": " + r.Document.Name);
                 if (r.Document.Name == name && committed[committed.Count - 1] != name) committed.Add(name);
+                lastSource = r.Source;
+            }
+            Assert.True(corruptedMain > 5 && corruptedBak > 5, "main " + corruptedMain + ", bak " + corruptedBak);
+        }
+
+        static bool BackupLoads(InMemoryFileStore store)
+        {
+            if (!store.FileExists(Bak)) return false;
+            try
+            {
+                return !ProjectValidator.Sanitize(ProjectJson.Deserialize(store.ReadAllText(Bak)), "p1").HasErrors;
+            }
+            catch (Exception)
+            {
+                return false;
             }
         }
 

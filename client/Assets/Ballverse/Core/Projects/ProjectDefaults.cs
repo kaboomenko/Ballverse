@@ -10,6 +10,8 @@ namespace Ballverse.Core.Projects
         public const string DividerColor = "#FFFFFF33";
         public const string TextFill = "#FFFFFF";
         public const string StrokeColor = "#000000";
+        public const string FitBackgroundColor = "#000000";
+        public const string PipBorderColor = "#FFFFFF";
         public const string UntitledName = "Untitled";
         /// <summary>Fallback for timestamps that cannot be parsed.</summary>
         public const string EpochIso = "1970-01-01T00:00:00Z";

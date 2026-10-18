@@ -5,7 +5,8 @@ namespace Ballverse.Core.Projects
     /// <summary><c>layout</c> section of project.json (spec §7.4, §3.3).</summary>
     public sealed class LayoutSettings
     {
-        /// <summary>Layout code L1-L5, serialized as "L1".."L5".</summary>
+        /// <summary>Layout code L1-L5, serialized as "L1".."L5"; an unknown name is reset by the validator.</summary>
+        [JsonConverter(typeof(TolerantEnumConverter))]
         public LayoutType Type { get; set; } = LayoutType.L1;
 
         /// <summary>Swap slots (L1' etc.).</summary>

@@ -30,17 +30,43 @@ namespace Ballverse.Core.Tests.Projects
             Assert.True(r.IsClean, string.Join("\n", r.Issues));
         }
 
+        /// <summary>Fields this module adds to the §7.4 example (all at schema 1), as "section.key" paths.</summary>
+        static readonly string[] s_addedFields =
+        {
+            "clip.fill", "clip.pan", "clip.zoom", "clip.fitBackground",
+            "userVideo.fitBackground", "userVideo.afterEnd",
+            "texts[0].shadow", "texts[0].align",
+            "audio.duckMusicUnderVoice",
+            "output.cover",
+        };
+
+        static void RemoveAdded(JObject o)
+        {
+            foreach (var path in s_addedFields)
+            {
+                int dot = path.LastIndexOf('.');
+                ((JObject)o.SelectToken(path.Substring(0, dot))).Remove(path.Substring(dot + 1));
+            }
+        }
+
         [Fact]
         public void VerbatimSpecExampleRoundTrips()
         {
-            // §7.4 example as printed: abbreviated id "6f1c…" and no userVideo.afterEnd (added by this module, default freeze).
+            // §7.4 example as printed: abbreviated id "6f1c…" and none of the fields added by this module (defaults apply).
             var spec = ProjectJson.ParseObject(ReadData("project_v1.json"));
             spec["id"] = "6f1c…";
-            ((JObject)spec["userVideo"]).Remove("afterEnd");
+            RemoveAdded(spec);
             var doc = ProjectJson.ToDocument(spec);
             var back = ProjectJson.ToJObject(doc);
             Assert.Equal("freeze", (string)back["userVideo"]["afterEnd"]);
-            ((JObject)back["userVideo"]).Remove("afterEnd");
+            Assert.Equal("cover", (string)back["clip"]["fill"]);
+            Assert.Equal("blur", (string)back["userVideo"]["fitBackground"]["kind"]);
+            Assert.Equal("center", (string)back["texts"][0]["align"]);
+            Assert.True((bool)back["audio"]["duckMusicUnderVoice"]);
+            Assert.False((bool)back["output"]["cover"]["putFirst"]);
+            // The defaults are exactly what the golden file spells out.
+            AssertJsonEquivalent(ProjectJson.ParseObject(ReadData("project_v1.json")).Property("clip").Value, back["clip"]);
+            RemoveAdded(back);
             AssertJsonEquivalent(spec, back);
             // The abbreviated id is not a usable folder name: an error without a folder id, repaired with one.
             Assert.True(ProjectValidator.Sanitize(doc).HasErrors);
@@ -114,6 +140,64 @@ namespace Ballverse.Core.Tests.Projects
             Assert.Equal(SimAfterEnd.Loop, d.Clip.AfterEnd);
             Assert.Equal(LayoutType.L3, d.Layout.Type);
             Assert.Equal(DurationMode.MatchVideo, d.Output.DurationMode);
+        }
+
+        [Theory]
+        [InlineData("layout.type", "L9")]
+        [InlineData("clip.afterEnd", "explode")]
+        [InlineData("clip.fill", "stretch")]
+        [InlineData("clip.fitBackground.kind", "gradient")]
+        [InlineData("userVideo.fill", "stretch")]
+        [InlineData("userVideo.afterEnd", "rewind")]
+        [InlineData("userVideo.fitBackground.kind", "gradient")]
+        [InlineData("texts[0].plate", "neon")]
+        [InlineData("texts[0].align", "justify")]
+        [InlineData("output.durationMode", "forever")]
+        public void UnknownEnumNameIsRepairedLikeUnknownNumber(string path, string unknownName)
+        {
+            foreach (JToken unknown in new JToken[] { unknownName, 97 })
+            {
+                var o = ProjectJson.ParseObject(ReadData("project_v1.json"));
+                ((JValue)o.SelectToken(path)).Replace(unknown);
+                var doc = ProjectJson.ToDocument(o);
+                var r = ProjectValidator.Sanitize(doc);
+                Assert.False(r.HasErrors);
+                var issue = Assert.Single(r.Issues);
+                Assert.Equal(path, issue.Path);
+                Assert.Equal(IssueCode.InvalidValue, issue.Code);
+                // The repaired value is the default and serializes as a name again.
+                string written = (string)ProjectJson.ToJObject(r.Document).SelectToken(path);
+                Assert.Equal((string)ProjectJson.ToJObject(new ProjectDocument
+                {
+                    Clip = new ClipSettings(), UserVideo = new UserVideoSettings(), Texts = { new TextLayer() },
+                }).SelectToken(path), written);
+            }
+        }
+
+        [Fact]
+        public void UnknownPipShapeNameIsRepaired()
+        {
+            var o = ProjectJson.ParseObject(ReadData("project_v1_full.json"));
+            o["layout"]["pip"]["shape"] = "hexagon";
+            var r = ProjectValidator.Sanitize(ProjectJson.ToDocument(o));
+            Assert.Equal(PipShape.RoundedRect, r.Document.Layout.Pip.Shape);
+            Assert.Contains(r.Issues, i => i.Path == "layout.pip.shape" && i.Code == IssueCode.InvalidValue);
+        }
+
+        [Fact]
+        public void NonStringEnumTokenStillFails()
+        {
+            var o = ProjectJson.ParseObject(ReadData("project_v1.json"));
+            o["layout"]["type"] = true;
+            Assert.ThrowsAny<JsonException>(() => ProjectJson.ToDocument(o));
+        }
+
+        [Fact]
+        public void TolerantConverterPicksAnUndefinedValue()
+        {
+            object v = TolerantEnumConverter.UndefinedValue(typeof(LayoutType));
+            Assert.False(System.Enum.IsDefined(typeof(LayoutType), v));
+            Assert.Equal(-1, (int)(LayoutType)v);
         }
 
         [Fact]

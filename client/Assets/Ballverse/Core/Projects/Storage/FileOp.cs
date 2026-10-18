@@ -18,5 +18,6 @@ namespace Ballverse.Core.Projects
         DeleteDirectory,
         ListDirectories,
         ListFiles,
+        GetFileSize,
     }
 }

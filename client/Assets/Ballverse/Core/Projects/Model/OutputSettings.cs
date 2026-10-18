@@ -1,5 +1,4 @@
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Serialization;
 
 namespace Ballverse.Core.Projects
@@ -11,7 +10,7 @@ namespace Ballverse.Core.Projects
         public string Aspect { get; set; } = ProjectLimits.Aspect916;
 
         /// <summary>How the reel duration is chosen (spec §3.4).</summary>
-        [JsonConverter(typeof(StringEnumConverter), typeof(CamelCaseNamingStrategy))]
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
         public DurationMode DurationMode { get; set; } = DurationMode.Auto;
 
         /// <summary>Reel duration for <see cref="Ballverse.Core.DurationMode.Manual"/>, 1-180 s in microseconds; omitted otherwise.</summary>
@@ -29,5 +28,8 @@ namespace Ballverse.Core.Projects
 
         /// <summary>Last chosen export frame rate (30 or 60), or null for the tier default (spec §3.8).</summary>
         public int? Fps { get; set; }
+
+        /// <summary>Cover frame (spec §3.4 "Обложка"); added at schema 1.</summary>
+        public CoverSettings Cover { get; set; } = new CoverSettings();
     }
 }

@@ -12,9 +12,12 @@ namespace Ballverse.Core.Tests.Projects
         public const string Now = "2026-10-18T12:00:00Z";
         public const string Later = "2026-10-18T12:10:00Z";
 
+        static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> s_data =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+
         public static string ReadData(string relative)
         {
-            return File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TestData", "Projects", relative));
+            return s_data.GetOrAdd(relative, r => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TestData", "Projects", r)));
         }
 
         public static ProjectDocument Golden()

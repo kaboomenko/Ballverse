@@ -231,9 +231,27 @@ namespace Ballverse.Core.Tests.Projects
         [Fact]
         public void EmptyClipTrimIsWidened()
         {
-            var r = Run(d => d.Clip.TrimInTick = d.Clip.TrimOutTick = 600);
+            // Manual duration: only the empty-range rule applies to the clip.
+            var r = Run(d =>
+            {
+                d.Clip.TrimInTick = d.Clip.TrimOutTick = 600;
+                d.Output.DurationMode = DurationMode.Manual;
+                d.Output.ManualDurationUs = 5000000;
+            });
             Assert.Equal(600, r.Document.Clip.TrimInTick);
             Assert.Equal(601, r.Document.Clip.TrimOutTick);
+        }
+
+        [Fact]
+        public void EmptyClipTrimInAutoModeIsWidenedToOneSecondOfReel()
+        {
+            // Golden clip: slow-mo 2 s at 0.5x, so 30 ticks (0.5 s of clip) already play for 1 s.
+            var r = Run(d => d.Clip.TrimInTick = d.Clip.TrimOutTick = 600);
+            Assert.Equal(571, r.Document.Clip.TrimInTick);
+            Assert.Equal(601, r.Document.Clip.TrimOutTick);
+            HasIssue(r, "clip.trimInTick", IssueCode.InvalidRange);
+            HasIssue(r, "clip.trimOutTick", IssueCode.DurationTooShort);
+            Assert.Equal(ProjectLimits.MinDurationUs, ProjectTiming.ReelDurationUs(r.Document));
         }
 
         [Fact]

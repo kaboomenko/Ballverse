@@ -10,5 +10,11 @@ namespace Ballverse.Core.Projects
         TooNew = 2,
         /// <summary>Both files are missing or unusable (unreadable, malformed, unmigratable or with unrepairable errors).</summary>
         Corrupt = 3,
+        /// <summary>
+        /// A file could not be read because of an I/O error (<see cref="System.IO.IOException"/>,
+        /// <see cref="System.UnauthorizedAccessException"/>), which may be temporary. No fallback to the older backup is made,
+        /// because saving over a backup-based document would later erase the newer main file (spec §8 ST6); retry later.
+        /// </summary>
+        Unavailable = 4,
     }
 }

@@ -1,5 +1,4 @@
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Serialization;
 
 namespace Ballverse.Core.Projects
@@ -28,9 +27,16 @@ namespace Ballverse.Core.Projects
         /// <summary>Outline or null for none.</summary>
         public TextStroke Stroke { get; set; }
 
+        /// <summary>Drop shadow (spec §3.5 "тень"); added at schema 1, default off.</summary>
+        public bool Shadow { get; set; }
+
         /// <summary>Background plate.</summary>
-        [JsonConverter(typeof(StringEnumConverter), typeof(CamelCaseNamingStrategy))]
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
         public TextPlate Plate { get; set; } = TextPlate.None;
+
+        /// <summary>Horizontal alignment (spec §3.5 "выравнивание"); added at schema 1, default center.</summary>
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
+        public TextAlign Align { get; set; } = TextAlign.Center;
 
         /// <summary>Anchor position [x, y], normalized 0..1 of the frame.</summary>
         public double[] Pos { get; set; } = { 0.5, 0.5 };

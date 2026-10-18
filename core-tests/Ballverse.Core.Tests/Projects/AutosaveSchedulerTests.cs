@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Ballverse.Core.Projects;
 using Xunit;
 
@@ -122,7 +123,7 @@ namespace Ballverse.Core.Tests.Projects
         {
             // Random bursts of edits: the number of saves equals the number of gaps >= 1 s (plus the final flush).
             var rng = Rng.FromSeed(2026, 10);
-            var s = new AutosaveScheduler();
+            var s = new AutosaveScheduler(maxWaitMs: 0); // the debounce rule alone; the max wait is tested separately
             long now = 0;
             int saves = 0, quietGaps = 0;
             long lastEdit = -1;
@@ -145,6 +146,111 @@ namespace Ballverse.Core.Tests.Projects
             Assert.True(s.ShouldSave(now + 1000));
             Assert.InRange(saves, quietGaps - 5, quietGaps + 5);
             Assert.True(saves < 500);
+        }
+
+        // ---- running save ----
+
+        [Fact]
+        public void NoSecondSaveWhileOneIsRunning()
+        {
+            var s = new AutosaveScheduler();
+            s.MarkChanged(0);
+            Assert.True(s.ShouldSave(1000));
+            long token = s.BeginSave();
+            Assert.True(s.IsSaving);
+            Assert.False(s.ShouldSave(1016));
+            Assert.False(s.ShouldSave(100000));
+            Assert.False(s.OnAppBackgrounded(1020)); // the running save covers every change
+            s.CompleteSave(token);
+            Assert.False(s.IsSaving);
+            Assert.False(s.ShouldSave(100000));
+        }
+
+        [Fact]
+        public void ChangeDuringRunningSaveIsSavedAfterIt()
+        {
+            var s = new AutosaveScheduler();
+            s.MarkChanged(0);
+            long token = s.BeginSave();
+            s.MarkChanged(1100);
+            Assert.False(s.ShouldSave(2100)); // still running
+            Assert.True(s.OnAppBackgrounded(1200)); // newer changes need another save
+            s.CompleteSave(token);
+            Assert.True(s.ShouldSave(1200)); // right after the running save completes
+        }
+
+        [Fact]
+        public void FailedSaveEndsTheRunningState()
+        {
+            var s = new AutosaveScheduler();
+            s.MarkChanged(0);
+            long token = s.BeginSave();
+            s.FailSave(token, 1000);
+            Assert.False(s.IsSaving);
+            Assert.True(s.ShouldSave(2000));
+        }
+
+        [Fact]
+        public void StaleCompletionDoesNotEndTheNewerRunningSave()
+        {
+            var s = new AutosaveScheduler();
+            s.MarkChanged(0);
+            long t1 = s.BeginSave();
+            s.MarkChanged(10);
+            long t2 = s.BeginSave();
+            s.CompleteSave(t1);
+            Assert.True(s.IsSaving);
+            s.CompleteSave(t2);
+            Assert.False(s.IsSaving);
+        }
+
+        // ---- maximum wait during continuous editing ----
+
+        [Fact]
+        public void ContinuousEditingStillSavesWithinMaxWait()
+        {
+            var s = new AutosaveScheduler();
+            Assert.Equal(AutosaveScheduler.DefaultMaxWaitMs, s.MaxWaitMs);
+            var savesAt = new List<long>();
+            for (long t = 0; t <= 60000; t += 16)
+            {
+                s.MarkChanged(t);
+                if (s.ShouldSave(t))
+                {
+                    savesAt.Add(t);
+                    s.CompleteSave(s.BeginSave());
+                }
+            }
+            Assert.NotEmpty(savesAt);
+            Assert.InRange(savesAt[0], 5000, 5016);
+            for (int i = 1; i < savesAt.Count; i++) Assert.InRange(savesAt[i] - savesAt[i - 1], 4984, 5032);
+            Assert.InRange(savesAt.Count, 11, 12);
+        }
+
+        [Fact]
+        public void MaxWaitCountsFromTheFirstUnsavedChange()
+        {
+            var s = new AutosaveScheduler(1000, 3000);
+            s.MarkChanged(100);
+            s.MarkChanged(900);
+            s.MarkChanged(1800);
+            s.MarkChanged(2700);
+            Assert.Equal(3100, s.NextSaveAtMs);
+            s.MarkChanged(3500); // past the bound: due now
+            Assert.Equal(3500, s.NextSaveAtMs);
+            Assert.True(s.ShouldSave(3500));
+            s.CompleteSave(s.BeginSave());
+            s.MarkChanged(4000); // new window
+            Assert.Equal(5000, s.NextSaveAtMs);
+        }
+
+        [Fact]
+        public void MaxWaitDisabledKeepsPureDebounce()
+        {
+            var s = new AutosaveScheduler(1000, 0);
+            for (long t = 0; t <= 20000; t += 100) s.MarkChanged(t);
+            Assert.Equal(21000, s.NextSaveAtMs);
+            Assert.Throws<ArgumentOutOfRangeException>(() => new AutosaveScheduler(1000, -1));
         }
     }
 }

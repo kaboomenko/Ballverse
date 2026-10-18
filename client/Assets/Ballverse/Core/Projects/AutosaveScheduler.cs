@@ -6,52 +6,82 @@ namespace Ballverse.Core.Projects
     /// Pure autosave timing (spec §3.9 "Автосохранение после каждого изменения (с задержкой 1 с) и при уходе приложения в фон").
     /// The caller reports changes and app events with a monotonic millisecond clock and asks when to save; nothing is saved
     /// when nothing changed. Saves are tracked with a change token so edits made while a save is in flight stay dirty.
-    /// The caller runs at most one save at a time.
+    /// <para>The scheduler knows when a save is running (between <see cref="BeginSave"/> and <see cref="CompleteSave"/> /
+    /// <see cref="FailSave"/>): <see cref="ShouldSave"/> is false meanwhile, so a caller polling every frame never starts a
+    /// second, overlapping save.</para>
+    /// <para>Continuous editing (a slider drag reporting a change every frame) keeps restarting the 1 s debounce; the optional
+    /// maximum wait bounds that, so a save still happens at most <see cref="MaxWaitMs"/> after the first unsaved change
+    /// (spec §8 ST6, no project data loss).</para>
     /// </summary>
     public sealed class AutosaveScheduler
     {
         /// <summary>Debounce after the last change, spec §3.9.</summary>
         public const long DefaultDebounceMs = 1000;
 
+        /// <summary>Default upper bound from the first unsaved change to its save during continuous editing (this module's choice).</summary>
+        public const long DefaultMaxWaitMs = 5000;
+
         readonly long _debounceMs;
+        readonly long _maxWaitMs;
         long _changeSeq;
         long _savedSeq;
         long _dueAtMs;
+        long _inFlightToken = -1;
+        bool _hasPending;      // changes not covered by the running save (or by any save when none runs)
+        long _firstPendingMs;  // time of the first of those changes
 
         /// <param name="debounceMs">Delay after the last change before saving (default 1 s).</param>
-        public AutosaveScheduler(long debounceMs = DefaultDebounceMs)
+        /// <param name="maxWaitMs">Longest wait from the first unsaved change (default 5 s); 0 disables the bound.</param>
+        public AutosaveScheduler(long debounceMs = DefaultDebounceMs, long maxWaitMs = DefaultMaxWaitMs)
         {
             if (debounceMs < 0) throw new ArgumentOutOfRangeException(nameof(debounceMs));
+            if (maxWaitMs < 0) throw new ArgumentOutOfRangeException(nameof(maxWaitMs));
             _debounceMs = debounceMs;
+            _maxWaitMs = maxWaitMs;
         }
 
         public long DebounceMs => _debounceMs;
 
+        /// <summary>Upper bound from the first unsaved change to the save; 0 = none.</summary>
+        public long MaxWaitMs => _maxWaitMs;
+
         /// <summary>True when there are changes not covered by a completed save.</summary>
         public bool IsDirty => _changeSeq > _savedSeq;
+
+        /// <summary>True between <see cref="BeginSave"/> and the matching <see cref="CompleteSave"/> or <see cref="FailSave"/>.</summary>
+        public bool IsSaving => _inFlightToken >= 0;
 
         /// <summary>When the next save is due (ms), or null when clean.</summary>
         public long? NextSaveAtMs => IsDirty ? _dueAtMs : (long?)null;
 
-        /// <summary>Records an edit at <paramref name="nowMs"/>; restarts the debounce window.</summary>
+        /// <summary>Records an edit at <paramref name="nowMs"/>; restarts the debounce window, bounded by the maximum wait.</summary>
         public void MarkChanged(long nowMs)
         {
+            if (!_hasPending)
+            {
+                _hasPending = true;
+                _firstPendingMs = nowMs;
+            }
             _changeSeq++;
             _dueAtMs = nowMs + _debounceMs;
+            if (_maxWaitMs > 0 && _firstPendingMs + _maxWaitMs < _dueAtMs) _dueAtMs = Math.Max(nowMs, _firstPendingMs + _maxWaitMs);
         }
 
-        /// <summary>True when dirty and the debounce window has elapsed.</summary>
+        /// <summary>True when dirty, no save is running and the debounce window (or the maximum wait) has elapsed.</summary>
         public bool ShouldSave(long nowMs)
         {
-            return IsDirty && nowMs >= _dueAtMs;
+            return IsDirty && !IsSaving && nowMs >= _dueAtMs;
         }
 
         /// <summary>
-        /// The app goes to the background: returns true (save immediately) when dirty, false when there is nothing to save.
+        /// The app goes to the background: returns true (save immediately) when there are changes that no completed or running
+        /// save covers, false otherwise. While a save is running, true means "save again right after it": <see cref="ShouldSave"/>
+        /// turns true as soon as that save completes.
         /// </summary>
         public bool OnAppBackgrounded(long nowMs)
         {
             if (!IsDirty) return false;
+            if (IsSaving && _inFlightToken == _changeSeq) return false;
             if (_dueAtMs > nowMs) _dueAtMs = nowMs;
             return true;
         }
@@ -59,6 +89,8 @@ namespace Ballverse.Core.Projects
         /// <summary>Call right before serializing the document; pass the token to <see cref="CompleteSave"/> or <see cref="FailSave"/>.</summary>
         public long BeginSave()
         {
+            _inFlightToken = _changeSeq;
+            _hasPending = false;
             return _changeSeq;
         }
 
@@ -67,13 +99,22 @@ namespace Ballverse.Core.Projects
         {
             if (token > _changeSeq) throw new ArgumentOutOfRangeException(nameof(token));
             if (token > _savedSeq) _savedSeq = token;
+            if (token == _inFlightToken) _inFlightToken = -1;
         }
 
         /// <summary>The save failed: stays dirty and retries one debounce interval after <paramref name="nowMs"/>.</summary>
         public void FailSave(long token, long nowMs)
         {
             if (token > _changeSeq) throw new ArgumentOutOfRangeException(nameof(token));
-            if (IsDirty && _dueAtMs < nowMs + _debounceMs) _dueAtMs = nowMs + _debounceMs;
+            if (token == _inFlightToken) _inFlightToken = -1;
+            if (!IsDirty) return;
+            if (!_hasPending)
+            {
+                // The failed save's changes are pending again; the maximum wait restarts from the failure.
+                _hasPending = true;
+                _firstPendingMs = nowMs;
+            }
+            if (_dueAtMs < nowMs + _debounceMs) _dueAtMs = nowMs + _debounceMs;
         }
     }
 }

@@ -21,6 +21,9 @@ namespace Ballverse.Core.Projects
         public const int MaxPadding = 48;
         public const double MinPipSize = 0.20;
         public const double MaxPipSize = 0.60;
+        /// <summary>PiP frame width cap; the spec gives no range, the divider's 16 px is reused.</summary>
+        public const int MinPipBorderPx = 0;
+        public const int MaxPipBorderPx = 16;
         /// <summary>Zoom has no spec maximum; 8x is the chosen sensible cap.</summary>
         public const double MinZoom = 1.0;
         public const double MaxZoom = 8.0;
@@ -30,7 +33,10 @@ namespace Ballverse.Core.Projects
         // §3.4 timeline
         public const double MinSpeed = 0.5;
         public const double MaxSpeed = 2.0;
+        /// <summary>0 means "slow-mo off".</summary>
         public const double MinSlowMoSeconds = 0.0;
+        /// <summary>Shortest active finale slow-mo (spec §3.4 "последние 1-3 с"); values in (0, 1) are raised to it.</summary>
+        public const double MinActiveSlowMoSeconds = 1.0;
         public const double MaxSlowMoSeconds = 3.0;
         public const double MinSlowMoFactor = 0.25;
         public const double MaxSlowMoFactor = 0.5;

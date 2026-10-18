@@ -1,5 +1,4 @@
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Serialization;
 
 namespace Ballverse.Core.Projects
@@ -26,7 +25,7 @@ namespace Ballverse.Core.Projects
         public bool Mirror { get; set; }
 
         /// <summary>Slot fill mode (spec §3.3).</summary>
-        [JsonConverter(typeof(StringEnumConverter), typeof(CamelCaseNamingStrategy))]
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
         public SlotFill Fill { get; set; } = SlotFill.Cover;
 
         /// <summary>Pan offset [x, y], each in -1..1 (fraction of the slot).</summary>
@@ -35,11 +34,17 @@ namespace Ballverse.Core.Projects
         /// <summary>Zoom factor, 1..<see cref="ProjectLimits.MaxZoom"/>.</summary>
         public double Zoom { get; set; } = 1.0;
 
-        /// <summary>User audio volume, 0-2.0 (spec §3.6: 0-200%).</summary>
+        /// <summary>Margin fill in <see cref="SlotFill.Fit"/> mode (spec §3.3); added at schema 1.</summary>
+        public FitBackground FitBackground { get; set; } = new FitBackground();
+
+        /// <summary>
+        /// User audio volume, 0-2.0 (spec §3.6: 0-200%). Mirror of <see cref="AudioSettings.User"/>, which wins: the validator
+        /// copies <c>audio.user</c> here when they differ.
+        /// </summary>
         public double Volume { get; set; } = 1.0;
 
         /// <summary>What the video slot shows when the video is shorter than the reel (spec §3.4).</summary>
-        [JsonConverter(typeof(StringEnumConverter), typeof(CamelCaseNamingStrategy))]
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
         public VideoAfterEnd AfterEnd { get; set; } = VideoAfterEnd.Freeze;
     }
 }

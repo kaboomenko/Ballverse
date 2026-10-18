@@ -77,7 +77,7 @@ namespace Ballverse.Core.Projects
                 if (doc.SchemaVersion != ProjectMigrator.CurrentSchemaVersion)
                 {
                     Error("schemaVersion", IssueCode.InvalidValue,
-                        "Expected schema version " + ProjectMigrator.CurrentSchemaVersion + ", got " + doc.SchemaVersion + "; migrate first.");
+                        "Expected schema version " + Inv(ProjectMigrator.CurrentSchemaVersion) + ", got " + Inv(doc.SchemaVersion) + "; migrate first.");
                 }
 
                 SanitizeId(doc, expectedId);
@@ -110,6 +110,12 @@ namespace Ballverse.Core.Projects
                     doc.Audio = new AudioSettings();
                 }
                 SanitizeAudio(doc.Audio);
+                if (doc.UserVideo != null && !doc.UserVideo.Volume.Equals(doc.Audio.User))
+                {
+                    // audio.user is the mixer's source of truth; userVideo.volume mirrors it (see AudioSettings.User).
+                    Warn("userVideo.volume", IssueCode.InvalidValue, "Differs from audio.user; audio.user copied.");
+                    doc.UserVideo.Volume = doc.Audio.User;
+                }
 
                 if (doc.Output == null)
                 {
@@ -200,7 +206,17 @@ namespace Ballverse.Core.Projects
                     clip.FinaleSlowMo = new FinaleSlowMo();
                 }
                 clip.FinaleSlowMo.Seconds = ClampD(clip.FinaleSlowMo.Seconds, ProjectLimits.MinSlowMoSeconds, ProjectLimits.MaxSlowMoSeconds, 0.0, "clip.finaleSlowMo.seconds");
+                if (clip.FinaleSlowMo.Seconds > 0 && clip.FinaleSlowMo.Seconds < ProjectLimits.MinActiveSlowMoSeconds)
+                {
+                    // Spec §3.4: an active finale slow-mo lasts 1-3 s; 0 stays "off".
+                    Warn("clip.finaleSlowMo.seconds", IssueCode.OutOfRange, "Active slow-mo shorter than 1 s raised to 1 s.");
+                    clip.FinaleSlowMo.Seconds = ProjectLimits.MinActiveSlowMoSeconds;
+                }
                 clip.FinaleSlowMo.Factor = ClampD(clip.FinaleSlowMo.Factor, ProjectLimits.MinSlowMoFactor, ProjectLimits.MaxSlowMoFactor, 0.5, "clip.finaleSlowMo.factor");
+                clip.Fill = EnumValue(clip.Fill, SlotFill.Cover, "clip.fill");
+                clip.Pan = Vector2(clip.Pan, ProjectLimits.MinPan, ProjectLimits.MaxPan, 0.0, "clip.pan");
+                clip.Zoom = ClampD(clip.Zoom, ProjectLimits.MinZoom, ProjectLimits.MaxZoom, 1.0, "clip.zoom");
+                clip.FitBackground = SanitizeFitBackground(clip.FitBackground, "clip.fitBackground");
                 clip.AfterEnd = EnumValue(clip.AfterEnd, SimAfterEnd.Freeze, "clip.afterEnd");
                 clip.SoundPack = OptionalToken(clip.SoundPack, "clip.soundPack");
                 clip.Melody = OptionalToken(clip.Melody, "clip.melody");
@@ -242,6 +258,7 @@ namespace Ballverse.Core.Projects
                 v.Fill = EnumValue(v.Fill, SlotFill.Cover, "userVideo.fill");
                 v.Pan = Vector2(v.Pan, ProjectLimits.MinPan, ProjectLimits.MaxPan, 0.0, "userVideo.pan");
                 v.Zoom = ClampD(v.Zoom, ProjectLimits.MinZoom, ProjectLimits.MaxZoom, 1.0, "userVideo.zoom");
+                v.FitBackground = SanitizeFitBackground(v.FitBackground, "userVideo.fitBackground");
                 v.Volume = ClampD(v.Volume, ProjectLimits.MinVolume, ProjectLimits.MaxVolume, 1.0, "userVideo.volume");
                 v.AfterEnd = EnumValue(v.AfterEnd, VideoAfterEnd.Freeze, "userVideo.afterEnd");
             }
@@ -271,12 +288,20 @@ namespace Ballverse.Core.Projects
                     l.Pip.SizeFraction = ClampD(l.Pip.SizeFraction, ProjectLimits.MinPipSize, ProjectLimits.MaxPipSize, 0.35, "layout.pip.sizeFraction");
                     l.Pip.X = ClampD(l.Pip.X, 0.0, 1.0, 0.5, "layout.pip.x");
                     l.Pip.Y = ClampD(l.Pip.Y, 0.0, 1.0, 0.5, "layout.pip.y");
+                    if (l.Pip.Border == null)
+                    {
+                        Warn("layout.pip.border", IssueCode.Missing, "PiP border missing; default (none) used.");
+                        l.Pip.Border = new PipBorder();
+                    }
+                    l.Pip.Border.Px = ClampI(l.Pip.Border.Px, ProjectLimits.MinPipBorderPx, ProjectLimits.MaxPipBorderPx, "layout.pip.border.px");
+                    l.Pip.Border.Color = Color(l.Pip.Border.Color, ProjectDefaults.PipBorderColor, "layout.pip.border.color");
                 }
             }
 
             List<TextLayer> SanitizeTexts(List<TextLayer> texts)
             {
                 var result = new List<TextLayer>();
+                var paths = new List<string>(); // issue path of each kept layer: its index in the file, not in the result
                 if (texts == null)
                 {
                     Warn("texts", IssueCode.Missing, "Texts missing; empty list used.");
@@ -284,17 +309,19 @@ namespace Ballverse.Core.Projects
                 }
                 for (int i = 0; i < texts.Count; i++)
                 {
+                    string p = "texts[" + Inv(i) + "]";
                     if (texts[i] == null)
                     {
-                        Warn("texts[" + i + "]", IssueCode.InvalidValue, "Null text layer removed.");
+                        Warn(p, IssueCode.InvalidValue, "Null text layer removed.");
                         continue;
                     }
                     if (result.Count == ProjectLimits.MaxTextLayers)
                     {
-                        Warn("texts[" + i + "]", IssueCode.TooMany, "More than " + ProjectLimits.MaxTextLayers + " text layers; extras removed.");
+                        Warn(p, IssueCode.TooMany, "More than " + Inv(ProjectLimits.MaxTextLayers) + " text layers; extras removed.");
                         break;
                     }
                     result.Add(texts[i]);
+                    paths.Add(p);
                 }
 
                 // Ids: keep the first occurrence of each safe id, then give the rest the smallest free "t{n}".
@@ -306,12 +333,12 @@ namespace Ballverse.Core.Projects
                     string id = result[i].Id;
                     if (!ProjectPaths.IsSafeId(id))
                     {
-                        Warn("texts[" + i + "].id", IssueCode.InvalidId, "Missing or unsafe text id regenerated.");
+                        Warn(paths[i] + ".id", IssueCode.InvalidId, "Missing or unsafe text id regenerated.");
                         needsId[i] = true;
                     }
                     else if (!used.Add(id))
                     {
-                        Warn("texts[" + i + "].id", IssueCode.Duplicate, "Duplicate text id regenerated.");
+                        Warn(paths[i] + ".id", IssueCode.Duplicate, "Duplicate text id regenerated.");
                         needsId[i] = true;
                     }
                 }
@@ -325,7 +352,7 @@ namespace Ballverse.Core.Projects
                     result[i].Id = id;
                 }
 
-                for (int i = 0; i < result.Count; i++) SanitizeText(result[i], "texts[" + i + "]");
+                for (int i = 0; i < result.Count; i++) SanitizeText(result[i], paths[i]);
                 return result;
             }
 
@@ -351,6 +378,7 @@ namespace Ballverse.Core.Projects
                     t.Stroke.Color = Color(t.Stroke.Color, ProjectDefaults.StrokeColor, p + ".stroke.color");
                 }
                 t.Plate = EnumValue(t.Plate, TextPlate.None, p + ".plate");
+                t.Align = EnumValue(t.Align, TextAlign.Center, p + ".align");
                 t.Pos = Vector2(t.Pos, 0.0, 1.0, 0.5, p + ".pos");
 
                 long max = ProjectLimits.MaxDurationUs;
@@ -423,6 +451,47 @@ namespace Ballverse.Core.Projects
                     Warn("clip.trimOutTick", IssueCode.DurationTooLong, "Reel longer than 180 s; clip trim shortened.");
                     doc.Clip.TrimOutTick = MaxTrimOutWithinCap(doc.Clip);
                 }
+
+                // Minimum duration (spec §3.8 "1-180 с"). Manual is clamped above; Auto and '= V' lengthen the trim, moving its
+                // start earlier first (that part of the source surely exists) and only then extending its end.
+                if (ProjectTiming.ReelDurationUs(doc) < ProjectLimits.MinDurationUs)
+                {
+                    if (o.DurationMode == DurationMode.Auto && doc.Clip != null)
+                    {
+                        Warn("clip.trimOutTick", IssueCode.DurationTooShort, "Reel shorter than 1 s; clip trim lengthened.");
+                        ExtendClipToMinimum(doc.Clip);
+                    }
+                    else if (o.DurationMode == DurationMode.MatchVideo && doc.UserVideo != null)
+                    {
+                        Warn("userVideo.trimOutUs", IssueCode.DurationTooShort, "Reel shorter than 1 s; video trim lengthened.");
+                        var v = doc.UserVideo;
+                        v.TrimInUs = Math.Max(0, v.TrimOutUs - ProjectLimits.MinDurationUs);
+                        if (v.TrimOutUs - v.TrimInUs < ProjectLimits.MinDurationUs) v.TrimOutUs = v.TrimInUs + ProjectLimits.MinDurationUs;
+                    }
+                }
+
+                if (o.Cover == null)
+                {
+                    Warn("output.cover", IssueCode.Missing, "Cover missing; default used.");
+                    o.Cover = new CoverSettings();
+                }
+                o.Cover.AtUs = ClampL(o.Cover.AtUs, 0, Math.Max(0, ProjectTiming.ReelDurationUs(doc) - 1), "output.cover.atUs");
+            }
+
+            /// <summary>Shortest clip length (ticks) whose output lasts at least 1 s; then fits it into [0, MaxDurationTicks].</summary>
+            static void ExtendClipToMinimum(ClipSettings clip)
+            {
+                var slow = clip.FinaleSlowMo;
+                int lo = 1, hi = SimConstants.MaxDurationTicks;
+                // Output grows with length; the full run is far above 1 s at any allowed speed.
+                while (lo < hi)
+                {
+                    int mid = lo + (hi - lo) / 2;
+                    if (ProjectTiming.ClipOutputUs(0, mid, clip.Speed, slow.Seconds, slow.Factor) >= ProjectLimits.MinDurationUs) hi = mid;
+                    else lo = mid + 1;
+                }
+                clip.TrimInTick = Math.Max(0, clip.TrimOutTick - lo);
+                if (clip.TrimOutTick - clip.TrimInTick < lo) clip.TrimOutTick = Math.Min(SimConstants.MaxDurationTicks, clip.TrimInTick + lo);
             }
 
             static int MaxTrimOutWithinCap(ClipSettings clip)
@@ -450,7 +519,7 @@ namespace Ballverse.Core.Projects
                 for (int i = 0; i < exports.Count; i++)
                 {
                     var e = exports[i];
-                    string p = "exports[" + i + "]";
+                    string p = "exports[" + Inv(i) + "]";
                     if (e == null || !IsTimestamp(e.At) || !Enum.IsDefined(typeof(ExportResolution), e.Res) || !IsFps(e.Fps))
                     {
                         Warn(p, IssueCode.InvalidValue, "Invalid export record removed.");
@@ -462,7 +531,7 @@ namespace Ballverse.Core.Projects
                 }
                 if (result.Count > ProjectLimits.MaxExportRecords)
                 {
-                    Warn("exports", IssueCode.TooMany, "Export history trimmed to the newest " + ProjectLimits.MaxExportRecords + " records.");
+                    Warn("exports", IssueCode.TooMany, "Export history trimmed to the newest " + Inv(ProjectLimits.MaxExportRecords) + " records.");
                     result.RemoveRange(0, result.Count - ProjectLimits.MaxExportRecords);
                 }
                 return result;
@@ -490,6 +559,23 @@ namespace Ballverse.Core.Projects
                     hi = Math.Min(lo + minLen, max);
                 }
                 return true;
+            }
+
+            FitBackground SanitizeFitBackground(FitBackground bg, string p)
+            {
+                if (bg == null)
+                {
+                    Warn(p, IssueCode.Missing, "Fit background missing; default used.");
+                    return new FitBackground();
+                }
+                bg.Kind = EnumValue(bg.Kind, FitBackgroundKind.Blur, p + ".kind");
+                bg.Color = Color(bg.Color, ProjectDefaults.FitBackgroundColor, p + ".color");
+                return bg;
+            }
+
+            static string Inv(long value)
+            {
+                return value.ToString(CultureInfo.InvariantCulture);
             }
 
             string SafePath(string value, string path, string fallback, bool nullable)
@@ -544,14 +630,14 @@ namespace Ballverse.Core.Projects
             int ClampI(int value, int min, int max, string path)
             {
                 if (value >= min && value <= max) return value;
-                Warn(path, IssueCode.OutOfRange, "Clamped to " + min + ".." + max + ".");
+                Warn(path, IssueCode.OutOfRange, "Clamped to " + Inv(min) + ".." + Inv(max) + ".");
                 return value < min ? min : max;
             }
 
             long ClampL(long value, long min, long max, string path)
             {
                 if (value >= min && value <= max) return value;
-                Warn(path, IssueCode.OutOfRange, "Clamped to " + min + ".." + max + ".");
+                Warn(path, IssueCode.OutOfRange, "Clamped to " + Inv(min) + ".." + Inv(max) + ".");
                 return value < min ? min : max;
             }
 
@@ -569,30 +655,104 @@ namespace Ballverse.Core.Projects
                 };
             }
 
-            /// <summary>Removes C0 controls (keeping '\n' when allowed), DEL and unpaired surrogates; truncates without splitting pairs.</summary>
+            /// <summary>
+            /// Removes C0 controls (keeping '\n' when allowed), DEL and unpaired surrogates, then truncates to
+            /// <paramref name="maxLength"/> UTF-16 units without splitting a surrogate pair or an emoji sequence: when the cut
+            /// falls inside a flag, ZWJ, keycap, tag or modifier sequence, the whole partial sequence is dropped (see
+            /// <see cref="JoinedAcrossCut"/>). Uses fixed code point ranges, not StringInfo, so the result is the same on every runtime.
+            /// </summary>
             static string CleanText(string value, int maxLength, bool allowNewline)
             {
                 if (value == null) return null;
                 var sb = new StringBuilder(Math.Min(value.Length, maxLength));
+                int next = -1; // first code point that did not fit
                 for (int i = 0; i < value.Length; i++)
                 {
                     char c = value[i];
+                    int cp, units;
                     if (char.IsHighSurrogate(c))
                     {
-                        if (i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
-                        {
-                            if (sb.Length + 2 > maxLength) break;
-                            sb.Append(c).Append(value[i + 1]);
-                            i++;
-                        }
+                        if (i + 1 >= value.Length || !char.IsLowSurrogate(value[i + 1])) continue;
+                        cp = char.ConvertToUtf32(c, value[i + 1]);
+                        units = 2;
+                    }
+                    else if (char.IsLowSurrogate(c))
+                    {
                         continue;
                     }
-                    if (char.IsLowSurrogate(c)) continue;
-                    if ((c < 0x20 && !(allowNewline && c == '\n')) || c == 0x7F) continue;
-                    if (sb.Length + 1 > maxLength) break;
-                    sb.Append(c);
+                    else
+                    {
+                        if ((c < 0x20 && !(allowNewline && c == '\n')) || c == 0x7F) continue;
+                        cp = c;
+                        units = 1;
+                    }
+                    if (sb.Length + units > maxLength)
+                    {
+                        next = cp;
+                        break;
+                    }
+                    if (units == 2) sb.Append(c).Append(value[i + 1]);
+                    else sb.Append(c);
+                    i += units - 1;
+                }
+                if (next >= 0)
+                {
+                    while (sb.Length > 0)
+                    {
+                        int last = LastCodePoint(sb, out int lastUnits);
+                        if (!JoinedAcrossCut(sb, last, next)) break;
+                        sb.Length -= lastUnits;
+                        next = last;
+                    }
                 }
                 return sb.ToString();
+            }
+
+            /// <summary>
+            /// True when <paramref name="last"/> (the last kept code point) and <paramref name="next"/> belong to one emoji
+            /// sequence: <paramref name="next"/> is an extender, <paramref name="last"/> is a ZERO WIDTH JOINER, or both are
+            /// regional indicators and <paramref name="last"/> opens a pair (odd count of indicators at the end of the kept text).
+            /// </summary>
+            static bool JoinedAcrossCut(StringBuilder kept, int last, int next)
+            {
+                if (IsExtender(next) || last == 0x200D) return true;
+                if (!IsRegionalIndicator(last) || !IsRegionalIndicator(next)) return false;
+                int run = 0;
+                for (int end = kept.Length; end >= 2; end -= 2)
+                {
+                    if (!char.IsLowSurrogate(kept[end - 1]) || !char.IsHighSurrogate(kept[end - 2])) break;
+                    if (!IsRegionalIndicator(char.ConvertToUtf32(kept[end - 2], kept[end - 1]))) break;
+                    run++;
+                }
+                return run % 2 == 1;
+            }
+
+            /// <summary>Code points that attach to the previous one: ZWJ, variation selectors, keycap, skin tones, tags, combining diacritics.</summary>
+            static bool IsExtender(int cp)
+            {
+                return cp == 0x200D
+                    || (cp >= 0xFE00 && cp <= 0xFE0F)
+                    || cp == 0x20E3
+                    || (cp >= 0x1F3FB && cp <= 0x1F3FF)
+                    || (cp >= 0xE0020 && cp <= 0xE007F)
+                    || (cp >= 0x0300 && cp <= 0x036F);
+            }
+
+            static bool IsRegionalIndicator(int cp)
+            {
+                return cp >= 0x1F1E6 && cp <= 0x1F1FF;
+            }
+
+            static int LastCodePoint(StringBuilder sb, out int units)
+            {
+                char lastChar = sb[sb.Length - 1];
+                if (char.IsLowSurrogate(lastChar) && sb.Length >= 2 && char.IsHighSurrogate(sb[sb.Length - 2]))
+                {
+                    units = 2;
+                    return char.ConvertToUtf32(sb[sb.Length - 2], lastChar);
+                }
+                units = 1;
+                return lastChar;
             }
 
             void Warn(string path, IssueCode code, string message)

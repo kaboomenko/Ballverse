@@ -127,6 +127,8 @@ namespace Ballverse.Core.Tests.Projects
         [InlineData("{\"schemaVersion\":1.0}", MigrationError.InvalidVersion)]
         [InlineData("{\"schemaVersion\":-1}", MigrationError.InvalidVersion)]
         [InlineData("{\"schemaVersion\":99999999999}", MigrationError.InvalidVersion)]
+        [InlineData("{\"schemaVersion\":100000000000000000000}", MigrationError.InvalidVersion)]   // BigInteger
+        [InlineData("{\"schemaVersion\":-100000000000000000000}", MigrationError.InvalidVersion)]
         [InlineData("{\"schemaVersion\":true}", MigrationError.InvalidVersion)]
         [InlineData("{\"schemaVersion\":[1]}", MigrationError.InvalidVersion)]
         public void RefusesBadVersions(string json, MigrationError expected)
@@ -136,6 +138,18 @@ namespace Ballverse.Core.Tests.Projects
             Assert.Equal(expected, r.Error);
             Assert.Null(r.Document);
             Assert.NotNull(r.Message);
+        }
+
+        [Fact]
+        public void IntegerBeyondInt64NeverThrowsOutsideTheContract()
+        {
+            var o = ProjectJson.ParseObject("{\"schemaVersion\": 100000000000000000000}");
+            Assert.Equal(JTokenType.Integer, o["schemaVersion"].Type);
+            var r = ProjectMigrator.Default.Migrate(o);
+            Assert.Equal(MigrationError.InvalidVersion, r.Error);
+            Assert.Contains("100000000000000000000", r.Message);
+            var ex = Assert.Throws<ProjectMigrationException>(() => ProjectMigrator.Default.MigrateOrThrow(o));
+            Assert.Equal(MigrationError.InvalidVersion, ex.Error);
         }
 
         [Fact]

@@ -1,5 +1,4 @@
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Serialization;
 
 namespace Ballverse.Core.Projects
@@ -8,7 +7,7 @@ namespace Ballverse.Core.Projects
     public sealed class PipSettings
     {
         /// <summary>Window shape.</summary>
-        [JsonConverter(typeof(StringEnumConverter), typeof(CamelCaseNamingStrategy))]
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
         public PipShape Shape { get; set; } = PipShape.RoundedRect;
 
         /// <summary>Window width as a fraction of the frame width, 0.20-0.60.</summary>
@@ -19,5 +18,11 @@ namespace Ballverse.Core.Projects
 
         /// <summary>Window center Y, normalized 0..1.</summary>
         public double Y { get; set; } = 0.25;
+
+        /// <summary>Window frame (spec §3.3 "рамка"); added at schema 1, default no frame.</summary>
+        public PipBorder Border { get; set; } = new PipBorder();
+
+        /// <summary>Drop shadow under the window (spec §3.3 "тень"); added at schema 1, default on.</summary>
+        public bool Shadow { get; set; } = true;
     }
 }

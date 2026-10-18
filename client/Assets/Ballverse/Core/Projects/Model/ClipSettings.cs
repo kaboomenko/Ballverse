@@ -1,5 +1,4 @@
 using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Serialization;
 
 namespace Ballverse.Core.Projects
@@ -25,8 +24,21 @@ namespace Ballverse.Core.Projects
         /// <summary>Finale slow motion (spec §3.4).</summary>
         public FinaleSlowMo FinaleSlowMo { get; set; } = new FinaleSlowMo();
 
+        /// <summary>Fill mode of the simulation slot (spec §3.3 "Регулировки внутри слота"); added at schema 1.</summary>
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
+        public SlotFill Fill { get; set; } = SlotFill.Cover;
+
+        /// <summary>Pan offset of the simulation slot [x, y], each in -1..1 (fraction of the slot); added at schema 1.</summary>
+        public double[] Pan { get; set; } = { 0.0, 0.0 };
+
+        /// <summary>Zoom of the simulation slot, 1..<see cref="ProjectLimits.MaxZoom"/>; added at schema 1.</summary>
+        public double Zoom { get; set; } = 1.0;
+
+        /// <summary>Margin fill of the simulation slot in <see cref="SlotFill.Fit"/> mode (spec §3.3); added at schema 1.</summary>
+        public FitBackground FitBackground { get; set; } = new FitBackground();
+
         /// <summary>What the simulation slot shows when the clip is shorter than the video (spec §3.4).</summary>
-        [JsonConverter(typeof(StringEnumConverter), typeof(CamelCaseNamingStrategy))]
+        [JsonConverter(typeof(TolerantEnumConverter), typeof(CamelCaseNamingStrategy))]
         public SimAfterEnd AfterEnd { get; set; } = SimAfterEnd.Freeze;
 
         /// <summary>Sound pack id, e.g. "Melody" (spec §3.6, §2.7).</summary>
