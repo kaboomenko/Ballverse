@@ -14,6 +14,9 @@ namespace Ballverse.Core.Replay
     /// strings ≤ 1 MiB, paramsJson ≤ 256 KiB, chunk length ≤ remaining stream length (seekable) and ≤ 16 MiB for known tags,
     /// list counts ≤ remaining payload, ticks ≤ durationTicks, paramsHash must match paramsJson, tickRate must be 60,
     /// at most one RSLT chunk.</item>
+    /// <item>Applies the writer's own rules, so <c>ReplayWriter.Write(ReplayReader.Read(x))</c> always succeeds: modeId is
+    /// <c>[a-z0-9_]{1,64}</c>, appVersion printable ASCII ≤ 64 chars, paramsJson strict RFC 8259 JSON, every PARM value strict
+    /// compact JSON (a flipped byte in a value surfaces here as <see cref="InvalidDataException"/>, not later in a JSON parser).</item>
     /// </list>
     /// Non-seekable streams are supported: payloads are read in bounded blocks so a lying length cannot force a huge allocation.
     /// </summary>
@@ -86,7 +89,9 @@ namespace Ballverse.Core.Replay
                         uint tick = Advance(ref paramTick, r, duration);
                         string id = r.ReadString(BvrFormat.MaxStringBytes, "paramId");
                         string value = r.ReadString(BvrFormat.MaxStringBytes, "param value");
-                        if (id.Length == 0 || value.Length == 0) throw new InvalidDataException("Empty paramId or value in PARM");
+                        if (id.Length == 0) throw new InvalidDataException("Empty paramId in PARM");
+                        string jsonError = StrictJson.Validate(value, true);
+                        if (jsonError != null) throw new InvalidDataException("PARM value is not compact JSON: " + jsonError);
                         parms.Add(new ReplayParamChange(tick, id, value));
                     }
                 }
@@ -143,10 +148,13 @@ namespace Ballverse.Core.Replay
             ushort version = ReadU16(s);
             if (version != BvrFormat.CurrentVersion) throw new UnsupportedReplayVersionException(version);
 
-            string modeId = ReadString(s, BvrFormat.MaxStringBytes, "modeId");
-            if (modeId.Length == 0) throw new InvalidDataException("Empty modeId");
+            string modeId = ReadString(s, BvrFormat.MaxModeIdLength, "modeId");
+            string error = ReplayHeader.CheckModeId(modeId);
+            if (error != null) throw new InvalidDataException(error);
             ushort modeSimVersion = ReadU16(s);
-            string appVersion = ReadString(s, BvrFormat.MaxStringBytes, "appVersion");
+            string appVersion = ReadString(s, BvrFormat.MaxAppVersionLength, "appVersion");
+            error = ReplayHeader.CheckAppVersion(appVersion);
+            if (error != null) throw new InvalidDataException(error);
             int backend = s.ReadByte();
             if (backend < 0) throw new InvalidDataException("Truncated header");
             ushort tickRate = ReadU16(s);
@@ -159,6 +167,8 @@ namespace Ballverse.Core.Replay
 
             var header = new ReplayHeader(modeId, modeSimVersion, appVersion, (PhysicsBackend)backend, seed, paramsJson, duration);
             if (header.ParamsHash != paramsHash) throw new InvalidDataException("paramsHash does not match paramsJson");
+            error = StrictJson.Validate(paramsJson, false);
+            if (error != null) throw new InvalidDataException("paramsJson is not valid JSON: " + error);
             return header;
         }
 

@@ -89,6 +89,35 @@ namespace Ballverse.Core.Tests.Replay
         }
 
         [Fact]
+        public void Fuzz_InsertDeleteMutations()
+        {
+            var rng = Rng.FromSeed(31337, 14);
+            for (int i = 0; i < 1500; i++)
+            {
+                var bytes = new System.Collections.Generic.List<byte>(Valid((ulong)(i % 40)));
+                int mutations = rng.NextInt(1, 4);
+                for (int k = 0; k < mutations && bytes.Count > 0; k++)
+                {
+                    int pos = rng.NextInt(0, bytes.Count);
+                    switch (rng.NextInt(0, 3))
+                    {
+                        case 0:
+                            int insert = rng.NextInt(1, 9);
+                            for (int n = 0; n < insert; n++) bytes.Insert(pos, (byte)rng.NextUInt(256));
+                            break;
+                        case 1:
+                            bytes.RemoveRange(pos, Math.Min(rng.NextInt(1, 9), bytes.Count - pos));
+                            break;
+                        default:
+                            bytes[pos] ^= (byte)(1 << rng.NextInt(0, 8));
+                            break;
+                    }
+                }
+                ReadMustFailCleanly(bytes.ToArray(), (i & 1) == 0);
+            }
+        }
+
+        [Fact]
         public void FlipsInHeaderFailCleanly()
         {
             byte[] valid = ReplayWriter.WriteToArray(ReplayTestUtil.Sample());

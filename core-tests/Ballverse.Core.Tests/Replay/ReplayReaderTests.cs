@@ -11,7 +11,7 @@ namespace Ballverse.Core.Tests.Replay
     {
         /// <summary>Hand-built header so individual fields can be corrupted.</summary>
         static byte[] RawHeader(ushort version = 1, string modeId = "m", ushort tickRate = 60, string paramsJson = "{}",
-            ulong? paramsHash = null, uint duration = 100, byte backend = 1, byte[] modeIdBytes = null, ulong? modeIdLength = null)
+            ulong? paramsHash = null, uint duration = 100, byte backend = 1, byte[] modeIdBytes = null, ulong? modeIdLength = null, string appVersion = "")
         {
             var ms = new MemoryStream();
             ms.Write(Encoding.ASCII.GetBytes("BVR1"), 0, 4);
@@ -20,7 +20,9 @@ namespace Ballverse.Core.Tests.Replay
             VarInt.WriteULong(ms, modeIdLength ?? (ulong)id.Length);
             ms.Write(id, 0, id.Length);
             ms.Write(BitConverter.GetBytes((ushort)7), 0, 2);
-            VarInt.WriteULong(ms, 0);
+            byte[] app = Encoding.UTF8.GetBytes(appVersion);
+            VarInt.WriteULong(ms, (ulong)app.Length);
+            ms.Write(app, 0, app.Length);
             ms.WriteByte(backend);
             ms.Write(BitConverter.GetBytes(tickRate), 0, 2);
             ms.Write(BitConverter.GetBytes(42UL), 0, 8);
@@ -265,6 +267,113 @@ namespace Ballverse.Core.Tests.Replay
             var closed = new MemoryStream();
             closed.Dispose();
             Assert.Throws<ArgumentException>(() => ReplayReader.Read(closed));
+        }
+
+        static byte[] Parm(string id, string value)
+        {
+            var ms = new MemoryStream();
+            VarInt.WriteULong(ms, 1);
+            byte[] a = Encoding.UTF8.GetBytes(id);
+            VarInt.WriteULong(ms, (ulong)a.Length);
+            ms.Write(a, 0, a.Length);
+            byte[] b = Encoding.UTF8.GetBytes(value);
+            VarInt.WriteULong(ms, (ulong)b.Length);
+            ms.Write(b, 0, b.Length);
+            return ReplayTestUtil.Chunk("PARM", ms.ToArray());
+        }
+
+        [Theory]
+        [InlineData("2/0")]
+        [InlineData("{a:1}")]
+        [InlineData("'x'")]
+        [InlineData("NaN")]
+        [InlineData("[1,]")]
+        [InlineData("[1, 2]")]
+        [InlineData("not json")]
+        public void Reader_RejectsNonJsonParmValue(string value)
+        {
+            AssertInvalid(Concat(RawHeader(), Parm("p", value)));
+        }
+
+        [Fact]
+        public void Reader_AcceptsCompactJsonParmValues()
+        {
+            var r = ReplayReader.Read(Concat(RawHeader(), Parm("p", "{\"x\":[1,-2.5e3,true,null,\"a b\"]}")));
+            Assert.Equal("{\"x\":[1,-2.5e3,true,null,\"a b\"]}", r.ParamChanges[0].ValueJson);
+            ReplayWriter.WriteToArray(r);
+        }
+
+        [Fact]
+        public void SingleByteFlipInParmValueIsDetected()
+        {
+            var w = new ReplayFile(ReplayTestUtil.Header(10), null, new[] { new ReplayParamChange(1, "speed", "2.0") }, null, null, null);
+            byte[] bytes = ReplayWriter.WriteToArray(w);
+            int dot = -1;
+            for (int i = 1; i + 1 < bytes.Length; i++)
+            {
+                if (bytes[i - 1] == (byte)'2' && bytes[i] == (byte)'.' && bytes[i + 1] == (byte)'0') dot = i;
+            }
+            Assert.True(dot > 0);
+            bytes[dot] = (byte)'/';
+            AssertInvalid(bytes);
+        }
+
+        [Theory]
+        [InlineData("not json at all")]
+        [InlineData("")]
+        [InlineData("{a:1}")]
+        [InlineData("{\"a\":NaN}")]
+        public void Reader_RejectsNonJsonParamsJson(string paramsJson)
+        {
+            AssertInvalid(RawHeader(paramsJson: paramsJson));
+        }
+
+        [Fact]
+        public void Reader_AcceptsIndentedParamsJson()
+        {
+            var r = ReplayReader.Read(RawHeader(paramsJson: "{\n  \"a\": 1\n}"));
+            Assert.Equal("{\n  \"a\": 1\n}", r.Header.ParamsJson);
+            ReplayWriter.WriteToArray(r);
+        }
+
+        [Theory]
+        [InlineData("../../projects/x")]
+        [InlineData("Ring_Escape")]
+        [InlineData("ring escape")]
+        [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+        public void Reader_RejectsMalformedModeId(string modeId)
+        {
+            AssertInvalid(RawHeader(modeId: modeId));
+        }
+
+        [Fact]
+        public void Reader_RejectsControlCharactersInHeaderStrings()
+        {
+            AssertInvalid(RawHeader(modeId: "ring_escape\0"));
+            AssertInvalid(RawHeader(modeId: "ring\u202Eescape"));
+            AssertInvalid(RawHeader(appVersion: "1.0\0"));
+            AssertInvalid(RawHeader(appVersion: "1.0\u202E"));
+        }
+
+        [Fact]
+        public void Reader_RejectsOverlongModeIdBeforeAllocating()
+        {
+            AssertInvalid(RawHeader(modeIdBytes: new byte[0], modeIdLength: 65));
+        }
+
+        [Theory]
+        [InlineData("1.0\n")]
+        [InlineData("версия")]
+        [InlineData("1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+        public void Reader_RejectsMalformedAppVersion(string appVersion)
+        {
+            AssertInvalid(RawHeader(appVersion: appVersion));
+        }
+
+        [Fact]
+        public void Reader_AcceptsPrintableAppVersion()
+        {
+            Assert.Equal("1.0.0 (42)", ReplayReader.Read(RawHeader(appVersion: "1.0.0 (42)")).Header.AppVersion);
         }
 
         internal static long HeaderLength(byte[] file)

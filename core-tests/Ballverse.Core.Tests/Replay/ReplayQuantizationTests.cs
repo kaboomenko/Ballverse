@@ -134,6 +134,27 @@ namespace Ballverse.Core.Tests.Replay
         }
 
         [Fact]
+        public void QuantizeFixed_RoundTripWithinHalfUnit()
+        {
+            var rng = Ballverse.Core.Rng.FromSeed(99, 4);
+            int[] scales = { 1, 10, 1000, 65536 };
+            foreach (int units in scales)
+            {
+                for (int i = 0; i < 2000; i++)
+                {
+                    float v = rng.NextFloat(-1000f, 1000f);
+                    float back = ReplayQuantization.DequantizeFixed(ReplayQuantization.QuantizeFixed(v, units), units);
+                    double bound = 0.5 / units + Math.Abs(v) * 1.2e-7 + 1e-9;
+                    Assert.True(Math.Abs(back - v) <= bound, v + " at " + units + " -> " + back);
+                }
+            }
+            for (int q = -1000; q <= 1000; q++)
+            {
+                Assert.Equal(q, ReplayQuantization.QuantizeFixed(ReplayQuantization.DequantizeFixed(q, 1000), 1000));
+            }
+        }
+
+        [Fact]
         public void QuantizedInputsSurviveTheReplay()
         {
             var ms = new System.IO.MemoryStream();

@@ -34,7 +34,11 @@ namespace Ballverse.Core.Replay
         /// <summary>Run result, or null when the file has no RSLT chunk (e.g. a run aborted before the finale).</summary>
         public ReplayResult Result { get; }
 
-        /// <summary>Number of chunks with unknown tags that the reader skipped (forward compatibility).</summary>
+        /// <summary>
+        /// Number of chunks with unknown tags that the reader skipped (forward compatibility). Their bytes are not kept, so
+        /// re-encoding this file with <see cref="ReplayWriter.Write(System.IO.Stream, ReplayFile, int)"/> drops them; copy
+        /// <c>.bvr</c> files byte for byte instead of re-encoding them.
+        /// </summary>
         public int SkippedChunkCount { get; }
 
         static T[] Copy<T>(IReadOnlyList<T> list)

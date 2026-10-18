@@ -27,6 +27,10 @@ namespace Ballverse.Core.Replay
 
         /// <summary>Upper bound for any string field, UTF-8 bytes (allocation guard).</summary>
         public const int MaxStringBytes = 1 << 20;
+        /// <summary>Maximum length of the header modeId; it must match <c>[a-z0-9_]{1,64}</c> (spec §2.8 ids such as "ring_escape").</summary>
+        public const int MaxModeIdLength = 64;
+        /// <summary>Maximum length of the header appVersion; printable ASCII (0x20..0x7E) only, may be empty.</summary>
+        public const int MaxAppVersionLength = 64;
         /// <summary>Upper bound for the header paramsJson, UTF-8 bytes.</summary>
         public const int MaxParamsJsonBytes = 256 << 10;
         /// <summary>Upper bound for a known chunk payload; the writer never gets close (it flushes much earlier).</summary>

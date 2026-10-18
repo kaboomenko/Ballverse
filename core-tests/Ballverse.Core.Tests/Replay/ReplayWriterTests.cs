@@ -243,6 +243,41 @@ namespace Ballverse.Core.Tests.Replay
             Assert.Equal(1, input.Values[0]);
         }
 
+        [Theory]
+        [InlineData("ring_escape")]
+        [InlineData("m")]
+        [InlineData("mode_15")]
+        [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+        public void HeaderAcceptsModeIdGrammar(string modeId)
+        {
+            Assert.Equal(modeId, new ReplayHeader(modeId, 0, "", PhysicsBackend.None, 0, "{}").ModeId);
+        }
+
+        [Theory]
+        [InlineData("../../projects/x")]
+        [InlineData("Ring_Escape")]
+        [InlineData("ring-escape")]
+        [InlineData("ring escape")]
+        [InlineData("режим")]
+        [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+        public void HeaderRejectsMalformedModeId(string modeId)
+        {
+            Assert.Throws<ArgumentException>(() => new ReplayHeader(modeId, 0, "", PhysicsBackend.None, 0, "{}"));
+        }
+
+        [Fact]
+        public void HeaderRejectsControlCharactersInIds()
+        {
+            Assert.Throws<ArgumentException>(() => new ReplayHeader("x\0", 0, "", PhysicsBackend.None, 0, "{}"));
+            Assert.Throws<ArgumentException>(() => new ReplayHeader("x\u202E", 0, "", PhysicsBackend.None, 0, "{}"));
+            Assert.Throws<ArgumentException>(() => new ReplayHeader("m", 0, "1.0\0", PhysicsBackend.None, 0, "{}"));
+            Assert.Throws<ArgumentException>(() => new ReplayHeader("m", 0, "1.0\n", PhysicsBackend.None, 0, "{}"));
+            Assert.Throws<ArgumentException>(() => new ReplayHeader("m", 0, "версия", PhysicsBackend.None, 0, "{}"));
+            Assert.Throws<ArgumentException>(() => new ReplayHeader("m", 0, new string('1', 65), PhysicsBackend.None, 0, "{}"));
+            Assert.Equal(new string('1', 64), new ReplayHeader("m", 0, new string('1', 64), PhysicsBackend.None, 0, "{}").AppVersion);
+            Assert.Equal(" ~", new ReplayHeader("m", 0, " ~", PhysicsBackend.None, 0, "{}").AppVersion);
+        }
+
         [Fact]
         public void ParamsHashIsXxHash64OfUtf8Json()
         {

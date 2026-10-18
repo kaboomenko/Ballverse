@@ -114,7 +114,7 @@ namespace Ballverse.Core.Tests.Replay
         [Fact]
         public void UnicodeStringsRoundTrip()
         {
-            var header = new ReplayHeader("режим_🎲", 1, "", PhysicsBackend.None, 0, "{\"name\":\"Какой шар победит? 🎉\"}", 10);
+            var header = new ReplayHeader("mode_1", 1, "", PhysicsBackend.None, 0, "{\"name\":\"Какой шар победит? 🎉\"}", 10);
             var replay = new ReplayFile(header, null, new[] { new ReplayParamChange(1, "текст", "\"π≈3.14\"") }, null, null,
                 new ReplayResult("", -1, null, 10));
             var read = ReplayReader.Read(ReplayWriter.WriteToArray(replay));

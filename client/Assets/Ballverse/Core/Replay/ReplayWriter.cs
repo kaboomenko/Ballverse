@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace Ballverse.Core.Replay
 {
@@ -21,6 +19,16 @@ namespace Ballverse.Core.Replay
     /// may span several chunks of the same tag; the tick delta continues across chunks (first record of a stream is relative to 0).
     /// Identical calls produce identical bytes.
     /// </para>
+    /// <para>
+    /// The replay must be the last thing in the stream: for a seekable output, <see cref="Finish"/> truncates anything after the
+    /// replay's end (e.g. a longer older replay in a reused stream), so the reader never sees a stale tail.
+    /// </para>
+    /// <para>
+    /// Failures: if <see cref="Finish"/> throws an I/O error it may be called again with the same durationTicks; the trailer
+    /// (remaining records and RSLT) is encoded once and rewritten at the same offset, so a retry never duplicates RSLT. If writing
+    /// a mid-run chunk fails, or copying the buffer to a non-seekable output fails part-way, the output is in an unknown state
+    /// and the writer becomes faulted: every later call throws <see cref="InvalidOperationException"/>.
+    /// </para>
     /// </summary>
     public sealed class ReplayWriter
     {
@@ -36,6 +44,11 @@ namespace Ballverse.Core.Replay
         readonly RecordStream _events;
         ReplayResult _result;
         ReplayHeader _finishedHeader;
+        bool _faulted;
+        MemoryStream _trailer;
+        long _trailerStart;
+        uint _trailerDuration;
+        bool _copied;
 
         /// <param name="output">Writable destination; seekable streams are patched in place, others are buffered.</param>
         /// <param name="header">Header; its <see cref="ReplayHeader.DurationTicks"/> is ignored (set by <see cref="Finish"/>).</param>
@@ -46,7 +59,8 @@ namespace Ballverse.Core.Replay
             if (header == null) throw new ArgumentNullException(nameof(header));
             if (!output.CanWrite) throw new ArgumentException("Stream must be writable", nameof(output));
             if (recordsPerChunk < 1) throw new ArgumentOutOfRangeException(nameof(recordsPerChunk), "recordsPerChunk must be >= 1");
-            ValidateJson(header.ParamsJson, "header.ParamsJson");
+            string jsonError = StrictJson.Validate(header.ParamsJson, false);
+            if (jsonError != null) throw new ArgumentException("paramsJson is not valid JSON: " + jsonError, nameof(header));
 
             _output = output;
             _header = header;
@@ -76,22 +90,32 @@ namespace Ballverse.Core.Replay
         public void AddInput(ReplayInput input)
         {
             if (input == null) throw new ArgumentNullException(nameof(input));
+            AddInput(input.Tick, input.Type, input.Values);
+        }
+
+        /// <summary>
+        /// Appends an input event (INPT, spec §2.6) without allocating: the values are encoded straight into the stream buffer,
+        /// so a caller may reuse one array per tick (e.g. M10 gravity, spec §2.6). At most <see cref="BvrFormat.MaxInputValues"/>
+        /// values; null means empty.
+        /// </summary>
+        public void AddInput(uint tick, byte type, IReadOnlyList<int> values)
+        {
             EnsureOpen();
-            _inputs.CheckTick(input.Tick);
-            var s = _inputs.BeginRecord(input.Tick);
-            s.WriteByte(input.Type);
-            VarInt.WriteULong(s, (ulong)input.Values.Count);
-            for (int i = 0; i < input.Values.Count; i++) VarInt.WriteLong(s, input.Values[i]);
+            int n = values == null ? 0 : values.Count;
+            if (n > BvrFormat.MaxInputValues)
+                throw new ArgumentException("Input payload has " + n + " values, limit is " + BvrFormat.MaxInputValues, nameof(values));
+            _inputs.CheckTick(tick);
+            var s = _inputs.BeginRecord(tick);
+            s.WriteByte(type);
+            VarInt.WriteULong(s, (ulong)n);
+            for (int i = 0; i < n; i++) VarInt.WriteLong(s, values[i]);
             EndRecord(_inputs);
         }
 
-        /// <summary>Appends an input event (INPT, spec §2.6).</summary>
-        public void AddInput(uint tick, byte type, IReadOnlyList<int> values)
-        {
-            AddInput(new ReplayInput(tick, type, values));
-        }
-
-        /// <summary>Appends a live parameter change (PARM). <c>ValueJson</c> must be valid JSON (ArgumentException otherwise).</summary>
+        /// <summary>
+        /// Appends a live parameter change (PARM). <c>ValueJson</c> must be strict, compact RFC 8259 JSON: no whitespace outside
+        /// strings, no comments, single quotes, unquoted names, trailing commas or NaN/Infinity (ArgumentException otherwise).
+        /// </summary>
         public void AddParamChange(ReplayParamChange change)
         {
             if (change == null) throw new ArgumentNullException(nameof(change));
@@ -99,7 +123,8 @@ namespace Ballverse.Core.Replay
             _params.CheckTick(change.Tick);
             byte[] id = BvrEncoding.EncodeString(change.ParamId, BvrFormat.MaxStringBytes, nameof(change));
             byte[] value = BvrEncoding.EncodeString(change.ValueJson, BvrFormat.MaxStringBytes, nameof(change));
-            ValidateJson(change.ValueJson, nameof(change));
+            string jsonError = StrictJson.Validate(change.ValueJson, true);
+            if (jsonError != null) throw new ArgumentException("PARM value is not compact JSON: " + jsonError, nameof(change));
             var s = _params.BeginRecord(change.Tick);
             BvrEncoding.WriteBytesWithLength(s, id);
             BvrEncoding.WriteBytesWithLength(s, value);
@@ -164,38 +189,80 @@ namespace Ballverse.Core.Replay
         }
 
         /// <summary>
-        /// Flushes all streams (INPT, PARM, HASH, EVNT, then RSLT), patches durationTicks and, for non-seekable outputs, copies the
-        /// buffered file to the stream. Throws ArgumentException (leaving the writer open) when any record tick or the result's
-        /// finishTick exceeds <paramref name="durationTicks"/>. Returns the final header.
+        /// Flushes all streams (INPT, PARM, HASH, EVNT, then RSLT), patches durationTicks, truncates a seekable output after the
+        /// replay and, for non-seekable outputs, copies the buffered file to the stream. Throws ArgumentException (leaving the
+        /// writer open) when any record tick or the result's finishTick exceeds <paramref name="durationTicks"/>. If an I/O error
+        /// escapes, Finish may be retried with the same durationTicks (see the class remarks). Returns the final header.
         /// </summary>
         public ReplayHeader Finish(uint durationTicks)
         {
-            EnsureOpen();
-            uint maxTick = Math.Max(Math.Max(_inputs.LastTick, _params.LastTick), Math.Max(_hashes.LastTick, _events.LastTick));
-            if (maxTick > durationTicks)
-                throw new ArgumentException("A record at tick " + maxTick + " lies beyond durationTicks " + durationTicks, nameof(durationTicks));
-            if (_result != null && _result.FinishTick > durationTicks)
-                throw new ArgumentException("Result finishTick " + _result.FinishTick + " lies beyond durationTicks " + durationTicks, nameof(durationTicks));
+            if (_finishedHeader != null) throw new InvalidOperationException("ReplayWriter is finished");
+            EnsureNotFaulted();
+            if (_trailer == null)
+            {
+                uint maxTick = Math.Max(Math.Max(_inputs.LastTick, _params.LastTick), Math.Max(_hashes.LastTick, _events.LastTick));
+                if (maxTick > durationTicks)
+                    throw new ArgumentException("A record at tick " + maxTick + " lies beyond durationTicks " + durationTicks, nameof(durationTicks));
+                if (_result != null && _result.FinishTick > durationTicks)
+                    throw new ArgumentException("Result finishTick " + _result.FinishTick + " lies beyond durationTicks " + durationTicks, nameof(durationTicks));
 
-            FlushStream(_inputs);
-            FlushStream(_params);
-            FlushStream(_hashes);
-            FlushStream(_events);
-            if (_result != null) WriteChunk(BvrFormat.TagResult, EncodeResult(_result));
+                // Encode the trailer once, off the output, so a failed write can be redone without duplicating records or RSLT.
+                var trailer = new MemoryStream();
+                FlushStream(_inputs, trailer);
+                FlushStream(_params, trailer);
+                FlushStream(_hashes, trailer);
+                FlushStream(_events, trailer);
+                if (_result != null)
+                {
+                    byte[] payload = EncodeResult(_result);
+                    WriteChunk(trailer, BvrFormat.TagResult, payload, payload.Length);
+                }
+                _trailerStart = _target.Position;
+                _trailerDuration = durationTicks;
+                _trailer = trailer;
+            }
+            else if (durationTicks != _trailerDuration)
+            {
+                throw new ArgumentException("A retried Finish must pass the same durationTicks (" + _trailerDuration + ")", nameof(durationTicks));
+            }
 
-            long end = _target.Position;
-            _target.Position = _durationPosition;
-            BvrEncoding.WriteU32(_target, durationTicks);
-            _target.Position = end;
-
-            if (_fileBuffer != null) _fileBuffer.WriteTo(_output);
+            if (!_copied)
+            {
+                _target.Position = _trailerStart;
+                _target.Write(_trailer.GetBuffer(), 0, (int)_trailer.Length);
+                long end = _target.Position;
+                _target.Position = _durationPosition;
+                BvrEncoding.WriteU32(_target, durationTicks);
+                _target.Position = end;
+                if (_fileBuffer == null)
+                {
+                    Truncate(end);
+                }
+                else
+                {
+                    try
+                    {
+                        _fileBuffer.WriteTo(_output);
+                    }
+                    catch
+                    {
+                        _faulted = true;
+                        throw;
+                    }
+                }
+                _copied = true;
+            }
             _output.Flush();
 
             _finishedHeader = _header.WithDurationTicks(durationTicks);
             return _finishedHeader;
         }
 
-        /// <summary>Writes a whole in-memory replay (header duration taken from <c>replay.Header.DurationTicks</c>).</summary>
+        /// <summary>
+        /// Writes a whole in-memory replay (header duration taken from <c>replay.Header.DurationTicks</c>).
+        /// Chunks with unknown tags that the reader skipped are not part of <see cref="ReplayFile"/> and are not written back:
+        /// re-encoding a file from a newer build drops them, so storage code must copy <c>.bvr</c> files byte for byte.
+        /// </summary>
         public static void Write(Stream output, ReplayFile replay, int recordsPerChunk = BvrFormat.DefaultRecordsPerChunk)
         {
             if (replay == null) throw new ArgumentNullException(nameof(replay));
@@ -245,53 +312,61 @@ namespace Ballverse.Core.Replay
             return s.ToArray();
         }
 
-        static void ValidateJson(string json, string paramName)
-        {
-            try
-            {
-                using (var reader = new JsonTextReader(new StringReader(json)))
-                {
-                    reader.DateParseHandling = DateParseHandling.None;
-                    JToken.ReadFrom(reader);
-                    if (reader.Read()) throw new ArgumentException("Unexpected content after the JSON value", paramName);
-                }
-            }
-            catch (JsonException e)
-            {
-                throw new ArgumentException("Not valid JSON: " + e.Message, paramName, e);
-            }
-        }
-
         void EnsureOpen()
         {
             if (_finishedHeader != null) throw new InvalidOperationException("ReplayWriter is finished");
+            EnsureNotFaulted();
+            if (_trailer != null) throw new InvalidOperationException("Finish has started; call Finish again to complete it");
+        }
+
+        void EnsureNotFaulted()
+        {
+            if (_faulted) throw new InvalidOperationException("ReplayWriter is faulted after an output error; the output is incomplete");
         }
 
         void EndRecord(RecordStream stream)
         {
             stream.Count++;
-            if (stream.Count >= _recordsPerChunk || stream.Buffer.Length >= BvrFormat.FlushThresholdBytes) FlushStream(stream);
+            if (stream.Count < _recordsPerChunk && stream.Buffer.Length < BvrFormat.FlushThresholdBytes) return;
+            try
+            {
+                FlushStream(stream, _target);
+            }
+            catch
+            {
+                _faulted = true;
+                throw;
+            }
         }
 
-        void FlushStream(RecordStream stream)
+        static void FlushStream(RecordStream stream, Stream destination)
         {
             if (stream.Count == 0) return;
-            WriteChunk(stream.Tag, stream.Buffer.GetBuffer(), (int)stream.Buffer.Length);
+            WriteChunk(destination, stream.Tag, stream.Buffer.GetBuffer(), (int)stream.Buffer.Length);
             stream.Buffer.SetLength(0);
             stream.Count = 0;
         }
 
-        void WriteChunk(string tag, byte[] payload)
-        {
-            WriteChunk(tag, payload, payload.Length);
-        }
-
-        void WriteChunk(string tag, byte[] payload, int length)
+        static void WriteChunk(Stream destination, string tag, byte[] payload, int length)
         {
             byte[] tagBytes = Encoding.ASCII.GetBytes(tag);
-            _target.Write(tagBytes, 0, 4);
-            BvrEncoding.WriteU32(_target, (uint)length);
-            _target.Write(payload, 0, length);
+            destination.Write(tagBytes, 0, 4);
+            BvrEncoding.WriteU32(destination, (uint)length);
+            destination.Write(payload, 0, length);
+        }
+
+        /// <summary>Cuts a seekable output at the replay's end so stale bytes of an older, longer content are not read back.</summary>
+        void Truncate(long end)
+        {
+            if (end >= _output.Length) return;
+            try
+            {
+                _output.SetLength(end);
+            }
+            catch (NotSupportedException e)
+            {
+                throw new IOException("The output holds " + (_output.Length - end) + " stale bytes after the replay and cannot be truncated", e);
+            }
         }
 
         /// <summary>Buffered, delta-encoded record stream of one tag.</summary>

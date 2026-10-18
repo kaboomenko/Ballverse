@@ -39,7 +39,8 @@ namespace Ballverse.Core.Tests.Replay
             w.Finish(duration);
 
             Assert.True(ms.Length <= 200 * 1024, "1-minute replay is " + ms.Length + " bytes");
-            Assert.True(ms.Length < 40 * 1024, "expected compact encoding, got " + ms.Length + " bytes");
+            // About 19 KB with the current encoding; a tighter bound catches encoding regressions early.
+            Assert.True(ms.Length < 24 * 1024, "expected compact encoding (~19 KB), got " + ms.Length + " bytes");
             Assert.Equal(2400, ReplayReader.Read(ms.ToArray()).Events.Count);
         }
     }
