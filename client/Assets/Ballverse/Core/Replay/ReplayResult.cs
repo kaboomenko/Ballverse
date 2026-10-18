@@ -18,7 +18,7 @@ namespace Ballverse.Core.Replay
         {
             if (winnerIndex < -1) throw new ArgumentOutOfRangeException(nameof(winnerIndex), "winnerIndex must be >= -1");
             int n = scores == null ? 0 : scores.Count;
-            if (n > BvrFormat.MaxResultScores)
+            if (n < 0 || n > BvrFormat.MaxResultScores)
                 throw new ArgumentException("Result has " + n + " scores, limit is " + BvrFormat.MaxResultScores, nameof(scores));
             string id = winnerId ?? string.Empty;
             BvrEncoding.EncodeString(id, BvrFormat.MaxStringBytes, nameof(winnerId));

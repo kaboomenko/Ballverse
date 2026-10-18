@@ -24,6 +24,10 @@ namespace Ballverse.Core.Config
         public const int BudgetCandidatesMax = 64;
         public const int BudgetMsMin = 100;
         public const int BudgetMsMax = 10000;
+        /// <summary>Largest spectacle weight w1…w5 (<c>generation_weights</c>); guards the score against a broken remote value.</summary>
+        public const double WeightMax = 100.0;
+        /// <summary>Largest |qualityThreshold| (<c>generation_weights</c>).</summary>
+        public const double QualityThresholdAbsMax = 1000.0;
         public const int RatePromptAfterExportsMin = 1;
         public const int RatePromptAfterExportsMax = 20;
 

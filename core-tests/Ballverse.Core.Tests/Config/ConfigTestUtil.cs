@@ -57,5 +57,17 @@ namespace Ballverse.Core.Tests.Config
         {
             return ModeCatalog.All.Select(m => m.Code).ToArray();
         }
+
+        /// <summary>The modes of this build's release in catalog order (release 1: M01, M02, M05).</summary>
+        public static ModeCode[] ReleasedCodes()
+        {
+            return ModeCatalog.Released.Select(m => m.Code).ToArray();
+        }
+
+        /// <summary>The default free modes (release 1: M01, M02, M05).</summary>
+        public static ModeCode[] DefaultFree()
+        {
+            return ModeCatalog.All.Where(m => m.FreeByDefault).Select(m => m.Code).ToArray();
+        }
     }
 }

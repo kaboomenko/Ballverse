@@ -1,35 +1,17 @@
-using Newtonsoft.Json;
-
 namespace Ballverse.Core.Timeline
 {
     /// <summary>
-    /// Partial bitrate overrides delivered by Remote Config (spec §3.8: "values live in Remote Config").
-    /// Null fields keep the current value. JSON via <see cref="CoreJson"/>, e.g.
-    /// <c>{"video1080p60Bps":14000000,"audioBps":160000}</c>. Values must be JSON integers or null; anything else makes
-    /// <see cref="FromJson"/> throw <see cref="JsonSerializationException"/>.
+    /// Partial bitrate overrides (spec §3.8: "values live in Remote Config"), applied with
+    /// <see cref="ExportBitrateTable.WithOverrides"/>. Null fields keep the current value. Typed only: the Remote Config key
+    /// <c>export_bitrates</c> is parsed by the Config module (kbps per resolution and fps), and
+    /// <c>Ballverse.Core.Integration.RemoteConfigAdapters</c> converts it into this type.
     /// </summary>
     public sealed class ExportBitrateOverrides
     {
-        [JsonConverter(typeof(StrictInt64Converter))]
         public long? Video1080p60Bps { get; set; }
-        [JsonConverter(typeof(StrictInt64Converter))]
         public long? Video1080p30Bps { get; set; }
-        [JsonConverter(typeof(StrictInt64Converter))]
         public long? Video720p60Bps { get; set; }
-        [JsonConverter(typeof(StrictInt64Converter))]
         public long? Video720p30Bps { get; set; }
-        [JsonConverter(typeof(StrictInt64Converter))]
         public long? AudioBps { get; set; }
-
-        /// <summary>Parses a payload; returns null for the JSON literal <c>null</c>.</summary>
-        public static ExportBitrateOverrides FromJson(string json)
-        {
-            return CoreJson.Deserialize<ExportBitrateOverrides>(json);
-        }
-
-        public string ToJson()
-        {
-            return CoreJson.Serialize(this, false);
-        }
     }
 }

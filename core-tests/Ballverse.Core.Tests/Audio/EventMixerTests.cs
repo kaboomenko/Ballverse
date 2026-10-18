@@ -6,6 +6,7 @@ using Xunit;
 
 namespace Ballverse.Core.Tests.Audio
 {
+    [Collection(SerialMeasurementCollection.Name)] // zero-allocation check; see SerialMeasurementCollection
     public class EventMixerTests
     {
         static SoundPack FixedPack(string sample, int semitones = 0)

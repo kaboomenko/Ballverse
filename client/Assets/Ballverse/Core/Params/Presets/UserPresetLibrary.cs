@@ -135,11 +135,13 @@ namespace Ballverse.Core.Params.Presets
                 list.Add(error);
                 return lib;
             }
-            if (!(token is JObject root) || !(root["presets"] is JArray array))
+            if (!(token is JObject root))
             {
                 list.Add("Expected an object with a 'presets' array");
                 return lib;
             }
+            // The version is read before the shape check: a newer build may have changed the root, and the library must
+            // still be flagged as newer so ToJson refuses to overwrite it with an empty v1 library.
             var version = root["schemaVersion"];
             if (version != null)
             {
@@ -154,6 +156,11 @@ namespace Ballverse.Core.Params.Presets
                         list.Add("Unsupported schemaVersion " + version.ToString(Newtonsoft.Json.Formatting.None) + " (this build reads "
                             + SchemaVersion + "); presets read best-effort");
                 }
+            }
+            if (!(root["presets"] is JArray array))
+            {
+                list.Add("Expected an object with a 'presets' array");
+                return lib;
             }
             for (int i = 0; i < array.Count; i++)
             {

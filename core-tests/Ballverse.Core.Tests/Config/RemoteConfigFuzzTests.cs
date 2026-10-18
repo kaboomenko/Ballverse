@@ -59,6 +59,7 @@ namespace Ballverse.Core.Tests.Config
         {
             "[\"M01\",\"M02\",\"M03\",\"M04\",\"M05\",\"M09\"]",
             "{\"M01\":{\"w1\":1,\"w2\":0.5,\"w3\":2,\"w4\":0.25,\"w5\":0.75},\"orbit\":[1,2,3,4,5]}",
+            "{\"helix_drop\":{\"qualityThreshold\":1.2},\"M02\":{\"w1\":1,\"w2\":1,\"w3\":1,\"w4\":1,\"w5\":1,\"densityMin\":0.5,\"densityMax\":7}}",
             "{\"A\":{\"candidates\":32,\"ms\":2000},\"C\":{\"ms\":5000}}",
             "{\"SM-A155F\":\"C\",\"Pixel 6a\":\"B\"}",
             "{\"tiktok\":[{\"x\":0.8,\"y\":0.3,\"w\":0.2,\"h\":0.5}],\"x\":[]}",
@@ -94,8 +95,10 @@ namespace Ballverse.Core.Tests.Config
         static void AssertInvariants(RemoteConfigValues v)
         {
             Assert.NotNull(v);
-            Assert.Equal(AllCodes(), v.GalleryOrder.OrderBy(c => (int)c));
+            Assert.Equal(ReleasedCodes(), v.GalleryOrder.OrderBy(c => (int)c));
             Assert.Equal(v.FreeModes.Count, v.FreeModes.Distinct().Count());
+            Assert.All(v.FreeModes, c => Assert.True(ModeCatalog.IsReleased(c)));
+            Assert.All(v.EffectiveFreeModes, c => Assert.True(ModeCatalog.IsReleased(c)));
             foreach (var m in ModeCatalog.All)
             {
                 if (m.FreeByDefault) Assert.Contains(m.Code, v.FreeModes);
@@ -147,7 +150,8 @@ namespace Ballverse.Core.Tests.Config
                 var raw = RawDictionary(first);
                 var second = RemoteConfigParser.Parse(raw);
                 Assert.Equal(raw, RawDictionary(second.Values));
-                // Everything was normalized away (free_modes always contains M01–M05, so not even a narrowing warning).
+                // Everything was normalized away (free_modes always contains the default free modes and only released
+                // modes, so not even a narrowing or unreleased-mode issue).
                 Assert.Empty(second.Issues);
             }
         }

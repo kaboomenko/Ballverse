@@ -28,8 +28,10 @@ namespace Ballverse.Core.Layout
     /// each canvas only scales that result (<see cref="PlaceAt"/>): x from this canvas's safe margin (left) or safe right
     /// edge (right), size from <see cref="Size"/>, y = this canvas's safe top when the reference was not pushed, else
     /// round_half_up(referenceY * canvasHeight / 1920), clamped into the safe area. Consistency wins over per-canvas
-    /// exactness: where the reference watermark just touches a mask edge, a scaled one may overlap it by one pixel row,
-    /// reported in <see cref="WatermarkPlacement.MaskOverlap"/>. <see cref="FrameComposer"/> does
+    /// exactness: where the reference watermark just touches a mask edge, a scaled one may overlap it by a few pixel rows
+    /// (edges are rounded independently: at most ⌊1.5 + 0.5·k⌋ rows for a canvas k = H / 1920 times the reference height, i.e.
+    /// one row up to the reference size and two rows on larger previews such as tablets), reported in
+    /// <see cref="WatermarkPlacement.MaskOverlap"/>. <see cref="FrameComposer"/> does
     /// exactly that; <see cref="Place"/> decides on the given canvas alone and is meant for single-canvas callers and the
     /// reference itself.
     /// </para>

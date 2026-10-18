@@ -34,17 +34,18 @@ namespace Ballverse.Core.Tests.Config
         {
             var b = new RemoteConfigBuilder
             {
-                FreeModes = new List<ModeCode> { ModeCode.M03, ModeCode.M01, ModeCode.M03 },
-                GalleryOrder = new List<ModeCode> { ModeCode.M15, ModeCode.M15 },
+                FreeModes = new List<ModeCode> { ModeCode.M05, ModeCode.M03, ModeCode.M05 },
+                GalleryOrder = new List<ModeCode> { ModeCode.M15, ModeCode.M02, ModeCode.M02 },
                 TierOverrides = new List<TierOverride> { new TierOverride("b", DeviceTier.B), new TierOverride("A", DeviceTier.A) },
                 RemotePresets = new List<string> { " { \"k\" : [1, 2] } " },
             };
             b.GenerationWeights[ModeCode.M09] = new GenerationWeights(1, 1, 1, 1, 1);
             b.GenerationWeights[ModeCode.M02] = new GenerationWeights(2, 2, 2, 2, 2);
             var v = b.Build();
-            Assert.Equal(Codes(3, 1, 2, 4, 5), v.FreeModes);
-            Assert.Equal(ModeCode.M15, v.GalleryOrder[0]);
-            Assert.Equal(15, v.GalleryOrder.Count);
+            // Unreleased modes (M03, M15) are dropped; defaults appended; gallery completed to the released modes.
+            Assert.Equal(Codes(5, 1, 2), v.FreeModes);
+            Assert.Equal(Codes(2, 1, 5), v.GalleryOrder);
+            Assert.False(v.IsListedFree(ModeCode.M03));
             Assert.Equal(new[] { "A", "b" }, v.TierOverrides.Select(o => o.DeviceModel));
             Assert.Equal(new[] { ModeCode.M02, ModeCode.M09 }, v.GenerationWeights.Select(kv => kv.Key));
             Assert.Equal("{\"k\":[1,2]}", v.RemotePresets[0]);
@@ -57,7 +58,7 @@ namespace Ballverse.Core.Tests.Config
             var v = b.Build();
             b.FreeModes.Add(ModeCode.M10);
             b.TextTemplates.Clear();
-            Assert.Equal(5, v.FreeModes.Count);
+            Assert.Equal(DefaultFree().Length, v.FreeModes.Count);
             Assert.Equal(2, v.TextTemplates.Count);
             Assert.True(((ICollection<ModeCode>)v.FreeModes).IsReadOnly);
             Assert.True(((ICollection<ModeCode>)v.GalleryOrder).IsReadOnly);

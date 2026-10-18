@@ -9,10 +9,13 @@ namespace Ballverse.Core.Params
     /// each count parameter with the matching part (<see cref="AsTierCap"/>, <see cref="BallCap"/>), never with the sum.
     /// </summary>
     /// <remarks>
-    /// Single-number budgets are <see cref="BodyKind.Balls"/> when the spec counts balls (M02 "new ball" variant, M04,
-    /// M08, M09, M10, M13 simple pendulums; double pendulums 20 / 15 / 10 are a mode rule) and
-    /// <see cref="BodyKind.Bodies"/> when it counts every dynamic body together (M01 incl. shards, M12, M14, M15).
-    /// M06 weapons are sensors on the fighters and are not counted. Targets are verified in spike S1.
+    /// Release-1 modes follow the release-1 mode cards (owner decisions Р18/Р19, spec §2.9 "Физика и бюджет"): kinematic
+    /// walls (rings, polygons, platforms) and cosmetic VFX particles are not solver bodies and are not counted, so M01
+    /// Ring Escape is 20 / 12 / 8 balls, M02 Geometry Bounce 200 / 120 / 60 balls (all variants, incl. "Размножение") and
+    /// M05 Helix Drop one ball. Roadmap modes keep the original card numbers: single-number budgets are
+    /// <see cref="BodyKind.Balls"/> when the spec counts balls (M04, M08, M09, M10, M13 simple pendulums; double pendulums
+    /// 20 / 15 / 10 are a mode rule) and <see cref="BodyKind.Bodies"/> when it counts every dynamic body together (M12, M14,
+    /// M15). M06 weapons are sensors on the fighters and are not counted. Targets are verified by the Core.Sim benchmark.
     /// </remarks>
     public static class BodyBudgets
     {
@@ -55,11 +58,11 @@ namespace Ballverse.Core.Params
 
         static readonly Part[][] s_budgets =
         {
-            new[] { P(BodyKind.Bodies, 300, 200, 120) },                                                  // M01 ring_escape (incl. shards)
-            new[] { P(BodyKind.Balls, 600, 400, 200) },                                                   // M02 grow_bounce ("new ball")
+            new[] { P(BodyKind.Balls, 20, 12, 8) },                                                       // M01 ring_escape (release 1)
+            new[] { P(BodyKind.Balls, 200, 120, 60) },                                                    // M02 geometry_bounce (release 1)
             new[] { P(BodyKind.Balls, 16), P(BodyKind.Obstacles, 60) },                                   // M03 marble_race
             new[] { P(BodyKind.Balls, 2000, 1000, 400) },                                                 // M04 peg_drop ("Ливень")
-            new[] { P(BodyKind.Balls, 1), P(BodyKind.Platforms, 30), P(BodyKind.Shards, 150, 100, 60) },  // M05 spiral_drop
+            new[] { P(BodyKind.Balls, 1) },                                                               // M05 helix_drop (release 1)
             new[] { P(BodyKind.Balls, 8), P(BodyKind.Projectiles, 40) },                                  // M06 ball_battle
             new[] { P(BodyKind.Balls, 32), P(BodyKind.Tiles, 200, 150, 100) },                            // M07 last_standing
             new[] { P(BodyKind.Balls, 120, 80, 50) },                                                     // M08 color_war

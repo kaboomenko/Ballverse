@@ -161,8 +161,9 @@ namespace Ballverse.Core.Tests.Ads
         }
 
         /// <summary>
-        /// The ranges mirror the Config module's RemoteConfigLimits (spec §9.3), the only §9.3 parser, so the safety-net
-        /// clamp here never disagrees with it. If this test fails, RemoteConfigLimits changed or drifted: update both.
+        /// Pins the spec §9.3 ranges. The constants are aliases of the Config module's RemoteConfigLimits (the only §9.3
+        /// parser), so they cannot drift from it; Integration/RemoteConfigAdapterTests checks the aliasing itself. If this test
+        /// fails, the spec ranges changed in RemoteConfigLimits.
         /// </summary>
         [Fact]
         public void RangesMatchRemoteConfigLimits()
@@ -185,6 +186,9 @@ namespace Ballverse.Core.Tests.Ads
         [InlineData("interstitialGraceGames", "100", 50)]
         [InlineData("rewardedRetryWindowMin", "120", 60)]
         [InlineData("rewardedRetryWindowMin", "\"Infinity\"", 10)]
+        [InlineData("interstitialEveryNGames", "\"4294967297\"", 20)] // QA residual: a wrapping cast would give 1
+        [InlineData("interstitialGraceGames", "\"-4294967297\"", 0)]
+        [InlineData("interstitialEveryNGames", "4294967297", 20)]
         public void FromJsonAgreesWithConfigModuleRules(string key, string literal, int expected)
         {
             var c = AdPolicyConfig.FromJson("{\"" + key + "\":" + literal + "}");

@@ -28,10 +28,17 @@ namespace Ballverse.Core.Tests.Config
         [Fact]
         public void ModeDefaults()
         {
-            Assert.Equal(Codes(1, 2, 3, 4, 5), D.FreeModes);
+            // Release 1 (Р18): the free set and the gallery are exactly the released modes M01, M02, M05.
+            Assert.Equal(Codes(1, 2, 5), D.FreeModes);
             Assert.Empty(D.ModesDisabled);
-            Assert.Equal(AllCodes(), D.GalleryOrder);
-            Assert.Equal(Codes(1, 2, 3, 4, 5), D.EffectiveFreeModes);
+            Assert.Equal(Codes(1, 2, 5), D.GalleryOrder);
+            Assert.Equal(Codes(1, 2, 5), D.EffectiveFreeModes);
+            Assert.Equal(ReleasedCodes(), D.GalleryOrder);
+            foreach (var m in ModeCatalog.All)
+            {
+                Assert.Equal(m.InRelease, D.GalleryOrder.Contains(m.Code));
+                Assert.Equal(m.InRelease, D.IsEffectivelyFree(m.Code));
+            }
         }
 
         [Fact]
@@ -128,7 +135,8 @@ namespace Ballverse.Core.Tests.Config
         {
             var raw = RawDictionary(D);
             Assert.Equal(RemoteConfigKeys.All.Count, raw.Count);
-            Assert.Equal("[\"M01\",\"M02\",\"M03\",\"M04\",\"M05\"]", raw["free_modes"]);
+            Assert.Equal("[\"M01\",\"M02\",\"M05\"]", raw["free_modes"]);
+            Assert.Equal("[\"M01\",\"M02\",\"M05\"]", raw["gallery_order"]);
             Assert.Equal("[]", raw["modes_disabled"]);
             Assert.Equal("{\"A\":60,\"B\":60,\"C\":30}", raw["export_default_fps_by_tier"]);
             Assert.Equal("{\"720p30\":6000,\"720p60\":10000,\"1080p30\":10000,\"1080p60\":16000}", raw["export_bitrates"]);

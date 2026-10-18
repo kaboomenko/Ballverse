@@ -171,30 +171,40 @@ namespace Ballverse.Core.Params
             return c.VisibleIf;
         }
 
-        /// <summary>Same target and same accepted values (Is(x) and In(x) are equivalent; values compared sanitized).</summary>
+        /// <summary>
+        /// Same target and same accepted values (Is(x) and In(x) are equivalent; values compared sanitized). IsTrue(x) counts
+        /// as accepting exactly <c>Bool(true)</c>, so it equals Is(x, true) on a bool target.
+        /// </summary>
         static bool EquivalentConditions(VisibleIf a, VisibleIf b, ParamSchema common, ParamSchema mode)
         {
             if (!string.Equals(a.TargetId, b.TargetId, StringComparison.Ordinal)) return false;
-            if ((a.Kind == VisibleIfKind.IsTrue) != (b.Kind == VisibleIfKind.IsTrue)) return false;
-            if (a.Kind == VisibleIfKind.IsTrue) return true;
+            if (a.Kind == VisibleIfKind.IsTrue && b.Kind == VisibleIfKind.IsTrue) return true;
             // a is normalized against the common target; normalize b the same way (the layer may not have done it)
             if (!common.TryGet(a.TargetId, out ParamDef target) && !mode.TryGet(a.TargetId, out target)) return false;
-            var bValues = new List<ParamValue>(b.Values.Count);
-            foreach (var v in b.Values)
-            {
-                if (!target.TryNormalizeConditionValue(v, out ParamValue n)) return false;
-                bValues.Add(n);
-            }
-            foreach (var v in a.Values)
+            var aValues = AcceptedValues(a, target);
+            var bValues = AcceptedValues(b, target);
+            if (aValues == null || bValues == null) return false;
+            foreach (var v in aValues)
                 if (!bValues.Contains(v)) return false;
             foreach (var v in bValues)
             {
-                bool found = false;
-                foreach (var w in a.Values)
-                    if (w.Equals(v)) found = true;
-                if (!found) return false;
+                if (!aValues.Contains(v)) return false;
             }
             return true;
+        }
+
+        /// <summary>Normalized accepted values of a condition (IsTrue → {true} on a bool target), or null when not normalizable.</summary>
+        static List<ParamValue> AcceptedValues(VisibleIf c, ParamDef target)
+        {
+            if (c.Kind == VisibleIfKind.IsTrue)
+                return target.Type == ParamType.Bool ? new List<ParamValue> { ParamValue.Bool(true) } : null;
+            var values = new List<ParamValue>(c.Values.Count);
+            foreach (var v in c.Values)
+            {
+                if (!target.TryNormalizeConditionValue(v, out ParamValue n)) return null;
+                values.Add(n);
+            }
+            return values;
         }
 
         internal void RequireComplete()

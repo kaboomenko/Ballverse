@@ -19,9 +19,13 @@ namespace Ballverse.Core.Config
     /// <para>A non-empty mode list, or a non-empty safe-zone / text-template entry, in which no element is valid keeps the default
     /// (Error <see cref="RemoteConfigIssueKind.NoValidEntries"/>): a typo must not wipe built-in data. Only an explicit empty
     /// array clears a value.</para>
-    /// <para><c>free_modes</c> can only extend the free set (spec §9.3, §5.1): M01–M05 stay free even when omitted.</para>
-    /// <para>Info and Warning issues are capped at <see cref="MaxIssuesPerKey"/> per key plus one summary issue; Errors are
-    /// never dropped.</para>
+    /// <para><c>free_modes</c> can only extend the free set (spec §9.3, §5.1): the catalog's free-by-default modes (release 1:
+    /// M01, M02, M05) stay free even when omitted. <c>free_modes</c> and <c>gallery_order</c> ignore catalog modes that are not
+    /// in this build's release (<see cref="ModeInfo.InRelease"/>; Info <see cref="RemoteConfigIssueKind.UnreleasedMode"/>), so a
+    /// console value written for a later release is harmless here.</para>
+    /// <para>Info and Warning issues are capped at <see cref="MaxIssuesPerKey"/> per key, Errors separately at
+    /// <see cref="MaxIssuesPerKey"/> per key, plus one summary issue carrying the highest suppressed severity, so one key yields
+    /// at most 2 × <see cref="MaxIssuesPerKey"/> + 1 issues whatever the payload size.</para>
     /// <para>JSON objects with duplicate property names are rejected as invalid JSON (ambiguous).</para>
     /// Never throws; output and issue order are deterministic and independent of the dictionary's enumeration order.
     /// </summary>
@@ -138,6 +142,7 @@ namespace Ballverse.Core.Config
                 {
                     var list = ParseModeList(text, ctx);
                     if (list == null) return;
+                    list = ReleasedOnly(list, ctx);
                     var missing = new List<string>();
                     foreach (var m in ModeCatalog.All)
                     {
@@ -145,7 +150,7 @@ namespace Ballverse.Core.Config
                     }
                     if (missing.Count > 0)
                     {
-                        // Spec §9.3 "только расширение", §5.1 "M01–M05 доступны всегда": the defaults stay free (appended by Build).
+                        // Spec §9.3 "только расширение", §5.1: the default free modes stay free (appended by Build).
                         ctx.Warning(RemoteConfigIssueKind.NarrowedFreeModes,
                             "free_modes can only extend the free set (spec §9.3, §5.1); still free: " + string.Join(",", missing));
                     }
@@ -162,7 +167,8 @@ namespace Ballverse.Core.Config
                 {
                     var list = ParseModeList(text, ctx);
                     if (list == null) return;
-                    if (list.Count < ModeCatalog.All.Count)
+                    list = ReleasedOnly(list, ctx);
+                    if (list.Count < ModeCatalog.Released.Count)
                     {
                         var completed = RemoteConfigBuilder.CompleteGalleryOrder(list);
                         var appended = new List<string>();
@@ -313,14 +319,9 @@ namespace Ballverse.Core.Config
 
         // ---- JSON shells ----
 
-        static JToken ParseJson(string text, JTokenType expected, Context ctx, bool preserveNumbers = false)
+        static JToken ParseJson(string text, JTokenType expected, Context ctx)
         {
-            JToken token;
-            string error;
-            bool ok = preserveNumbers
-                ? RemoteConfigJson.TryParsePreservingNumbers(text, out token, out error)
-                : RemoteConfigJson.TryParse(text, out token, out error);
-            if (!ok)
+            if (!RemoteConfigJson.TryParse(text, out JToken token, out string error))
             {
                 ctx.Error(RemoteConfigIssueKind.InvalidJson, "malformed JSON, default kept: " + error);
                 return null;
@@ -419,6 +420,18 @@ namespace Ballverse.Core.Config
             {
                 ctx.Error(RemoteConfigIssueKind.NoValidEntries, "none of the " + index + " elements is a known mode; default kept");
                 return null;
+            }
+            return result;
+        }
+
+        /// <summary>Drops catalog modes that are not in this build's release (Info, one per mode).</summary>
+        static List<ModeCode> ReleasedOnly(List<ModeCode> list, Context ctx)
+        {
+            var result = new List<ModeCode>(list.Count);
+            foreach (var c in list)
+            {
+                if (ModeCatalog.IsReleased(c)) result.Add(c);
+                else ctx.Info(RemoteConfigIssueKind.UnreleasedMode, "mode " + c + " is not in this build's release, ignored");
             }
             return result;
         }
@@ -561,6 +574,12 @@ namespace Ballverse.Core.Config
             return result;
         }
 
+        static readonly string[] s_weightNames = { "w1", "w2", "w3", "w4", "w5" };
+
+        /// <summary>
+        /// One <c>generation_weights</c> entry: <c>[w1..w5]</c>, or an object with all of w1..w5 or none of them plus optional
+        /// densityMin / densityMax / qualityThreshold (at least one known field). Any invalid field drops the whole entry.
+        /// </summary>
         static GenerationWeights ParseWeightSet(JToken token, ModeCode code, Context ctx)
         {
             var w = new double[5];
@@ -569,47 +588,92 @@ namespace Ballverse.Core.Config
                 var arr = (JArray)token;
                 if (arr.Count != 5)
                 {
-                    ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": expected 5 weights, got " + arr.Count + "; built-in weights kept");
+                    ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": expected 5 weights, got " + arr.Count + "; built-in values kept");
                     return null;
                 }
                 for (int i = 0; i < 5; i++)
                 {
                     if (!RemoteConfigJson.TryGetNumber(arr[i], out w[i]) || !GenerationWeights.IsValidWeight(w[i]))
                     {
-                        ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": w" + (i + 1) + " must be a finite number >= 0; built-in weights kept");
+                        ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": w" + (i + 1) + " must be a number within 0.."
+                            + RemoteConfigLimits.WeightMax.ToString(CultureInfo.InvariantCulture) + "; built-in values kept");
                         return null;
                     }
                 }
+                return new GenerationWeights(w[0], w[1], w[2], w[3], w[4]);
             }
-            else if (token.Type == JTokenType.Object)
+            if (token.Type != JTokenType.Object)
             {
-                var obj = (JObject)token;
-                foreach (var field in obj.Properties())
-                {
-                    if (!IsWeightName(field.Name))
-                        ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": unknown field " + RemoteConfigJson.Excerpt(field.Name) + " ignored");
-                }
-                for (int i = 0; i < 5; i++)
-                {
-                    string name = "w" + (i + 1);
-                    if (!RemoteConfigJson.TryGetNumber(obj[name], out w[i]) || !GenerationWeights.IsValidWeight(w[i]))
-                    {
-                        ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": " + name + " missing or not a finite number >= 0; built-in weights kept");
-                        return null;
-                    }
-                }
-            }
-            else
-            {
-                ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": expected {w1..w5} or [5 numbers]; built-in weights kept");
+                ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": expected an object or [5 numbers]; built-in values kept");
                 return null;
             }
-            return new GenerationWeights((float)w[0], (float)w[1], (float)w[2], (float)w[3], (float)w[4]);
+            var obj = (JObject)token;
+            int known = 0;
+            foreach (var field in obj.Properties())
+            {
+                if (IsWeightName(field.Name) || IsTuningName(field.Name)) known++;
+                else ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": unknown field " + RemoteConfigJson.Excerpt(field.Name) + " ignored");
+            }
+            if (known == 0)
+            {
+                ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": no known field (w1..w5, densityMin, densityMax, qualityThreshold); built-in values kept");
+                return null;
+            }
+            int weights = 0;
+            for (int i = 0; i < 5; i++)
+            {
+                JToken t = obj[s_weightNames[i]];
+                if (t == null) continue;
+                weights++;
+                if (!RemoteConfigJson.TryGetNumber(t, out w[i]) || !GenerationWeights.IsValidWeight(w[i]))
+                {
+                    ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": " + s_weightNames[i] + " must be a number within 0.."
+                        + RemoteConfigLimits.WeightMax.ToString(CultureInfo.InvariantCulture) + "; built-in values kept");
+                    return null;
+                }
+            }
+            if (weights != 0 && weights != 5)
+            {
+                ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": w1..w5 must be given all together (got " + weights + "); built-in values kept");
+                return null;
+            }
+            if (!TryGetOptionalNumber(obj, "densityMin", code, ctx, out double? densityMin)
+                || !TryGetOptionalNumber(obj, "densityMax", code, ctx, out double? densityMax)
+                || !TryGetOptionalNumber(obj, "qualityThreshold", code, ctx, out double? threshold))
+                return null;
+            string error = GenerationWeights.CheckTuning(densityMin, densityMax, threshold);
+            if (error != null)
+            {
+                ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": " + error + "; built-in values kept");
+                return null;
+            }
+            return weights == 5
+                ? new GenerationWeights(w[0], w[1], w[2], w[3], w[4], densityMin, densityMax, threshold)
+                : GenerationWeights.TuningOnly(densityMin, densityMax, threshold);
+        }
+
+        static bool TryGetOptionalNumber(JObject obj, string name, ModeCode code, Context ctx, out double? value)
+        {
+            value = null;
+            JToken t = obj[name];
+            if (t == null) return true;
+            if (!RemoteConfigJson.TryGetNumber(t, out double d))
+            {
+                ctx.Warning(RemoteConfigIssueKind.InvalidEntry, code + ": " + name + " must be a finite JSON number; built-in values kept");
+                return false;
+            }
+            value = d;
+            return true;
         }
 
         static bool IsWeightName(string name)
         {
             return name == "w1" || name == "w2" || name == "w3" || name == "w4" || name == "w5";
+        }
+
+        static bool IsTuningName(string name)
+        {
+            return name == "densityMin" || name == "densityMax" || name == "qualityThreshold";
         }
 
         static List<TierOverride> ParseTierOverrides(string text, List<TierOverride> current, Context ctx)
@@ -646,7 +710,10 @@ namespace Ballverse.Core.Config
             var obj = (JObject)ParseJson(text, JTokenType.Object, ctx);
             if (obj == null) return null;
             var delivered = new List<PlatformSafeZone>();
+            // An id is a duplicate when it equals a kept one ignoring case or after Layout's normalization
+            // (PlatformSafeZone.SameId); two sets keep this linear.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenCanonical = new HashSet<string>(StringComparer.Ordinal);
             foreach (var prop in obj.Properties())
             {
                 string platform = prop.Name.Trim();
@@ -655,11 +722,14 @@ namespace Ballverse.Core.Config
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "empty platform id ignored");
                     continue;
                 }
-                if (!seen.Add(platform))
+                string canonical = PlatformSafeZone.CanonicalId(platform);
+                if (seen.Contains(platform) || seenCanonical.Contains(canonical))
                 {
                     ctx.Warning(RemoteConfigIssueKind.DuplicateEntry, "duplicate platform " + RemoteConfigJson.Excerpt(platform) + " ignored");
                     continue;
                 }
+                seen.Add(platform);
+                seenCanonical.Add(canonical);
                 if (prop.Value.Type != JTokenType.Array)
                 {
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "platform " + RemoteConfigJson.Excerpt(platform) + ": expected an array of rects; default kept");
@@ -681,7 +751,7 @@ namespace Ballverse.Core.Config
                 }
                 delivered.Add(new PlatformSafeZone(platform, rects));
             }
-            return MergeByKey(delivered, current, p => p.Platform);
+            return MergeByKey(delivered, current, p => p.Platform, p => PlatformSafeZone.CanonicalId(p.Platform));
         }
 
         /// <summary>
@@ -801,25 +871,39 @@ namespace Ballverse.Core.Config
             return MergeByKey(delivered, current, s => s.Language);
         }
 
-        /// <summary>Delivered entries plus the current entries whose key (ignoring case) was not delivered.</summary>
-        static List<T> MergeByKey<T>(List<T> delivered, List<T> current, Func<T, string> key)
+        /// <summary>
+        /// Delivered entries plus the current entries whose key (ignoring case) was not delivered, nor (when
+        /// <paramref name="canonicalKey"/> is given) their canonical key.
+        /// </summary>
+        static List<T> MergeByKey<T>(List<T> delivered, List<T> current, Func<T, string> key, Func<T, string> canonicalKey = null)
         {
             var result = new List<T>(delivered);
             var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var d in delivered) keys.Add(key(d));
+            var canonicalKeys = canonicalKey == null ? null : new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in delivered)
+            {
+                keys.Add(key(d));
+                canonicalKeys?.Add(canonicalKey(d));
+            }
             foreach (var c in current)
             {
-                if (!keys.Contains(key(c))) result.Add(c);
+                if (keys.Contains(key(c))) continue;
+                if (canonicalKeys != null && canonicalKeys.Contains(canonicalKey(c))) continue;
+                result.Add(c);
             }
             return result;
         }
 
         // ---- lists (whole replacement) ----
 
-        /// <summary>Each preset is kept as compact JSON with its numbers as delivered (see <see cref="RemoteConfigJson.TryParsePreservingNumbers"/>).</summary>
+        /// <summary>
+        /// Each preset is kept as compact JSON. Numbers are read as doubles, exactly as the consumer (Params <c>PresetJson</c>)
+        /// reads them, so every finite value survives with full double precision (1e-30 stays 1e-30) and one preset never
+        /// changes another's text; integers keep every digit.
+        /// </summary>
         static List<string> ParsePresets(string text, Context ctx)
         {
-            var token = ParseJson(text, JTokenType.Array, ctx, preserveNumbers: true);
+            var token = ParseJson(text, JTokenType.Array, ctx);
             if (token == null) return null;
             var result = new List<string>();
             int index = 0;
@@ -901,12 +985,16 @@ namespace Ballverse.Core.Config
             return new RemoteMelody(id, name, notes);
         }
 
-        /// <summary>Issue sink of one key. Info/Warning are capped at <see cref="MaxIssuesPerKey"/>; Errors always recorded.</summary>
+        /// <summary>
+        /// Issue sink of one key. Info/Warning are capped at <see cref="MaxIssuesPerKey"/>, Errors separately at
+        /// <see cref="MaxIssuesPerKey"/> (per-entry Errors of a huge map must not grow the list without bound).
+        /// </summary>
         sealed class Context
         {
             readonly string _key;
             readonly List<RemoteConfigIssue> _issues;
             int _advisory;
+            int _errors;
             int _suppressed;
             RemoteConfigIssueSeverity _suppressedSeverity;
 
@@ -949,7 +1037,14 @@ namespace Ballverse.Core.Config
 
             public void Error(RemoteConfigIssueKind kind, string message)
             {
-                _issues.Add(new RemoteConfigIssue(_key, RemoteConfigIssueSeverity.Error, kind, message));
+                if (_errors < MaxIssuesPerKey)
+                {
+                    _errors++;
+                    _issues.Add(new RemoteConfigIssue(_key, RemoteConfigIssueSeverity.Error, kind, message));
+                    return;
+                }
+                _suppressed++;
+                _suppressedSeverity = RemoteConfigIssueSeverity.Error;
             }
         }
     }

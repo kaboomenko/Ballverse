@@ -5,6 +5,7 @@ using Xunit;
 
 namespace Ballverse.Core.Tests.Audio
 {
+    [Collection(SerialMeasurementCollection.Name)] // zero-allocation check; see SerialMeasurementCollection
     public class TrackMixerTests
     {
         const int Sr = AudioConstants.SampleRate;

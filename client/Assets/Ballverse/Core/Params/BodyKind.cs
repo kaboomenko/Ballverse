@@ -9,9 +9,9 @@ namespace Ballverse.Core.Params
         Balls = 1,
         /// <summary>Moving obstacles (M03).</summary>
         Obstacles = 2,
-        /// <summary>Visible platforms (M05).</summary>
+        /// <summary>Visible platforms (reserved: release-1 M05 platforms are kinematic and not counted).</summary>
         Platforms = 3,
-        /// <summary>Shards and fragments (M05, M11).</summary>
+        /// <summary>Shards and fragments (M11).</summary>
         Shards = 4,
         /// <summary>Arrows and other projectiles (M06).</summary>
         Projectiles = 5,

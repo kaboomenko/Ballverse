@@ -17,7 +17,7 @@ namespace Ballverse.Core.Replay
         public ReplayInput(uint tick, byte type, IReadOnlyList<int> values)
         {
             int n = values == null ? 0 : values.Count;
-            if (n > BvrFormat.MaxInputValues)
+            if (n < 0 || n > BvrFormat.MaxInputValues)
                 throw new ArgumentException("Input payload has " + n + " values, limit is " + BvrFormat.MaxInputValues, nameof(values));
             _values = new int[n];
             for (int i = 0; i < n; i++) _values[i] = values[i];

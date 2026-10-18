@@ -9,43 +9,75 @@ namespace Ballverse.Core.Tests.Config
     public class RemoteConfigModeListTests
     {
         [Fact]
-        public void FreeModesExtension()
+        public void FreeModesListingTheReleasedSetHasNoIssues()
         {
-            var r = Parse(RemoteConfigKeys.FreeModes, "[\"M01\",\"M02\",\"M03\",\"M04\",\"M05\",\"M09\"]");
+            var r = Parse(RemoteConfigKeys.FreeModes, "[\"M01\",\"M02\",\"M05\"]");
             AssertNoIssues(r);
-            Assert.Equal(Codes(1, 2, 3, 4, 5, 9), r.Values.FreeModes);
-            Assert.True(r.Values.IsListedFree(ModeCode.M09));
-            Assert.True(r.Values.IsEffectivelyFree(ModeCode.M09));
+            Assert.Equal(Codes(1, 2, 5), r.Values.FreeModes);
+            Assert.True(r.Values.IsListedFree(ModeCode.M05));
+            Assert.True(r.Values.IsEffectivelyFree(ModeCode.M05));
             Assert.False(r.Values.IsListedFree(ModeCode.M10));
+        }
+
+        [Fact]
+        public void FreeModesIgnoreModesNotInTheRelease()
+        {
+            // Release-1 spec §9.3: "Режим из списка, которого нет в сборке, игнорируется". A console value written for a later
+            // release (here: wave-1 modes and a paid mode) is harmless, and no unreleased mode becomes available.
+            var r = Parse(RemoteConfigKeys.FreeModes, "[\"M01\",\"M02\",\"M03\",\"M04\",\"M05\",\"M09\"]");
+            Assert.Equal(Codes(1, 2, 5), r.Values.FreeModes);
+            Assert.Equal(3, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.UnreleasedMode && i.Severity == RemoteConfigIssueSeverity.Info));
+            Assert.All(r.Issues, i => Assert.Equal(RemoteConfigIssueKind.UnreleasedMode, i.Kind));
+            Assert.False(r.Values.IsListedFree(ModeCode.M09));
+            Assert.False(r.Values.IsEffectivelyFree(ModeCode.M09));
+            Assert.False(r.Values.IsEffectivelyFree(ModeCode.M03));
         }
 
         [Fact]
         public void FreeModesAcceptsStableIdsAndPreservesOrder()
         {
-            var r = Parse(RemoteConfigKeys.FreeModes, "[\"M05\",\"ring_escape\",\" M02 \",\"grow_bounce\",\"M03\",\"M04\",\"orbit\"]");
-            Assert.Equal(Codes(5, 1, 2, 3, 4, 14), r.Values.FreeModes);
+            var r = Parse(RemoteConfigKeys.FreeModes, "[\"M05\",\"ring_escape\",\" M02 \",\"geometry_bounce\",\"M03\",\"M04\",\"orbit\"]");
+            Assert.Equal(Codes(5, 1, 2), r.Values.FreeModes);
             Single(r, RemoteConfigIssueKind.DuplicateEntry, RemoteConfigIssueSeverity.Warning);
+            Assert.Equal(3, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.UnreleasedMode));
+
+            var helix = Parse(RemoteConfigKeys.FreeModes, "[\"helix_drop\",\"GEOMETRY_BOUNCE\",\"Ring_Escape\"]");
+            AssertNoIssues(helix);
+            Assert.Equal(Codes(5, 2, 1), helix.Values.FreeModes);
+        }
+
+        [Fact]
+        public void RetiredIdsAreUnknown()
+        {
+            // "grow_bounce" and "spiral_drop" were never shipped; M02 / M05 now carry geometry_bounce / helix_drop.
+            var r = Parse(RemoteConfigKeys.FreeModes, "[\"grow_bounce\",\"spiral_drop\"]");
+            Single(r, RemoteConfigIssueKind.NoValidEntries, RemoteConfigIssueSeverity.Error);
+            Assert.Equal(2, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.UnknownMode));
+            Assert.Equal(DefaultFree(), r.Values.FreeModes);
         }
 
         [Fact]
         public void FreeModesCannotNarrowDefaultsStayFree()
         {
-            // Spec §9.3 "только расширение", §5.1 "M01–M05 доступны всегда".
-            var r = Parse(RemoteConfigKeys.FreeModes, "[\"M01\",\"M02\"]");
-            Assert.Equal(Codes(1, 2, 3, 4, 5), r.Values.FreeModes);
+            // Spec §9.3 "только расширение", §5.1: the default free modes stay free.
+            var r = Parse(RemoteConfigKeys.FreeModes, "[\"M02\"]");
+            Assert.Equal(Codes(2, 1, 5), r.Values.FreeModes);
             var issue = Single(r, RemoteConfigIssueKind.NarrowedFreeModes, RemoteConfigIssueSeverity.Warning);
-            Assert.Contains("M03,M04,M05", issue.Message);
+            Assert.Contains("M01,M05", issue.Message);
 
             var empty = Parse(RemoteConfigKeys.FreeModes, "[]");
-            Assert.Equal(Codes(1, 2, 3, 4, 5), empty.Values.FreeModes);
-            Assert.Equal(Codes(1, 2, 3, 4, 5), empty.Values.EffectiveFreeModes);
+            Assert.Equal(Codes(1, 2, 5), empty.Values.FreeModes);
+            Assert.Equal(Codes(1, 2, 5), empty.Values.EffectiveFreeModes);
             Single(empty, RemoteConfigIssueKind.NarrowedFreeModes, RemoteConfigIssueSeverity.Warning);
 
+            // Only unreleased modes: all ignored, the defaults stay.
             var replaced = Parse(RemoteConfigKeys.FreeModes, "[\"M06\"]");
-            Assert.Equal(Codes(6, 1, 2, 3, 4, 5), replaced.Values.FreeModes);
+            Assert.Equal(Codes(1, 2, 5), replaced.Values.FreeModes);
+            Single(replaced, RemoteConfigIssueKind.UnreleasedMode, RemoteConfigIssueSeverity.Info);
+            Single(replaced, RemoteConfigIssueKind.NarrowedFreeModes, RemoteConfigIssueSeverity.Warning);
             foreach (var m in ModeCatalog.All)
             {
-                Assert.Equal(m.FreeByDefault || m.Code == ModeCode.M06, replaced.Values.IsEffectivelyFree(m.Code));
+                Assert.Equal(m.FreeByDefault, replaced.Values.IsEffectivelyFree(m.Code));
             }
         }
 
@@ -55,8 +87,8 @@ namespace Ballverse.Core.Tests.Config
             foreach (var text in new[] { "[\"M16\",\"free\",\"M00\"]", "[1,2,3]", "[null]", "[\"M016\",\"mm1\"]" })
             {
                 var r = Parse(RemoteConfigKeys.FreeModes, text);
-                Assert.Equal(Codes(1, 2, 3, 4, 5), r.Values.FreeModes);
-                Assert.Equal(Codes(1, 2, 3, 4, 5), r.Values.EffectiveFreeModes);
+                Assert.Equal(DefaultFree(), r.Values.FreeModes);
+                Assert.Equal(DefaultFree(), r.Values.EffectiveFreeModes);
                 Single(r, RemoteConfigIssueKind.NoValidEntries, RemoteConfigIssueSeverity.Error);
                 Assert.DoesNotContain(r.Issues, i => i.Kind == RemoteConfigIssueKind.NarrowedFreeModes);
             }
@@ -65,17 +97,18 @@ namespace Ballverse.Core.Tests.Config
         [Fact]
         public void FreeModesLowercaseAndUnpaddedCodesAccepted()
         {
-            var lower = Parse(RemoteConfigKeys.FreeModes, "[\"m01\",\"m02\",\"m03\",\"m04\",\"m05\",\"m06\"]");
+            var lower = Parse(RemoteConfigKeys.FreeModes, "[\"m01\",\"m02\",\"m05\"]");
             AssertNoIssues(lower);
-            Assert.Equal(Codes(1, 2, 3, 4, 5, 6), lower.Values.FreeModes);
+            Assert.Equal(Codes(1, 2, 5), lower.Values.FreeModes);
 
-            var unpadded = Parse(RemoteConfigKeys.FreeModes, "[\"M1\",\"M2\",\"M3\",\"M4\",\"M5\",\"M9\",\"m15\"]");
-            AssertNoIssues(unpadded);
-            Assert.Equal(Codes(1, 2, 3, 4, 5, 9, 15), unpadded.Values.FreeModes);
+            var unpadded = Parse(RemoteConfigKeys.FreeModes, "[\"M1\",\"M2\",\"M5\",\"M9\",\"m15\"]");
+            Assert.Equal(Codes(1, 2, 5), unpadded.Values.FreeModes);
+            Assert.Equal(2, unpadded.Issues.Count(i => i.Kind == RemoteConfigIssueKind.UnreleasedMode));
+            Assert.All(unpadded.Issues, i => Assert.Equal(RemoteConfigIssueKind.UnreleasedMode, i.Kind));
 
-            var ids = Parse(RemoteConfigKeys.FreeModes, "[\"RING_ESCAPE\",\"M02\",\"M03\",\"M04\",\"M05\"]");
+            var ids = Parse(RemoteConfigKeys.FreeModes, "[\"RING_ESCAPE\",\"M02\",\"M05\"]");
             AssertNoIssues(ids);
-            Assert.Equal(Codes(1, 2, 3, 4, 5), ids.Values.FreeModes);
+            Assert.Equal(Codes(1, 2, 5), ids.Values.FreeModes);
         }
 
         [Theory]
@@ -135,10 +168,10 @@ namespace Ballverse.Core.Tests.Config
         public void EffectiveFreeSetIsFreeMinusDisabled()
         {
             var r = Parse(
-                (RemoteConfigKeys.FreeModes, "[\"M01\",\"M02\",\"M03\",\"M04\",\"M05\",\"M06\"]"),
+                (RemoteConfigKeys.FreeModes, "[\"M01\",\"M02\",\"M05\",\"M06\"]"),
                 (RemoteConfigKeys.ModesDisabled, "[\"M02\",\"M06\",\"M10\"]"));
             var v = r.Values;
-            Assert.Equal(Codes(1, 3, 4, 5), v.EffectiveFreeModes);
+            Assert.Equal(Codes(1, 5), v.EffectiveFreeModes);
             Assert.True(v.IsListedFree(ModeCode.M02));
             Assert.True(v.IsModeDisabled(ModeCode.M02));
             Assert.False(v.IsEffectivelyFree(ModeCode.M02));
@@ -153,12 +186,13 @@ namespace Ballverse.Core.Tests.Config
         [Fact]
         public void EffectiveFreeSetExhaustiveOverDisabledSubsetsOfDefaults()
         {
-            // All 2^5 subsets of the default free modes disabled.
-            for (int mask = 0; mask < 32; mask++)
+            // All subsets of the default free modes disabled.
+            var defaults = DefaultFree();
+            for (int mask = 0; mask < 1 << defaults.Length; mask++)
             {
-                var disabled = Enumerable.Range(1, 5).Where(i => (mask & (1 << (i - 1))) != 0).Select(i => "\"M0" + i + "\"");
+                var disabled = Enumerable.Range(0, defaults.Length).Where(i => (mask & (1 << i)) != 0).Select(i => "\"" + defaults[i] + "\"");
                 var r = Parse(RemoteConfigKeys.ModesDisabled, "[" + string.Join(",", disabled) + "]");
-                var expected = Enumerable.Range(1, 5).Where(i => (mask & (1 << (i - 1))) == 0).Select(i => (ModeCode)i);
+                var expected = Enumerable.Range(0, defaults.Length).Where(i => (mask & (1 << i)) == 0).Select(i => defaults[i]);
                 Assert.Equal(expected, r.Values.EffectiveFreeModes);
                 foreach (var m in ModeCatalog.All)
                 {
@@ -170,33 +204,44 @@ namespace Ballverse.Core.Tests.Config
         [Fact]
         public void GalleryOrderFullPermutationAccepted()
         {
+            var r = Parse(RemoteConfigKeys.GalleryOrder, "[\"M05\",\"M02\",\"M01\"]");
+            AssertNoIssues(r);
+            Assert.Equal(Codes(5, 2, 1), r.Values.GalleryOrder);
+        }
+
+        [Fact]
+        public void GalleryOrderNeverShowsUnreleasedModes()
+        {
+            // A full 15-mode order (e.g. written for the complete catalog) keeps only the released modes, in its order.
             var order = new[] { 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1 };
             var r = Parse(RemoteConfigKeys.GalleryOrder, "[" + string.Join(",", order.Select(i => "\"M" + i.ToString("00") + "\"")) + "]");
-            AssertNoIssues(r);
-            Assert.Equal(Codes(order), r.Values.GalleryOrder);
+            Assert.Equal(Codes(5, 2, 1), r.Values.GalleryOrder);
+            Assert.Equal(12, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.UnreleasedMode && i.Severity == RemoteConfigIssueSeverity.Info));
+            Assert.DoesNotContain(r.Issues, i => i.Kind == RemoteConfigIssueKind.IncompleteGalleryOrder);
         }
 
         [Fact]
         public void GalleryOrderPartialIsCompletedInCatalogOrder()
         {
-            var r = Parse(RemoteConfigKeys.GalleryOrder, "[\"M09\",\"M03\",\"M09\",\"M99\",\"marble_race\",\"M12\"]");
-            Assert.Equal(Codes(9, 3, 12, 1, 2, 4, 5, 6, 7, 8, 10, 11, 13, 14, 15), r.Values.GalleryOrder);
+            var r = Parse(RemoteConfigKeys.GalleryOrder, "[\"M09\",\"M05\",\"M05\",\"M99\",\"helix_drop\"]");
+            Assert.Equal(Codes(5, 1, 2), r.Values.GalleryOrder);
             var issue = Single(r, RemoteConfigIssueKind.IncompleteGalleryOrder, RemoteConfigIssueSeverity.Warning);
-            Assert.Contains("M01,M02,M04", issue.Message);
+            Assert.Contains("M01,M02", issue.Message);
             Assert.Equal(2, r.Issues.Count(i => i.Kind == RemoteConfigIssueKind.DuplicateEntry));
             Single(r, RemoteConfigIssueKind.UnknownMode, RemoteConfigIssueSeverity.Warning);
+            Single(r, RemoteConfigIssueKind.UnreleasedMode, RemoteConfigIssueSeverity.Info);
         }
 
         [Fact]
-        public void GalleryOrderEmptyBecomesCatalogOrder()
+        public void GalleryOrderEmptyBecomesReleasedCatalogOrder()
         {
             var r = Parse(RemoteConfigKeys.GalleryOrder, "[]");
-            Assert.Equal(AllCodes(), r.Values.GalleryOrder);
+            Assert.Equal(ReleasedCodes(), r.Values.GalleryOrder);
             Single(r, RemoteConfigIssueKind.IncompleteGalleryOrder, RemoteConfigIssueSeverity.Warning);
         }
 
         [Fact]
-        public void GalleryOrderIsAlwaysAPermutationForRandomInputs()
+        public void GalleryOrderIsAlwaysAPermutationOfReleasedModesForRandomInputs()
         {
             var rng = Rng.FromSeed(0xA11E7UL, 1);
             for (int iter = 0; iter < 300; iter++)
@@ -208,8 +253,8 @@ namespace Ballverse.Core.Tests.Config
                     return k < 17 ? "\"M" + k.ToString("00") + "\"" : (k == 17 ? "3" : (k == 18 ? "\"ring_escape\"" : "null"));
                 }).ToArray();
                 var r = Parse(RemoteConfigKeys.GalleryOrder, "[" + string.Join(",", items) + "]");
-                Assert.Equal(15, r.Values.GalleryOrder.Count);
-                Assert.Equal(AllCodes(), r.Values.GalleryOrder.OrderBy(c => (int)c));
+                Assert.Equal(ReleasedCodes().Length, r.Values.GalleryOrder.Count);
+                Assert.Equal(ReleasedCodes(), r.Values.GalleryOrder.OrderBy(c => (int)c));
             }
         }
     }

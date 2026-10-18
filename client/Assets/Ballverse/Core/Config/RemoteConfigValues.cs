@@ -60,6 +60,7 @@ namespace Ballverse.Core.Config
 
             _tierOverrides = RemoteConfigBuilder.SortedUnique(b.TierOverrides, t => t.DeviceModel, nameof(b.TierOverrides));
             _platformSafeZones = RemoteConfigBuilder.SortedUnique(b.PlatformSafeZones, p => p.Platform, nameof(b.PlatformSafeZones));
+            RemoteConfigBuilder.RequireUniqueCanonical(_platformSafeZones, p => PlatformSafeZone.CanonicalId(p.Platform), nameof(b.PlatformSafeZones));
             _remotePresets = RemoteConfigBuilder.BuildPresets(b.RemotePresets);
             _remoteMelodies = RemoteConfigBuilder.BuildMelodies(b.RemoteMelodies);
             _textTemplates = RemoteConfigBuilder.SortedUnique(b.TextTemplates, t => t.Language, nameof(b.TextTemplates));
@@ -81,10 +82,13 @@ namespace Ballverse.Core.Config
         }
 
         /// <summary>
-        /// <c>free_modes</c> (spec §5.1): modes usable without an entitlement, in config order. Default M01–M05.
-        /// Extension only (spec §9.3 "только расширение", §5.1 "M01–M05 доступны всегда"): the catalog's FreeByDefault modes are
-        /// always part of this list; a remote list that omits them gets them appended in catalog order (Warning
-        /// <see cref="RemoteConfigIssueKind.NarrowedFreeModes"/>). Grandfathering is Monetization's concern.
+        /// <c>free_modes</c> (spec §5.1): released modes usable without an entitlement, in config order. Default (release 1, Р18):
+        /// M01, M02, M05 — every released mode. Extension only (spec §9.3 "только расширение", §5.1): the catalog's FreeByDefault
+        /// modes are always part of this list; a remote list that omits them gets them appended in catalog order (Warning
+        /// <see cref="RemoteConfigIssueKind.NarrowedFreeModes"/>). Modes not in this build's release are ignored (Info
+        /// <see cref="RemoteConfigIssueKind.UnreleasedMode"/>), so a future mode can never become available through config alone.
+        /// An A/B test that swaps a free mode for a paid one (old spec §9.6 "замена M04 на M07") is therefore not expressible;
+        /// the release-1 spec rewrote that test as "+ one paid mode" (extension). Grandfathering is Monetization's concern.
         /// </summary>
         public IReadOnlyList<ModeCode> FreeModes => _freeModes;
 
@@ -92,7 +96,8 @@ namespace Ballverse.Core.Config
         public IReadOnlyList<ModeCode> ModesDisabled => _modesDisabled;
 
         /// <summary>
-        /// <c>gallery_order</c> (spec §4.3): always a permutation of all 15 catalog modes. Default catalog order.
+        /// <c>gallery_order</c> (spec §4.3): always a permutation of the released modes (<see cref="ModeCatalog.Released"/>);
+        /// unreleased modes never appear. Default: released modes in catalog order (release 1: M01, M02, M05).
         /// The UI still groups free → bought → paid and applies this order inside each group.
         /// </summary>
         public IReadOnlyList<ModeCode> GalleryOrder => _galleryOrder;
@@ -119,8 +124,8 @@ namespace Ballverse.Core.Config
         public TierValues<int> ExportDefaultFpsByTier { get; }
 
         /// <summary>
-        /// <c>generation_weights</c> (spec §2.4): per-mode overrides of w1…w5, ordered by mode code.
-        /// Default empty: every mode uses its built-in weights.
+        /// <c>generation_weights</c> (spec §2.4): per-mode overrides of w1…w5 and / or density range and quality threshold
+        /// (<see cref="Config.GenerationWeights"/>), ordered by mode code. Default empty: every mode uses its built-in profile.
         /// </summary>
         public IReadOnlyList<KeyValuePair<ModeCode, GenerationWeights>> GenerationWeights => _generationWeights;
 
@@ -134,8 +139,9 @@ namespace Ballverse.Core.Config
         public IReadOnlyList<PlatformSafeZone> PlatformSafeZones => _platformSafeZones;
 
         /// <summary>
-        /// <c>remote_presets</c> (spec §2.3): each element is one preset as a compact JSON object string, in config order, with its
-        /// numbers as delivered (up to 28 significant digits; presets with numbers beyond the double range are dropped).
+        /// <c>remote_presets</c> (spec §2.3): each element is one preset as a compact JSON object string, in config order. Numbers
+        /// keep double precision, exactly as Params reads them (integers keep every digit; presets with a number beyond the double
+        /// range are dropped).
         /// Only checked to be a JSON object here; schema validation belongs to the Params module. Default empty.
         /// </summary>
         public IReadOnlyList<string> RemotePresets => _remotePresets;
@@ -211,15 +217,14 @@ namespace Ballverse.Core.Config
             return false;
         }
 
-        /// <summary>UI masks of a platform (case-insensitive id, e.g. "tiktok"), spec §3.3.</summary>
+        /// <summary>UI masks of a platform (case-insensitive id, e.g. "tiktok"; <see cref="PlatformSafeZone.SameId"/>), spec §3.3.</summary>
         public bool TryGetSafeZones(string platform, out IReadOnlyList<NormalizedRect> rects)
         {
             rects = null;
             if (platform == null) return false;
-            string key = platform.Trim();
             foreach (var p in _platformSafeZones)
             {
-                if (string.Equals(p.Platform, key, StringComparison.OrdinalIgnoreCase))
+                if (PlatformSafeZone.SameId(p.Platform, platform))
                 {
                     rects = p.Rects;
                     return true;

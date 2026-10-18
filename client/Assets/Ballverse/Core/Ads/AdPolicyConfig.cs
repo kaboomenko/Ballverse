@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Ballverse.Core.Config;
 using Newtonsoft.Json;
 
 namespace Ballverse.Core.Ads
@@ -7,27 +8,29 @@ namespace Ballverse.Core.Ads
     /// <summary>
     /// Remote-configurable ad rules (spec §5.3, §9.3). Defaults are the build-time values, so the policies work without
     /// network or a fetched config. This type does not parse the §9.3 Remote Config payload: the Config module
-    /// (RemoteConfigParser / RemoteConfigValues) is the only §9.3 parser, and the integration layer maps its typed values
-    /// onto the properties here. The Min*/Max* ranges mirror that module's RemoteConfigLimits, so the safety-net clamp in
-    /// <see cref="Validated"/> never disagrees with the authoritative one. <see cref="FromJson"/> reads only this type's own
-    /// CoreJson format (camelCase keys).
+    /// (RemoteConfigParser / RemoteConfigValues) is the only §9.3 parser, and <c>Ballverse.Core.Integration.RemoteConfigAdapters</c>
+    /// maps its typed values onto the properties here. The Default*/Min*/Max* constants of the remote keys are aliases of
+    /// <see cref="RemoteConfigLimits"/> and the Config defaults (not copies), so the safety-net clamp in
+    /// <see cref="Validated"/> can never disagree with the authoritative one. Only the quiet period after a rewarded ad
+    /// (IN3) has no Remote Config key and is defined here. <see cref="FromJson"/> reads only this type's own CoreJson format
+    /// (camelCase keys).
     /// </summary>
     public sealed class AdPolicyConfig
     {
         /// <summary>N in "interstitial after every N completed games" (spec §5.3.2 IN1, Р7).</summary>
-        public const int DefaultInterstitialEveryNGames = 3;
-        public const int MinInterstitialEveryNGames = 1;
-        public const int MaxInterstitialEveryNGames = 20;
+        public const int DefaultInterstitialEveryNGames = RemoteConfigDefaults.InterstitialEveryNGames;
+        public const int MinInterstitialEveryNGames = RemoteConfigLimits.InterstitialEveryNGamesMin;
+        public const int MaxInterstitialEveryNGames = RemoteConfigLimits.InterstitialEveryNGamesMax;
 
         /// <summary>Minimum interval between two interstitials, seconds (spec §5.3.2 IN5).</summary>
-        public const int DefaultInterstitialMinIntervalSec = 60;
-        public const int MinInterstitialMinIntervalSec = 0;
-        public const int MaxInterstitialMinIntervalSec = 600;
+        public const int DefaultInterstitialMinIntervalSec = RemoteConfigDefaults.InterstitialMinIntervalSec;
+        public const int MinInterstitialMinIntervalSec = RemoteConfigLimits.InterstitialMinIntervalSecMin;
+        public const int MaxInterstitialMinIntervalSec = RemoteConfigLimits.InterstitialMinIntervalSecMax;
 
         /// <summary>Completed games before interstitials start counting (spec §5.3.2 IN6, question В3).</summary>
-        public const int DefaultInterstitialGraceGames = 0;
-        public const int MinInterstitialGraceGames = 0;
-        public const int MaxInterstitialGraceGames = 50;
+        public const int DefaultInterstitialGraceGames = RemoteConfigDefaults.InterstitialGraceGames;
+        public const int MinInterstitialGraceGames = RemoteConfigLimits.InterstitialGraceGamesMin;
+        public const int MaxInterstitialGraceGames = RemoteConfigLimits.InterstitialGraceGamesMax;
 
         /// <summary>No interstitial within this many seconds after a rewarded ad (spec §5.3.2 IN3).</summary>
         public const int DefaultInterstitialQuietAfterRewardedSec = 30;
@@ -35,14 +38,14 @@ namespace Ballverse.Core.Ads
         public const int MaxInterstitialQuietAfterRewardedSec = 600;
 
         /// <summary>How long the export flow waits for a rewarded ad to load, seconds (spec §5.3.1 RW3).</summary>
-        public const int DefaultRewardedWaitTimeoutSec = 5;
-        public const int MinRewardedWaitTimeoutSec = 1;
-        public const int MaxRewardedWaitTimeoutSec = 30;
+        public const int DefaultRewardedWaitTimeoutSec = RemoteConfigDefaults.RewardedWaitTimeoutSec;
+        public const int MinRewardedWaitTimeoutSec = RemoteConfigLimits.RewardedWaitTimeoutSecMin;
+        public const int MaxRewardedWaitTimeoutSec = RemoteConfigLimits.RewardedWaitTimeoutSecMax;
 
         /// <summary>Retry window after a failed or cancelled ad-funded export, minutes (spec §5.3.1 RW4, §3.8, question В5).</summary>
-        public const int DefaultRewardedRetryWindowMin = 10;
-        public const int MinRewardedRetryWindowMin = 0;
-        public const int MaxRewardedRetryWindowMin = 60;
+        public const int DefaultRewardedRetryWindowMin = RemoteConfigDefaults.RewardedRetryWindowMin;
+        public const int MinRewardedRetryWindowMin = RemoteConfigLimits.RewardedRetryWindowMinMin;
+        public const int MaxRewardedRetryWindowMin = RemoteConfigLimits.RewardedRetryWindowMinMax;
 
         /// <summary>Remote Config <c>interstitial_every_n_games</c> (spec §5.3.2 IN1). Range 1–20.</summary>
         public int InterstitialEveryNGames { get; set; } = DefaultInterstitialEveryNGames;
@@ -57,7 +60,7 @@ namespace Ballverse.Core.Ads
         public int InterstitialQuietAfterRewardedSec { get; set; } = DefaultInterstitialQuietAfterRewardedSec;
 
         /// <summary>Remote Config <c>rewarded_export_enabled</c>: kill switch of the whole export gate (spec §5.3.1 RW7).</summary>
-        public bool RewardedExportEnabled { get; set; } = true;
+        public bool RewardedExportEnabled { get; set; } = RemoteConfigDefaults.RewardedExportEnabled;
 
         /// <summary>Remote Config <c>rewarded_wait_timeout_sec</c> (spec §5.3.1 RW3, RW7). Range 1–30.</summary>
         public int RewardedWaitTimeoutSec { get; set; } = DefaultRewardedWaitTimeoutSec;
