@@ -1,0 +1,16 @@
+{
+    "name": "Ballverse.Media",
+    "rootNamespace": "Ballverse.Media",
+    "references": [
+        "Ballverse.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
