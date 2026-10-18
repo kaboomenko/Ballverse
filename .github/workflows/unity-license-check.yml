@@ -12,6 +12,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Secrets present
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -20,7 +21,7 @@ jobs:
         run: |
           missing=0
           for v in UNITY_LICENSE UNITY_EMAIL UNITY_PASSWORD; do
-            if [ -z "${!v}" ]; then echo "::error::Secret $v is missing"; missing=1; else echo "$v is set (${#v} name chars)"; fi
+            if [ -z "${!v}" ]; then echo "::error::Secret $v is missing"; missing=1; else echo "$v is set"; fi
           done
           if ! printf '%s' "$UNITY_LICENSE" | head -c 200 | grep -q "<?xml"; then echo "::warning::UNITY_LICENSE does not start with <?xml — paste the whole .ulf file content"; fi
           exit $missing
