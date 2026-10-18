@@ -31,7 +31,11 @@ namespace Ballverse.Core.Monetization
         public string ProductId => Product.Id;
         public bool Visible => HiddenReason == OfferHiddenReason.None;
         public OfferHiddenReason HiddenReason { get; }
-        /// <summary>The cheaper product with the same missing grants when <see cref="HiddenReason"/> is CheaperEquivalent; else null.</summary>
+        /// <summary>
+        /// When <see cref="HiddenReason"/> is CheaperEquivalent: the cheaper product with the same value, i.e. the same new
+        /// entitlements excluding paid modes already available (free by config or grandfathered, spec §5.1, §5.2). Its
+        /// <see cref="Gain"/> may differ only by such available modes. Else null.
+        /// </summary>
         public string CheaperAlternativeId { get; }
         /// <summary>The product itself is among the owned products.</summary>
         public bool Owned { get; }

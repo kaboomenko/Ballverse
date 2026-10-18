@@ -99,6 +99,36 @@ namespace Ballverse.Core.Tests.Monetization
             Assert.False(all.PartiallyOwned);
         }
 
+        /// <summary>
+        /// CheaperEquivalent compares value (gain minus available modes), not gain: with M06–M14 playable, All Modes adds only
+        /// M15, exactly what the $1.99 single adds, so the $4.99 bundle is hidden (spec §5.2 "защита от переплаты").
+        /// </summary>
+        [Fact]
+        public void AllModesHiddenWhenItsValueEqualsTheSingle_FreeByConfig()
+        {
+            var config = new MonetizationConfig(Enumerable.Range(6, 9).Select(m => (ModeCode)m));
+            var s = Storefront.Build(new string[0], config);
+            var all = s.Get(ProductIds.AllModes);
+            Assert.Equal(OfferHiddenReason.CheaperEquivalent, all.HiddenReason);
+            Assert.Equal(ProductIds.ModeLiquidSand, all.CheaperAlternativeId);
+            Assert.Equal(9, all.OwnedModeCount);
+            Assert.NotEqual(all.Gain, s.Get(ProductIds.ModeLiquidSand).Gain);
+            Assert.True(s.Get(ProductIds.ModeLiquidSand).Visible);
+            Assert.Equal(new[] { ProductIds.ModeLiquidSand },
+                Storefront.ModeSheet(ModeCode.M15, new string[0], config).Select(o => o.ProductId).ToArray());
+        }
+
+        [Fact]
+        public void AllModesHiddenWhenItsValueEqualsTheSingle_Grandfathered()
+        {
+            var g = Enumerable.Range(6, 9).Select(m => (ModeCode)m).ToArray();
+            var s = Storefront.Build(new string[0], null, g);
+            Assert.Equal(OfferHiddenReason.CheaperEquivalent, s.Get(ProductIds.AllModes).HiddenReason);
+            Assert.Equal(ProductIds.ModeLiquidSand, s.Get(ProductIds.AllModes).CheaperAlternativeId);
+            Assert.Equal(new[] { ProductIds.ModeLiquidSand },
+                Storefront.ModeSheet(ModeCode.M15, new string[0], null, g).Select(o => o.ProductId).ToArray());
+        }
+
         /// <summary>Rng-driven property test over random free sets, grandfathered sets and owned products.</summary>
         [Fact]
         public void InvariantsHoldUnderRandomFreeAndGrandfatheredModes()
@@ -121,6 +151,25 @@ namespace Ballverse.Core.Tests.Monetization
                     if (!o.Visible) continue;
                     Assert.False(o.Gain.Except(available).IsEmpty);
                     if (o.AlreadyAvailable) Assert.True(o.IsLastStep);
+                }
+                // Value-based equivalence: a hidden CheaperEquivalent offer points at a visible, not dearer product with the
+                // same value, and no visible offer has a strictly cheaper non-owned product with the same value.
+                foreach (var o in s.Offers)
+                {
+                    var value = o.Gain.Except(available);
+                    if (o.HiddenReason == OfferHiddenReason.CheaperEquivalent)
+                    {
+                        var alt = s.Get(o.CheaperAlternativeId);
+                        Assert.True(alt.Visible);
+                        Assert.True(alt.Product.BasePriceUsdCents <= o.Product.BasePriceUsdCents);
+                        Assert.Equal(value, alt.Gain.Except(available));
+                    }
+                    if (!o.Visible) continue;
+                    foreach (var other in s.Offers)
+                    {
+                        if (other.Owned || other.Product.BasePriceUsdCents >= o.Product.BasePriceUsdCents) continue;
+                        Assert.NotEqual(value, other.Gain.Except(available));
+                    }
                 }
                 Assert.Equal(s.Entitlements.Union(available).ModeCount, s.Get(ProductIds.AllModes).OwnedModeCount);
                 if (!s.AllPurchased) Assert.NotEmpty(s.VisibleOffers);
