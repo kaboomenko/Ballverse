@@ -48,11 +48,20 @@ client/
 **Ballverse.Editor.**
 
 - `ProjectSetup` (меню **Ballverse → Project Setup**) идемпотентно: создаёт URP 2D Renderer и URP Asset (`Assets/Ballverse/App/Settings/`) и назначает их в Graphics и во все уровни Quality; создаёт `Assets/Scenes/Boot.unity` с `Bootstrap` (или возвращает `Bootstrap` в существующую сцену) и ставит её первой в Build Settings; задаёт компанию и продукт «Ballverse», `com.ballverse.app`, только портрет, линейный цвет, Android (IL2CPP, ARM64, minSdk 26, требование OpenGL ES 3.1 — §8.1, `appCategory = game`, чтобы Android 16 не снимал портретную блокировку на планшетах) и iOS (IL2CPP, iOS 16); если в настройках Google Mobile Ads пусто, подставляет **тестовые** app id Google (без них плагин валит сборку; реальные id вписываются в Assets → Google Mobile Ads → Settings и уже не перезаписываются).
-- `BuildScript` — методы для `-executeMethod` и меню **Ballverse → Build**: `BuildAndroidApk` (development APK; debug-ключ или ключ загрузки, если переданы аргументы keystore), `BuildAndroidAab` (release AAB), `BuildIosXcode` (Xcode-проект; development, кроме подписи Distribution-профилем). Перед сборкой всегда вызывается `ProjectSetup`, поэтому CI собирает и «голый» checkout.
-- **Тестовые рекламные id не попадают в релиз (§8.9).** Release-сборка (AAB; Xcode-проект под App Store-профиль) с пустым или тестовым app id Google (`ca-app-pub-3940256099942544~…`) **падает** с понятным сообщением. Обойти можно только явно: аргумент `-ballverseAllowTestAds true` (в CI — галка **allow_test_ads**), например для внутреннего тестирования в Play или TestFlight до заведения приложения в AdMob. Дополнительно CI проверяет манифест AAB и `Info.plist` release-сборки на `3940256099942544`. Тестовые id рекламных блоков в коде Services — зона трека Services (символы компиляции).
+- `BuildScript` — методы для `-executeMethod` и меню **Ballverse → Build**: `BuildAndroidApk` (APK; debug-ключ или ключ загрузки, если переданы аргументы keystore), `BuildAndroidAab` (AAB), `BuildIosXcode` (Xcode-проект). Перед сборкой всегда вызывается `ProjectSetup`, поэтому CI собирает и «голый» checkout.
+- **Варианты сборки (§7.9)** — аргумент `-ballverseVariant Dev|OwnerTest|Store` (неизвестное значение — ошибка сборки):
+
+  | Вариант | Сборка Unity | Символ компиляции | По умолчанию |
+  |---|---|---|---|
+  | `Dev` | Development Build (отладочная, значок «Development Build») | `BALLVERSE_DEV` | — (вручную в CI или меню) |
+  | `OwnerTest` | релизная (IL2CPP, без отладки); тестовая реклама Google, фейковый магазин | `BALLVERSE_OWNERTEST` | APK и Xcode-проект; все сборки CI по push |
+  | `Store` | релизная; нужен настоящий app id AdMob | `BALLVERSE_STORE` | AAB вне CI (в CI — только явным выбором) |
+
+  Символ передаётся только в сборку плеера (`BuildPlayerOptions.extraScriptingDefines`); в редакторе символа нет. Код читает вариант через `Ballverse.Platform.BuildVariants.Current` (без символа — `Dev`), а то, что должно **физически отсутствовать** в `Store` (фейки, тестовые id рекламных блоков, меню разработчика — §8.9), прячет под `#if !BALLVERSE_STORE`. Выбор рекламных блоков и магазина по варианту — зона треков Services и UI.
+- **Тестовые рекламные id не попадают в `Store` (§8.9).** `Store`-сборка с пустым или тестовым app id Google (`ca-app-pub-3940256099942544~…`) **падает** с понятным сообщением; `Dev` и `OwnerTest` используют тестовые id Google по замыслу и не проверяются. Дополнительно CI проверяет манифест AAB и `Info.plist` `Store`-сборки на `3940256099942544`.
 - **Резервное копирование Android (§3.9).** После генерации Gradle-проекта `AndroidBackupRules` кладёт в модуль `launcher` `res/xml/ballverse_backup_rules.xml` (Android 8–11) и `res/xml/ballverse_data_extraction_rules.xml` (Android 12+) и прописывает их в `<application>` (`tools:replace`). В Auto Backup и перенос на новое устройство попадают только папки `settings/` и `presets/` (домены `file` и `external` — `persistentDataPath` бывает в обоих); проекты с копиями видео и логи — нет, иначе квота 25 МБ превышается и Android не сохраняет вообще ничего.
-- **Экспортное соответствие iOS (§8.8).** `IosExportCompliance` пишет в `Info.plist` `ITSAppUsesNonExemptEncryption = NO` — App Store Connect не задаёт вопрос о шифровании при каждой загрузке.
-- Аргументы сборки: у известных опций (`-androidKeystorePass`, `-iosTeamId`, …) следующее значение берётся всегда, даже если начинается с `-` (пароль `-Secr3t` не теряется).
+- **Экспортное соответствие iOS (§8.8).** `IosExportCompliance` пишет в `Info.plist` `ITSAppUsesNonExemptEncryption = NO` — App Store Connect не задаёт вопрос о шифровании при каждой загрузке. Текстовая правка plist — общий помощник `Ballverse.Editor.InfoPlistText` (`HasKey`, `EnsureString`, `SetBoolean`): другие iOS-постпроцессоры (например, `NSUserTrackingUsageDescription` в Services) используют его, а не свою копию.
+- Аргументы сборки: у известных опций (`-androidKeystorePass`, `-iosTeamId`, `-ballverseVariant`, …) следующее значение берётся всегда, даже если начинается с `-` (пароль `-Secr3t` не теряется).
 - Страницы 16 КБ: Unity 6.3 собирает нативные библиотеки IL2CPP с выравниванием 16 КБ по умолчанию; Google Mobile Ads 11.6 и IAP 5.4 тоже совместимы.
 
 ### Первое открытие в редакторе (когда будет Mac/ПК с Unity)
@@ -111,12 +120,12 @@ Keystore создаётся один раз и хранится вне репо�
 
 | Секрет | Что положить |
 |---|---|
-| `APPLE_TEAM_ID` | Team ID (10 символов): developer.apple.com → Account → Membership details. Один этот секрет включает автоматическую подпись в Xcode-проекте с вашей командой |
+| `APPLE_TEAM_ID` | Team ID (10 символов): developer.apple.com → Account → Membership details. Включает автоматическую подпись с вашей командой в артефакте Xcode-проекта (и один, без остальных секретов) |
 | `IOS_P12_BASE64` | Сертификат **Apple Development** (или Apple Distribution) с закрытым ключом, экспортированный из «Связки ключей» в `.p12`, в base64 (`base64 -i cert.p12`) |
 | `IOS_P12_PASSWORD` | Пароль, заданный при экспорте `.p12` |
 | `IOS_PROVISIONING_PROFILE_BASE64` | Профиль `.mobileprovision` для `com.ballverse.app` в base64. Development — для установки на зарегистрированные iPhone; Ad Hoc — тоже, но с Distribution-сертификатом; App Store — для TestFlight |
 
-Все четыре вместе включают подписанный архив и IPA в macOS-джобе. Профиль создаётся на developer.apple.com → Certificates, Identifiers & Profiles: зарегистрировать App ID `com.ballverse.app` (с возможностью In-App Purchase), добавить UDID своих iPhone в Devices, создать профиль iOS App Development с этим сертификатом и устройствами. **Для TestFlight** нужен сертификат **Apple Distribution** и профиль типа **App Store Connect** (без списка устройств).
+Все четыре вместе включают подписанный архив и IPA в macOS-джобе. Ручная подпись этим профилем применяется только в запуске с галкой **archive**; Xcode-проект из обычных запусков (push) всегда с автоматической подписью, поэтому его можно открыть и запустить на iPhone из Xcode даже при App Store-профиле в секретах. Профиль создаётся на developer.apple.com → Certificates, Identifiers & Profiles: зарегистрировать App ID `com.ballverse.app` (с возможностью In-App Purchase), добавить UDID своих iPhone в Devices, создать профиль iOS App Development с этим сертификатом и устройствами. **Для TestFlight** нужен сертификат **Apple Distribution** и профиль типа **App Store Connect** (без списка устройств).
 
 ### Необязательные: выкладка в TestFlight без Mac
 
@@ -135,10 +144,12 @@ Keystore создаётся один раз и хранится вне репо�
 | Workflow | Что делает | Когда |
 |---|---|---|
 | `Unity tests` (`unity-tests.yml`) | EditMode-тесты в Unity: ядро внутри Unity, корень композиции, разбор аргументов сборки, ProjectSetup | push в `claude/**`, затрагивающий `client/**`; вручную |
-| `Unity Android` (`unity-android.yml`) | Development APK → артефакт `ballverse-android-apk-0.1.N`; вручную с галкой **bundle** — ещё release AAB (с тестовыми id рекламы — только с галкой **allow_test_ads**) | то же |
-| `Unity iOS` (`unity-ios.yml`) | Xcode-проект → артефакт `ballverse-ios-xcode-0.1.N` (`.tar.gz`); вручную с галкой **archive** — macOS-джоб: Xcode 26, `pod install` и архив (подписанный IPA при наличии секретов подписи, иначе неподписанный архив для проверки компиляции); с App Store-профилем и секретами `ASC_*` — загрузка в TestFlight. Галка **allow_test_ads** разрешает тестовые id рекламы в App Store/TestFlight-сборке | то же |
+| `Unity Android` (`unity-android.yml`) | APK → артефакт `ballverse-android-apk-<вариант>-0.1.N`; вручную с галкой **bundle** — ещё AAB того же варианта | то же |
+| `Unity iOS` (`unity-ios.yml`) | Xcode-проект → артефакт `ballverse-ios-xcode-<вариант>-0.1.N` (`.tar.gz`); вручную с галкой **archive** — macOS-джоб: Xcode 26, `pod install` и архив (подписанный IPA при наличии секретов подписи, иначе неподписанный архив для проверки компиляции); с App Store-профилем и секретами `ASC_*` — загрузка в TestFlight | то же |
 
-Ручной запуск: вкладка **Actions** → выбрать workflow → **Run workflow** → ветка → (галки) → Run. Артефакты — внизу страницы запуска, раздел **Artifacts**, хранятся 14 дней.
+Вариант сборки: по push — всегда `OwnerTest`; при ручном запуске — поле **variant** (`OwnerTest` по умолчанию, `Dev`, `Store`). `Store` до появления настоящего приложения в AdMob (этап П1) не соберётся — это намеренно.
+
+Ручной запуск: вкладка **Actions** → выбрать workflow → **Run workflow** → ветка → (variant, галки) → Run. Push в ту же ветку отменяет только более старые push-запуски; ручной запуск (AAB, архив, TestFlight) push не прерывает. Артефакты — внизу страницы запуска, раздел **Artifacts**, хранятся 14 дней.
 
 Версия сборки — `0.1.<номер запуска>`, Android versionCode — `1000 + номер запуска` (считает GameCI). Target API Android — 36 (требование Google Play с 31.08.2026); GameCI ставит платформу SDK в контейнер перед сборкой.
 
@@ -152,13 +163,13 @@ Keystore создаётся один раз и хранится вне репо�
 4. Требования: Android 8.0+ (API 26), 64-битный ARM.
 5. Обновление поверх старой версии работает, только если обе подписаны одним ключом. Без секретов `ANDROID_KEYSTORE_*` каждый запуск CI подписывает APK новым debug-ключом — перед установкой новой сборки удалите старую (или добавьте секреты keystore, тогда все APK подписываются ключом загрузки).
 
-Сборка development: в углу виден значок «Development Build» — это нормально для тестовой сборки.
+Сборка `OwnerTest` (по умолчанию) — релизная, без значка; реклама в ней тестовая, покупки — фейковый магазин. Значок «Development Build» в углу бывает только у варианта `Dev`.
 
 ## 6. iOS без Mac: TestFlight
 
 Нужны платный Apple Developer Program, секреты подписи (сертификат Apple Distribution + профиль App Store Connect) и секреты `ASC_*` (раздел 3).
 
-1. Actions → `Unity iOS` → Run workflow → галка **archive** (и **allow_test_ads**, пока в AdMob нет своего приложения — сборка с тестовой рекламой годится только для тестирования, на проверку в App Store её не отправлять).
+1. Actions → `Unity iOS` → Run workflow → variant **OwnerTest** (по умолчанию) → галка **archive**. Сборка `OwnerTest` — релизная, с тестовой рекламой Google и фейковым магазином: для TestFlight подходит, на проверку в App Store её не отправлять (для этого — `Store`, этап П1).
 2. Когда запуск закончится, сборка появится в App Store Connect → приложение → **TestFlight** через 5–30 минут обработки. Вопрос о шифровании не задаётся (`ITSAppUsesNonExemptEncryption = NO`).
 3. Там же **Internal Testing → «+»** → создать группу, добавить себя (пользователь App Store Connect) и сборку.
 4. На iPhone поставить приложение **TestFlight** из App Store, войти тем же Apple ID → Ballverse → Установить. Сборка работает 90 дней.
@@ -181,12 +192,13 @@ Keystore создаётся один раз и хранится вне репо�
 8. Вверху Xcode выбрать свой iPhone как устройство → **Run** (▶). Первая сборка — несколько минут.
 9. При первом запуске с бесплатным аккаунтом iPhone скажет «Ненадёжный разработчик»: **Настройки → Основные → VPN и управление устройством** → ваш Apple ID → Доверять.
 
-Xcode-проект из CI — development-сборка Unity (значок «Development Build», тестовая реклама), кроме сборки под App Store-профиль.
+Xcode-проект из CI по push — вариант `OwnerTest` (релизная сборка, тестовая реклама, фейковый магазин) с автоматической подписью; отладочный вариант — ручной запуск с variant **Dev**.
 
 Подписанный IPA из CI (при секретах подписи и Development/Ad Hoc-профиле) ставится на зарегистрированные в профиле iPhone с Mac: Finder → выбрать iPhone → перетащить `.ipa`, или Apple Configurator (оба только macOS). Без Mac — путь через TestFlight (раздел 6).
 
 ## 8. Известные ограничения
 
 - Unity в этом контейнере недоступна: Unity-код проверен статически (API сверены с исходниками UnityCsReference 6000.3.26f1 и пакетов URP 17.3.0 и Google Mobile Ads 11.6.0; App/Editor/Tests компилируются против заглушек с теми же сигнатурами; логика App и разбор аргументов прогнаны тестами) — первая настоящая компиляция произойдёт в GitHub Actions после добавления секретов.
-- Рекламные id в development-сборках — тестовые id Google, пока владелец не заведёт приложение в AdMob; release-сборки с ними не собираются без явного `allow_test_ads`.
+- Рекламные app id в `Dev`/`OwnerTest` — тестовые id Google, пока владелец не заведёт приложение в AdMob; `Store` с ними не собирается.
+- Компиляция под каждый вариант отдельно в CI не проверяется: по push собирается только `OwnerTest`, `Dev` и `Store` — ручным запуском. Ошибка компиляции под `#if BALLVERSE_STORE` всплывёт при первой `Store`-сборке.
 - В сцене `Boot` пока нет камеры и интерфейса — на телефоне будет чёрный экран, пока не подключены сборки UI/Render. Это ожидаемо для каркаса.

@@ -11,8 +11,8 @@ namespace Ballverse.Editor
     /// AdMob app exists, this fills empty ids with Google's public sample app ids (they only ever serve test ads,
     /// see developers.google.com/admob/android/test-ads and /ios/test-ads). Ids that are already set are never
     /// touched, so real ids entered in Assets > Google Mobile Ads > Settings win.
-    /// <para>Sample ids are for development builds only: <see cref="BuildScript"/> refuses a release build (App Bundle,
-    /// App Store/TestFlight Xcode project) that would ship them unless -ballverseAllowTestAds is passed (spec §8.9).</para>
+    /// <para>Sample ids are for the Dev and OwnerTest variants only: <see cref="BuildScript"/> refuses a Store build
+    /// that would ship them (spec §7.9, §8.9).</para>
     /// The plugin's settings class is internal, so it is located by name and edited as a serialized object.
     /// </summary>
     public static class AdMobDefaults
@@ -53,7 +53,7 @@ namespace Ballverse.Editor
             EditorUtility.SetDirty(settings);
             AssetDatabase.SaveAssets();
             Debug.LogWarning("[Ballverse] AdMob app ids were empty and now use Google's sample ids (test ads only). " +
-                             "Release builds refuse them; enter the real ids in Assets > Google Mobile Ads > Settings before a store release.");
+                             "Store builds refuse them; enter the real ids in Assets > Google Mobile Ads > Settings before a store release.");
             return true;
         }
 

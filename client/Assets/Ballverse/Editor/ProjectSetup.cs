@@ -17,7 +17,7 @@ namespace Ballverse.Editor
     /// Brings the Unity project to the state release 1 needs, idempotently: URP 2D pipeline asset assigned in
     /// Graphics and Quality settings, the boot scene with its Bootstrap object, build scene list, player settings
     /// (identity, portrait only, linear colour, GPU minimum, Android/iOS targets) and the AdMob app ids the ads plugin
-    /// requires to build (sample ids for development builds; see <see cref="AdMobDefaults"/>). Every build runs it first, so a fresh checkout (no generated assets committed yet) builds in CI.
+    /// requires to build (sample ids for the Dev and OwnerTest variants; see <see cref="AdMobDefaults"/>). Every build runs it first, so a fresh checkout (no generated assets committed yet) builds in CI.
     /// Run it in the Editor with Ballverse > Project Setup and commit what it creates.
     /// </summary>
     public static class ProjectSetup

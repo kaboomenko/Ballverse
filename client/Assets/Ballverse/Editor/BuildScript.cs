@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Ballverse.Platform;
 using UnityEditor;
 using UnityEditor.Build.Reporting;
 using UnityEngine;
@@ -12,7 +13,9 @@ namespace Ballverse.Editor
     /// Player builds for CI (GameCI unity-builder "buildMethod") and the Ballverse > Build menu.
     /// Each build runs <see cref="ProjectSetup.Run"/> first, so a fresh checkout builds without generated assets.
     /// <para>CI: <c>-executeMethod Ballverse.Editor.BuildScript.BuildAndroidApk</c> (or BuildAndroidAab, BuildIosXcode).
-    /// Options are listed on <see cref="BuildArgs"/>. In batch mode the Editor exits with 0 on success and
+    /// Options are listed on <see cref="BuildArgs"/>; -ballverseVariant Dev|OwnerTest|Store picks the build variant
+    /// (spec §7.9, defaults in <see cref="BuildPolicy.DefaultVariant"/>), compiled into the player as its scripting
+    /// symbol (<see cref="BuildVariants"/>). In batch mode the Editor exits with 0 on success and
     /// 101 (failed), 102 (cancelled) or 103 (unknown) otherwise.</para>
     /// </summary>
     public static class BuildScript
@@ -21,27 +24,36 @@ namespace Ballverse.Editor
         public const string DefaultAndroidAabPath = "Builds/Android/Ballverse.aab";
         public const string DefaultIosPath = "Builds/iOS/Ballverse";
 
-        public static void BuildAndroidApk() => RunAndExit(BuildKind.AndroidApk);
+        public static void BuildAndroidApk() => RunAndExit(BuildKind.AndroidApk, BuildArgs.FromCommandLine());
 
-        public static void BuildAndroidAab() => RunAndExit(BuildKind.AndroidAab);
+        public static void BuildAndroidAab() => RunAndExit(BuildKind.AndroidAab, BuildArgs.FromCommandLine());
 
-        public static void BuildIosXcode() => RunAndExit(BuildKind.IosXcode);
+        public static void BuildIosXcode() => RunAndExit(BuildKind.IosXcode, BuildArgs.FromCommandLine());
 
-        [MenuItem("Ballverse/Build/Android APK (development)", priority = 20)]
-        static void MenuAndroidApk() => RunAndExit(BuildKind.AndroidApk);
+        [MenuItem("Ballverse/Build/Android APK (OwnerTest)", priority = 20)]
+        static void MenuAndroidApkOwnerTest() => RunAndExit(BuildKind.AndroidApk, MenuArgs(BuildVariant.OwnerTest));
 
-        [MenuItem("Ballverse/Build/Android App Bundle (release)", priority = 21)]
-        static void MenuAndroidAab() => RunAndExit(BuildKind.AndroidAab);
+        [MenuItem("Ballverse/Build/Android APK (Dev)", priority = 21)]
+        static void MenuAndroidApkDev() => RunAndExit(BuildKind.AndroidApk, MenuArgs(BuildVariant.Dev));
 
-        [MenuItem("Ballverse/Build/iOS Xcode project", priority = 22)]
-        static void MenuIosXcode() => RunAndExit(BuildKind.IosXcode);
+        [MenuItem("Ballverse/Build/Android App Bundle (Store)", priority = 22)]
+        static void MenuAndroidAabStore() => RunAndExit(BuildKind.AndroidAab, MenuArgs(BuildVariant.Store));
 
-        static void RunAndExit(BuildKind kind)
+        [MenuItem("Ballverse/Build/iOS Xcode project (OwnerTest)", priority = 23)]
+        static void MenuIosXcodeOwnerTest() => RunAndExit(BuildKind.IosXcode, MenuArgs(BuildVariant.OwnerTest));
+
+        [MenuItem("Ballverse/Build/iOS Xcode project (Dev)", priority = 24)]
+        static void MenuIosXcodeDev() => RunAndExit(BuildKind.IosXcode, MenuArgs(BuildVariant.Dev));
+
+        static BuildArgs MenuArgs(BuildVariant variant) =>
+            BuildArgs.Parse(new[] { "-" + BuildPolicy.VariantOption, variant.ToString() });
+
+        static void RunAndExit(BuildKind kind, BuildArgs args)
         {
             BuildResult result;
             try
             {
-                BuildReport report = Build(kind, BuildArgs.FromCommandLine());
+                BuildReport report = Build(kind, args);
                 result = report.summary.result;
             }
             catch (Exception e)
@@ -72,6 +84,7 @@ namespace Ballverse.Editor
             if (args == null) throw new ArgumentNullException(nameof(args));
             BuildTarget target = kind == BuildKind.IosXcode ? BuildTarget.iOS : BuildTarget.Android;
             BuildTargetGroup group = BuildPipeline.GetBuildTargetGroup(target);
+            BuildVariant variant = BuildPolicy.ResolveVariant(kind, args); // throws on a typo before any work
 
             if (!BuildPipeline.IsBuildTargetSupported(group, target))
                 throw new InvalidOperationException(target + " build support is not installed in this Editor.");
@@ -79,9 +92,8 @@ namespace Ballverse.Editor
                 !EditorUserBuildSettings.SwitchActiveBuildTarget(group, target))
                 throw new InvalidOperationException("Could not switch the active build target to " + target + ".");
 
-            bool development = BuildPolicy.IsDevelopment(kind, args);
             ProjectSetup.Run();
-            CheckReleaseAdIds(target, development, args);
+            CheckAdIds(target, variant);
             ApplyVersion(args);
             if (target == BuildTarget.Android) ApplyAndroid(kind, args);
             else ApplyIos(args);
@@ -101,24 +113,22 @@ namespace Ballverse.Editor
                 locationPathName = output,
                 target = target,
                 targetGroup = group,
-                options = development ? BuildOptions.Development : BuildOptions.None,
+                options = BuildPolicy.OptionsFor(variant),
+                extraScriptingDefines = BuildPolicy.ScriptingDefinesFor(variant),
             };
 
-            Debug.Log($"[Ballverse] Building {kind}: version {PlayerSettings.bundleVersion}, development {development}, output {output}");
+            Debug.Log($"[Ballverse] Building {kind}: variant {variant} ({string.Join(",", options.extraScriptingDefines)}), " +
+                      $"version {PlayerSettings.bundleVersion}, options {options.options}, output {output}");
             BuildReport report = BuildPipeline.BuildPlayer(options);
             LogSummary(kind, report);
             return report;
         }
 
-        static void CheckReleaseAdIds(BuildTarget target, bool development, BuildArgs args)
+        static void CheckAdIds(BuildTarget target, BuildVariant variant)
         {
-            if (development) return;
-            bool allow = args.GetBool(BuildPolicy.AllowTestAdsOption) == true;
-            (string android, string ios)? ids = AdMobDefaults.ReadAppIds();
-            string problem = BuildPolicy.ReleaseAdIdsProblem(target, false, allow, ids);
+            if (BuildVariants.AllowsTestServices(variant)) return;
+            string problem = BuildPolicy.AdIdsProblem(target, variant, AdMobDefaults.ReadAppIds());
             if (problem != null) throw new InvalidOperationException(problem);
-            if (allow && ids.HasValue && BuildPolicy.IsGoogleSampleId(target == BuildTarget.iOS ? ids.Value.ios : ids.Value.android))
-                Debug.LogWarning("[Ballverse] Release build with Google's sample AdMob app id (-" + BuildPolicy.AllowTestAdsOption + "): it serves test ads only and must not be published to the store.");
         }
 
         static string DefaultOutput(BuildKind kind)

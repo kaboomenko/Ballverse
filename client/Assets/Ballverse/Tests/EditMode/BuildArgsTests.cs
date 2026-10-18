@@ -17,7 +17,8 @@ namespace Ballverse.Tests
                 "-androidVersionCode", "1042",
                 "-androidKeystoreName", "",
                 "-androidKeystorePass", "",
-                "-ballverseDevelopment", "false",
+                "-ballverseVariant", "OwnerTest",
+                "-stackTraceLogType", "false",
                 "-iosTeamId", "ABCDE12345",
                 "-androidTargetSdkVersion", "-1",
             });
@@ -28,7 +29,8 @@ namespace Ballverse.Tests
             Assert.IsNull(args.Get("androidKeystoreName"), "empty values count as absent");
             Assert.IsTrue(args.Has("androidKeystoreName"));
             Assert.AreEqual(true, args.GetBool("batchmode"), "bare flag");
-            Assert.AreEqual(false, args.GetBool("ballverseDevelopment"));
+            Assert.AreEqual(false, args.GetBool("stackTraceLogType"));
+            Assert.AreEqual("OwnerTest", args.Get("ballverseVariant"));
             Assert.AreEqual("ABCDE12345", args.Get("iosTeamId"));
             Assert.AreEqual("-1", args.Get("androidTargetSdkVersion"), "negative numbers are values, not options");
             Assert.IsNull(args.GetPositiveInt("androidTargetSdkVersion"));
@@ -57,7 +59,8 @@ namespace Ballverse.Tests
             Assert.IsTrue(trailing.Has("androidKeystorePass"));
             Assert.IsNull(trailing.Get("androidKeystorePass"));
             Assert.IsTrue(BuildArgs.IsValueOption("iosTeamId"));
-            Assert.IsFalse(BuildArgs.IsValueOption("ballverseDevelopment"), "flags may be bare");
+            Assert.IsTrue(BuildArgs.IsValueOption("ballverseVariant"));
+            Assert.IsFalse(BuildArgs.IsValueOption("batchmode"), "flags may be bare");
         }
 
         [Test]

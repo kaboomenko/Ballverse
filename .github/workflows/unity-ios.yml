@@ -2,15 +2,19 @@ name: Unity iOS
 
 # 1) "Xcode project" (ubuntu): Unity exports the iOS Xcode project (IL2CPP, iOS 16+) and uploads it as a .tar.gz
 #    artifact (tar keeps the executable bits Xcode build scripts need). Open it on a Mac: docs/dev/unity.md.
+#    Build variant (spec §7.9): OwnerTest on push (release-optimised, Google's test ads, fake store); on manual
+#    dispatch the "variant" input picks Dev, OwnerTest or Store. Store builds refuse Google's sample AdMob app id.
+#    The project uses automatic signing (team from APPLE_TEAM_ID, or chosen in Xcode); manual signing with the
+#    provisioning profile secret is applied only when the macOS archive is requested.
 # 2) "Archive" (macOS, manual dispatch with archive = true): selects the newest Xcode 26, installs CocoaPods
 #    dependencies and archives the project. With the signing secrets it produces a signed IPA; without them an unsigned
 #    .xcarchive (compile check only). With an App Store provisioning profile and the App Store Connect API key secrets
 #    the IPA is uploaded to TestFlight (no Mac needed to install: TestFlight app on the iPhone).
 # Secrets: UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD (required; jobs are skipped with a notice without them).
-# Signing (optional, all four together): IOS_P12_BASE64, IOS_P12_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64, APPLE_TEAM_ID.
-# APPLE_TEAM_ID alone switches the Xcode project to automatic signing with that team.
+# Signing for the archive (optional, all four together): IOS_P12_BASE64, IOS_P12_PASSWORD,
+# IOS_PROVISIONING_PROFILE_BASE64, APPLE_TEAM_ID. APPLE_TEAM_ID also sets the team for automatic signing in the
+# Xcode-project artifact.
 # TestFlight upload (optional, all three together): ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_BASE64.
-# Release (App Store profile) builds refuse Google's sample AdMob app id unless allow_test_ads is ticked (spec §8.9).
 
 on:
   workflow_dispatch:
@@ -19,10 +23,14 @@ on:
         description: "Also archive on macOS (signed IPA if signing secrets exist, unsigned archive otherwise; TestFlight upload with an App Store profile and ASC_* secrets)"
         type: boolean
         default: false
-      allow_test_ads:
-        description: "Allow Google's sample AdMob app id in an App Store/TestFlight build (test ads only; never for a store release)"
-        type: boolean
-        default: false
+      variant:
+        description: "Build variant (spec §7.9): OwnerTest = release-optimised with test ads and fake store (owner's iPhone, TestFlight); Dev = debug build; Store = store release, needs the real AdMob app id"
+        type: choice
+        options:
+          - OwnerTest
+          - Dev
+          - Store
+        default: OwnerTest
   push:
     branches:
       - "claude/**"
@@ -30,9 +38,11 @@ on:
       - "client/**"
       - ".github/workflows/unity-ios.yml"
 
+# Pushes cancel older push runs of the same branch only; a manual run (archive, TestFlight) is never cancelled by a
+# push, and a second manual run waits for the first.
 concurrency:
-  group: unity-ios-${{ github.ref }}
-  cancel-in-progress: true
+  group: unity-ios-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: read
@@ -40,6 +50,8 @@ permissions:
 env:
   BUILD_VERSION: "0.1.${{ github.run_number }}"
   BUNDLE_ID: com.ballverse.app
+  # Push builds are OwnerTest; a manual run uses the chosen variant.
+  VARIANT: ${{ github.event_name == 'workflow_dispatch' && inputs.variant || 'OwnerTest' }}
 
 jobs:
   check-secrets:
@@ -115,41 +127,36 @@ jobs:
           restore-keys: |
             Library-ios-
 
-      - name: Signing parameters for Unity
+      - name: Variant and signing parameters for Unity
         id: signing
         env:
-          SIGNING: ${{ needs.check-secrets.outputs.signing }}
+          # Manual signing only for the macOS archive (manual run with archive ticked and all signing secrets): an
+          # App Store-signed project cannot run on a device from Xcode, so every other build signs automatically.
+          MANUAL_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.archive && needs.check-secrets.outputs.signing == 'true' }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-          ALLOW_TEST_ADS: ${{ inputs.allow_test_ads && 'true' || 'false' }}
         run: |
-          # Development player unless the profile is an App Store profile (Distribution without a device list):
-          # only that build is a store release, which must not carry Google's sample AdMob app id (spec §8.9).
-          params="-ballverseDevelopment true"
-          release=false
-          if [ "$SIGNING" = "true" ]; then
+          case "$VARIANT" in
+            Dev|OwnerTest|Store) ;;
+            *) echo "::error title=Unknown variant::'$VARIANT' (use Dev, OwnerTest or Store)."; exit 1 ;;
+          esac
+          params="-ballverseVariant $VARIANT"
+          if [ "$MANUAL_SIGNING" = "true" ]; then
             profile="$RUNNER_TEMP/profile.mobileprovision"
             echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$profile"
             openssl smime -inform der -verify -noverify -in "$profile" -out "$RUNNER_TEMP/profile.plist" 2>/dev/null
-            read -r uuid ptype store < <(python3 -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); dev=bool(d.get("Entitlements",{}).get("get-task-allow")); print(d["UUID"], "Development" if dev else "Distribution", "false" if dev or "ProvisionedDevices" in d else "true")' "$RUNNER_TEMP/profile.plist")
+            read -r uuid ptype < <(python3 -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); dev=bool(d.get("Entitlements",{}).get("get-task-allow")); print(d["UUID"], "Development" if dev else "Distribution")' "$RUNNER_TEMP/profile.plist")
             rm -f "$profile" "$RUNNER_TEMP/profile.plist"
-            if [ "$store" = "true" ]; then
-              release=true
-              params="-ballverseDevelopment false"
-            fi
             params="$params -iosTeamId $APPLE_TEAM_ID -iosProvisioningProfileId $uuid -iosProvisioningProfileType $ptype"
-            echo "Manual signing: profile $uuid ($ptype, App Store: $store)."
+            echo "Manual signing for the archive: profile $uuid ($ptype)."
           elif [ -n "$APPLE_TEAM_ID" ]; then
             params="$params -iosTeamId $APPLE_TEAM_ID"
             echo "Automatic signing with the team from APPLE_TEAM_ID."
           else
             echo "No team: choose a team in Xcode > Signing & Capabilities."
           fi
-          if [ "$ALLOW_TEST_ADS" = "true" ]; then
-            params="$params -ballverseAllowTestAds true"
-          fi
+          echo "Variant: $VARIANT."
           echo "params=$params" >> "$GITHUB_OUTPUT"
-          echo "release=$release" >> "$GITHUB_OUTPUT"
 
       - name: Build Xcode project
         uses: game-ci/unity-builder@v5
@@ -167,21 +174,16 @@ jobs:
           version: ${{ env.BUILD_VERSION }}
           customParameters: ${{ steps.signing.outputs.params }}
 
-      - name: Check release Info.plist for Google sample ad ids
-        if: steps.signing.outputs.release == 'true'
-        env:
-          ALLOW_TEST_ADS: ${{ inputs.allow_test_ads && 'true' || 'false' }}
+      - name: Check Store Info.plist for Google sample ad ids
+        if: env.VARIANT == 'Store'
         run: |
           plist=build/iOS/Ballverse/Info.plist
           grep -A1 -E "GADApplicationIdentifier|ITSAppUsesNonExemptEncryption" "$plist" || true
           if grep -q "3940256099942544" "$plist"; then
-            if [ "$ALLOW_TEST_ADS" = "true" ]; then
-              echo "::warning title=Test ads in release build::Info.plist uses Google's sample AdMob app id (allow_test_ads). TestFlight only; never submit this build for review."
-            else
-              echo "::error title=Test ads in release build::Info.plist contains Google's sample AdMob app id. Enter the real id or tick allow_test_ads (spec §8.9)."
-              exit 1
-            fi
+            echo "::error title=Test ads in Store build::Info.plist contains Google's sample AdMob app id. Enter the real id, or build the OwnerTest variant (spec §7.9, §8.9)."
+            exit 1
           fi
+          echo "No Google sample AdMob app id in the Store Info.plist."
 
       - name: Pack Xcode project
         run: tar -czf ballverse-ios-xcode.tar.gz -C build/iOS Ballverse
@@ -189,7 +191,7 @@ jobs:
       - name: Upload Xcode project
         uses: actions/upload-artifact@v6
         with:
-          name: ballverse-ios-xcode-${{ env.BUILD_VERSION }}
+          name: ballverse-ios-xcode-${{ env.VARIANT }}-${{ env.BUILD_VERSION }}
           path: ballverse-ios-xcode.tar.gz
           if-no-files-found: error
           retention-days: 14
@@ -223,7 +225,7 @@ jobs:
       - name: Download Xcode project
         uses: actions/download-artifact@v7
         with:
-          name: ballverse-ios-xcode-${{ env.BUILD_VERSION }}
+          name: ballverse-ios-xcode-${{ env.VARIANT }}-${{ env.BUILD_VERSION }}
 
       - name: Unpack
         run: tar -xzf ballverse-ios-xcode.tar.gz
@@ -316,7 +318,7 @@ jobs:
         if: env.SIGNING == 'true'
         uses: actions/upload-artifact@v6
         with:
-          name: ballverse-ios-ipa-${{ env.BUILD_VERSION }}
+          name: ballverse-ios-ipa-${{ env.VARIANT }}-${{ env.BUILD_VERSION }}
           path: ${{ runner.temp }}/ipa/*.ipa
           if-no-files-found: error
           retention-days: 14
@@ -356,7 +358,7 @@ jobs:
         if: env.SIGNING != 'true'
         uses: actions/upload-artifact@v6
         with:
-          name: ballverse-ios-unsigned-xcarchive-${{ env.BUILD_VERSION }}
+          name: ballverse-ios-unsigned-xcarchive-${{ env.VARIANT }}-${{ env.BUILD_VERSION }}
           path: ${{ runner.temp }}/ballverse-ios-unsigned-xcarchive.tar.gz
           if-no-files-found: error
           retention-days: 7

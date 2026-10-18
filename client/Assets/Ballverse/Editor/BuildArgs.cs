@@ -9,7 +9,7 @@ namespace Ballverse.Editor
     /// unity-builder passes to a custom build method (-customBuildPath, -buildVersion, -androidVersionCode,
     /// -androidKeystoreName/-Pass, -androidKeyaliasName/-Pass, -androidTargetSdkVersion) plus Ballverse options
     /// passed through customParameters (-iosTeamId, -iosProvisioningProfileId, -iosProvisioningProfileType,
-    /// -iosBuildNumber, -ballverseDevelopment, -ballverseAllowTestAds). Empty values (GameCI passes "" for unset
+    /// -iosBuildNumber, -ballverseVariant). Empty values (GameCI passes "" for unset
     /// inputs) count as absent.
     /// <para>The options in <see cref="IsValueOption"/> always take the next argument as their value, even when it starts
     /// with '-' (a keystore password such as "-Secr3t"). Other options take the next argument unless it looks like an
@@ -25,6 +25,7 @@ namespace Ballverse.Editor
             "androidKeyaliasPass", "androidTargetSdkVersion", "androidExportType", "androidSymbolType",
             // Ballverse customParameters.
             "iosTeamId", "iosProvisioningProfileId", "iosProvisioningProfileType", "iosBuildNumber",
+            "ballverseVariant",
         };
 
         /// <summary>True for options that always consume the following argument as their value.</summary>

@@ -1,22 +1,27 @@
 name: Unity Android
 
-# Builds the development APK (IL2CPP, ARM64; debug keystore unless the upload keystore secrets are set) for installing on a test phone, and on manual
-# dispatch optionally the release App Bundle signed with the upload keystore.
+# Builds the APK (IL2CPP, ARM64; debug keystore unless the upload keystore secrets are set) for installing on a test
+# phone, and on manual dispatch optionally the App Bundle signed with the upload keystore.
+# Build variant (spec §7.9): OwnerTest on push (release-optimised, Google's test ads, fake store); on manual dispatch
+# the "variant" input picks Dev, OwnerTest or Store for both the APK and the bundle.
 # Secrets: UNITY_LICENSE, UNITY_EMAIL, UNITY_PASSWORD (required; the jobs are skipped with a notice without them).
 # Signing with the upload keystore (optional; APK and App Bundle): ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASS, ANDROID_KEYALIAS_NAME, ANDROID_KEYALIAS_PASS.
-# The release App Bundle refuses Google's sample AdMob app id unless allow_test_ads is ticked (spec §8.9); a CI step
-# also checks the bundle's manifest for it.
+# Store builds refuse Google's sample AdMob app id (spec §8.9); a CI step also checks the Store bundle's manifest for it.
 # See docs/dev/unity.md.
 
 on:
   workflow_dispatch:
     inputs:
+      variant:
+        description: "Build variant (spec §7.9): OwnerTest = release-optimised with test ads and fake store (owner's phone, internal testing); Dev = debug build; Store = store release, needs the real AdMob app id"
+        type: choice
+        options:
+          - OwnerTest
+          - Dev
+          - Store
+        default: OwnerTest
       bundle:
-        description: "Also build the release App Bundle (.aab)"
-        type: boolean
-        default: false
-      allow_test_ads:
-        description: "Allow Google's sample AdMob app id in the release App Bundle (test ads only, e.g. for internal testing; never for production)"
+        description: "Also build the App Bundle (.aab) in the chosen variant"
         type: boolean
         default: false
   push:
@@ -26,9 +31,11 @@ on:
       - "client/**"
       - ".github/workflows/unity-android.yml"
 
+# Pushes cancel older push runs of the same branch only; a manual run (App Bundle) is never cancelled by a push, and
+# a second manual run waits for the first.
 concurrency:
-  group: unity-android-${{ github.ref }}
-  cancel-in-progress: true
+  group: unity-android-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: read
@@ -38,6 +45,8 @@ env:
   # Target API required by Google Play for new apps and updates since 2026-08-31 (Android 16). GameCI installs
   # this SDK platform in the build container before Unity starts; BuildScript applies it to PlayerSettings.
   ANDROID_TARGET_SDK: AndroidApiLevel36
+  # Push builds are OwnerTest; a manual run uses the chosen variant.
+  VARIANT: ${{ github.event_name == 'workflow_dispatch' && inputs.variant || 'OwnerTest' }}
 
 jobs:
   check-secrets:
@@ -69,7 +78,7 @@ jobs:
           fi
 
   apk:
-    name: Development APK
+    name: APK
     needs: check-secrets
     if: needs.check-secrets.outputs.ready == 'true'
     runs-on: ubuntu-latest
@@ -106,6 +115,7 @@ jobs:
           version: ${{ env.BUILD_VERSION }}
           androidExportType: androidPackage
           androidTargetSdkVersion: ${{ env.ANDROID_TARGET_SDK }}
+          customParameters: -ballverseVariant ${{ env.VARIANT }}
           # Optional: with the upload keystore every APK has the same signature, so a new build installs over the
           # previous one. Without it each CI container generates a new debug key (uninstall before reinstalling).
           androidKeystoreBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -117,13 +127,13 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: ballverse-android-apk-${{ env.BUILD_VERSION }}
+          name: ballverse-android-apk-${{ env.VARIANT }}-${{ env.BUILD_VERSION }}
           path: build/Android/*.apk
           if-no-files-found: error
           retention-days: 14
 
   aab:
-    name: Release App Bundle
+    name: App Bundle
     needs: check-secrets
     if: needs.check-secrets.outputs.ready == 'true' && github.event_name == 'workflow_dispatch' && inputs.bundle
     runs-on: ubuntu-latest
@@ -151,6 +161,9 @@ jobs:
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
             echo "::warning title=Debug-signed bundle::ANDROID_KEYSTORE_BASE64 is not set; the bundle is signed with the debug key and Google Play will reject it."
           fi
+          if [ "$VARIANT" != "Store" ]; then
+            echo "::notice title=${VARIANT} bundle::Test ads and fake store: for internal testing only, never promote this bundle to production."
+          fi
 
       - name: Build App Bundle
         uses: game-ci/unity-builder@v5
@@ -168,7 +181,7 @@ jobs:
           version: ${{ env.BUILD_VERSION }}
           androidExportType: androidAppBundle
           androidTargetSdkVersion: ${{ env.ANDROID_TARGET_SDK }}
-          customParameters: -ballverseAllowTestAds ${{ inputs.allow_test_ads && 'true' || 'false' }}
+          customParameters: -ballverseVariant ${{ env.VARIANT }}
           # GameCI writes the decoded keystore to client/<androidKeystoreName> when the base64 secret is set.
           androidKeystoreBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           androidKeystoreName: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && 'ballverse-upload.keystore' || '' }}
@@ -176,28 +189,22 @@ jobs:
           androidKeyaliasName: ${{ secrets.ANDROID_KEYALIAS_NAME }}
           androidKeyaliasPass: ${{ secrets.ANDROID_KEYALIAS_PASS }}
 
-      - name: Check release manifest for Google sample ad ids
-        env:
-          ALLOW_TEST_ADS: ${{ inputs.allow_test_ads && 'true' || 'false' }}
+      - name: Check Store manifest for Google sample ad ids
+        if: env.VARIANT == 'Store'
         run: |
           aabs=(build/Android/*.aab)
           aab="${aabs[0]}"
           # The bundle manifest is a protobuf; its strings (meta-data values) are stored as plain UTF-8.
           if unzip -p "$aab" base/manifest/AndroidManifest.xml | grep -a -q "3940256099942544"; then
-            if [ "$ALLOW_TEST_ADS" = "true" ]; then
-              echo "::warning title=Test ads in release bundle::The bundle uses Google's sample AdMob app id (allow_test_ads). Internal testing only; never promote it to production."
-            else
-              echo "::error title=Test ads in release bundle::The bundle manifest contains Google's sample AdMob app id. Enter the real id or tick allow_test_ads (spec §8.9)."
-              exit 1
-            fi
-          else
-            echo "No Google sample AdMob app id in the bundle manifest."
+            echo "::error title=Test ads in Store bundle::The bundle manifest contains Google's sample AdMob app id. Enter the real id, or build the OwnerTest variant (spec §7.9, §8.9)."
+            exit 1
           fi
+          echo "No Google sample AdMob app id in the Store bundle manifest."
 
       - name: Upload App Bundle
         uses: actions/upload-artifact@v6
         with:
-          name: ballverse-android-aab-${{ env.BUILD_VERSION }}
+          name: ballverse-android-aab-${{ env.VARIANT }}-${{ env.BUILD_VERSION }}
           path: build/Android/*.aab
           if-no-files-found: error
           retention-days: 14
