@@ -1,0 +1,5 @@
+{
+  "marble_race": { "w3": 1.4, "densityMin": 2.5 },
+  "M06": { "qualityThreshold": 2.0 },
+  "color_war": { "w1": 1.0, "w2": 0.6, "w3": 1.2, "w4": 0.8, "w5": 1.0, "densityMin": 1.0, "densityMax": 10.0, "qualityThreshold": 1.9 }
+}
