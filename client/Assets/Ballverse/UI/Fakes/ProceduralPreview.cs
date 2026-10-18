@@ -107,7 +107,7 @@ namespace Ballverse.UI.Fakes
 
         public void Dispose()
         {
-            if (_texture != null) UnityEngine.Object.Destroy(_texture);
+            if (_texture != null) Ballverse.UI.UnityObjects.Destroy(_texture);
         }
     }
 }

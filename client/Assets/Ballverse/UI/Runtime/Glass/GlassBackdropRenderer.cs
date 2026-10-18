@@ -202,7 +202,7 @@ namespace Ballverse.UI.Glass
             if (_output != null)
             {
                 _output.Release();
-                UnityEngine.Object.Destroy(_output);
+                Ballverse.UI.UnityObjects.Destroy(_output);
             }
             _output = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default)
             {
@@ -221,10 +221,10 @@ namespace Ballverse.UI.Glass
             if (_output != null)
             {
                 _output.Release();
-                UnityEngine.Object.Destroy(_output);
+                Ballverse.UI.UnityObjects.Destroy(_output);
                 _output = null;
             }
-            if (_material != null) UnityEngine.Object.Destroy(_material);
+            if (_material != null) Ballverse.UI.UnityObjects.Destroy(_material);
         }
     }
 }

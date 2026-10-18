@@ -94,7 +94,7 @@ namespace Ballverse.UI
         {
             Shell?.Dispose();
             Shell = null;
-            if (_panelSettings != null) Destroy(_panelSettings);
+            if (_panelSettings != null) UnityObjects.Destroy(_panelSettings);
         }
     }
 }
