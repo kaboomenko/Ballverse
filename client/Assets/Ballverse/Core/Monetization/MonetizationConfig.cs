@@ -7,10 +7,11 @@ namespace Ballverse.Core.Monetization
     /// <summary>
     /// Remote-configurable monetization knobs used by the pure entitlement logic (spec §5.1) plus the release catalog: which
     /// modes ship in this release and which products the store sells (owner decisions for release 1, 00_brief).
-    /// Immutable; build a new instance when Remote Config changes (see <see cref="WithFreeModes"/>).
+    /// Immutable; build a new instance on every Remote Config snapshot with <see cref="WithRemote"/>, which takes both
+    /// monetization keys (<c>free_modes</c> and the <c>modes_disabled</c> kill switch) so neither can be forgotten.
     /// <para>
-    /// Parsing of the Remote Config <c>free_modes</c> payload belongs to the config module (spec §9.3); the App layer passes
-    /// its resolved <see cref="ModeCode"/> list, so one payload never yields two different free sets.
+    /// Parsing of the Remote Config payload belongs to the config module (spec §9.3); the App layer passes its resolved
+    /// <see cref="ModeCode"/> lists, so one payload never yields two different free sets.
     /// </para>
     /// <para>
     /// Presets: <see cref="Release1"/> (what release 1 ships: M01, M02, M05 free; only the three ad products are sold) and
@@ -54,7 +55,10 @@ namespace Ballverse.Core.Monetization
         /// <summary>
         /// The preset the shipping build uses: <see cref="Release1"/>. Every App-facing function of this module takes the
         /// config as a required argument and rejects null, so a forgotten argument fails to compile instead of silently
-        /// selling the full catalog; start from this preset (e.g. <c>MonetizationConfig.Default.WithFreeModes(resolved)</c>).
+        /// selling the full catalog. The App builds its config from this preset and the Remote Config snapshot in one call:
+        /// <c>MonetizationConfig.Default.WithRemote(values.FreeModes, values.ModesDisabled)</c> (<see cref="WithRemote"/>),
+        /// never with <see cref="WithFreeModes"/> alone, which keeps the preset's empty disabled set and so drops the
+        /// <c>modes_disabled</c> kill switch (spec §5.0.4, §7.6).
         /// </summary>
         public static MonetizationConfig Default => Release1;
 
@@ -201,9 +205,25 @@ namespace Ballverse.Core.Monetization
         }
 
         /// <summary>
+        /// The App entry point for a Remote Config snapshot (spec §5.0.4, §5.1, §7.6, §9.3): the same release catalog with
+        /// both monetization keys replaced at once, <c>free_modes</c> (united with the default free modes) and
+        /// <c>modes_disabled</c> (the emergency kill switch; replaces the previous disabled set). E.g.
+        /// <c>MonetizationConfig.Default.WithRemote(values.FreeModes, values.ModesDisabled)</c>. Passing the config module's
+        /// <c>EffectiveFreeModes</c> (free minus disabled) as <paramref name="freeModes"/> gives the same result: a disabled
+        /// mode is <see cref="ModeAccess.NotReleased"/> whether or not it is listed as free, and every product granting it
+        /// stops being sold.
+        /// </summary>
+        /// <exception cref="ArgumentNullException">A list is null (pass an empty list for an absent key).</exception>
+        public MonetizationConfig WithRemote(IEnumerable<ModeCode> freeModes, IEnumerable<ModeCode> modesDisabled)
+        {
+            return new MonetizationConfig(freeModes, _buildSellable, _buildModes, modesDisabled);
+        }
+
+        /// <summary>
         /// The same release catalog and rules with another Remote Config <c>free_modes</c> payload, e.g.
-        /// <c>MonetizationConfig.Release1.WithFreeModes(resolved)</c>. Still united with the default free modes; keeps
-        /// <see cref="DisabledModes"/>.
+        /// <c>MonetizationConfig.FullCatalog.WithFreeModes(modes)</c> in tests. Still united with the default free modes;
+        /// keeps <see cref="DisabledModes"/>. The App does not use it on a Remote Config snapshot: it calls
+        /// <see cref="WithRemote"/>, so <c>modes_disabled</c> is never lost.
         /// </summary>
         public MonetizationConfig WithFreeModes(IEnumerable<ModeCode> freeModes)
         {
@@ -212,9 +232,9 @@ namespace Ballverse.Core.Monetization
 
         /// <summary>
         /// The same release catalog and free set with another Remote Config <c>modes_disabled</c> payload (spec §5.0.4,
-        /// §7.6), e.g. <c>MonetizationConfig.Release1.WithFreeModes(free).WithDisabledModes(disabled)</c>. Replaces the
+        /// §7.6). Replaces the
         /// previous disabled set (an empty list re-enables every mode of the build), so products dropped by an earlier
-        /// payload are sold again.
+        /// payload are sold again. The App uses <see cref="WithRemote"/>, which sets both keys at once.
         /// </summary>
         public MonetizationConfig WithDisabledModes(IEnumerable<ModeCode> disabledModes)
         {
