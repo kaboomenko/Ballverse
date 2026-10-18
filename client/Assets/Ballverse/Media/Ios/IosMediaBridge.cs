@@ -90,9 +90,9 @@ namespace Ballverse.Media.Ios
             return NativeJson.Parse<NativeAudioDto>(json);
         }
 
-        protected override VideoWriterBase CreateWriter(string outputPath, VideoWriterOptions options)
+        protected override VideoWriterBase CreateWriter(string outputPath, string workPath, VideoWriterOptions options)
         {
-            return new IosVideoWriter(outputPath, options);
+            return new IosVideoWriter(outputPath, workPath, options);
         }
 
         protected override async Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
@@ -128,7 +128,7 @@ namespace Ballverse.Media.Ios
         {
             if (Disposed) return;
             base.Dispose();
-            s_ops.CancelAll();
+            s_ops.CancelAll(); // writer releases (keepOnCancelAll) stay pending until native reports them
         }
 
         /// <summary>Native AVAssetReader driven from the reader worker thread; writes RGBA into C#-owned buffers.</summary>
@@ -187,14 +187,18 @@ namespace Ballverse.Media.Ios
             }
         }
 
-        /// <summary>AVAssetWriter handle; appends copy (and swizzle) synchronously into a pooled CVPixelBuffer.</summary>
+        /// <summary>
+        /// AVAssetWriter handle writing the work path; appends copy (and swizzle) synchronously into a pooled CVPixelBuffer.
+        /// <c>BVWriter_Release</c> reports once the writer queue has drained, the asset writer was cancelled or finished and
+        /// an unfinished work file was deleted.
+        /// </summary>
         sealed class IosVideoWriter : VideoWriterBase
         {
             IntPtr _handle;
 
-            public IosVideoWriter(string outputPath, VideoWriterOptions o) : base(outputPath, o)
+            public IosVideoWriter(string outputPath, string workPath, VideoWriterOptions o) : base(outputPath, workPath, o)
             {
-                _handle = IosNative.BVWriter_Open(outputPath, o.Width, o.Height, o.Fps, o.VideoBitrateBps, o.KeyframeIntervalSeconds,
+                _handle = IosNative.BVWriter_Open(workPath, o.Width, o.Height, o.Fps, o.VideoBitrateBps, o.KeyframeIntervalSeconds,
                     o.AudioPcmPath ?? string.Empty, o.AudioBitrateBps, o.Metadata?.Title ?? string.Empty,
                     o.Metadata?.CreationTimeIso8601 ?? string.Empty);
                 if (_handle == IntPtr.Zero)
@@ -222,11 +226,21 @@ namespace Ballverse.Media.Ios
                 return new WriterFinish(dto.frames, dto.durationUs);
             }
 
-            protected override void ReleaseCore()
+            protected override async Task ReleaseCoreAsync()
             {
-                if (_handle == IntPtr.Zero) return;
-                IosNative.BVWriter_Close(_handle);
+                IntPtr handle = _handle;
                 _handle = IntPtr.Zero;
+                if (handle == IntPtr.Zero) return;
+                try
+                {
+                    // The native side drops the handle at once and completes the request when it has stopped.
+                    await s_ops.Run(null, CancellationToken.None, id => IosNative.BVWriter_Release(handle, id), null,
+                        e => new MediaException(MediaErrorCode.EncoderFailed, "BVWriter_Release failed: " + e.Message, e), true);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e);
+                }
             }
         }
     }

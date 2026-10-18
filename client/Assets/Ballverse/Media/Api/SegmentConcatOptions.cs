@@ -14,8 +14,12 @@ namespace Ballverse.Media
     /// export plan's frame times <c>FramePtsUs(i)</c> (segment starts fall on whole seconds, so no µs rounding drift).</para>
     /// <para><b>Disk space.</b> With E = the export size, the call needs the segments (≈ E) + the remuxed output (≈ E)
     /// and — where the platform muxer writes <c>moov</c> at the end (Android) — a temp copy for the fast-start rewrite
-    /// (≈ E): peak ≈ 3E, above the §3.8 pre-check of 2E + 200 MB. <see cref="DeleteSegmentsBeforeFastStart"/> lowers the
-    /// peak to ≈ 2E. iOS (AVAssetWriter writes moov at the front) peaks at ≈ 2E either way.</para>
+    /// (≈ E): peak ≈ 3E with <see cref="DeleteSegmentsBeforeFastStart"/> = false, above the §3.8 pre-check
+    /// <c>ExportSettings.RequiredFreeSpaceBytes</c> = 2E + 200 MB, so the join can run out of space although the pre-check
+    /// passed. <see cref="DeleteSegmentsBeforeFastStart"/> = true lowers the peak to ≈ 2E and is the RECOMMENDED setting
+    /// for the studio's segmented export (the segments are not needed once the remux succeeded); keep false only when the
+    /// caller checks 3E + 200 MB itself or must keep the segments. iOS (AVAssetWriter writes moov at the front) peaks at
+    /// ≈ 2E either way.</para>
     /// </remarks>
     public sealed class SegmentConcatOptions
     {
@@ -32,7 +36,7 @@ namespace Ballverse.Media
         /// When true, the segment files are deleted as soon as the remux succeeded, before the fast-start rewrite, so the
         /// peak disk use is ≈ 2 × the export size instead of ≈ 3× (see remarks). Trade-off: if the rewrite then fails or
         /// is cancelled, the output is deleted and the segments are already gone, so the export must be redone from the
-        /// first segment. Default false (segments are never touched).
+        /// first segment. Default false (segments are never touched; peak ≈ 3E on Android). Recommended: true for the studio.
         /// </summary>
         public bool DeleteSegmentsBeforeFastStart { get; }
 
@@ -47,7 +51,10 @@ namespace Ballverse.Media
             DeleteSegmentsBeforeFastStart = deleteSegmentsBeforeFastStart;
         }
 
-        /// <summary>Options for an export plan's settings (fps, audio bitrate).</summary>
+        /// <summary>
+        /// Options for an export plan's settings (fps, audio bitrate). The studio should pass
+        /// <paramref name="deleteSegmentsBeforeFastStart"/> = true (peak disk use ≈ 2E instead of ≈ 3E, see remarks).
+        /// </summary>
         public static SegmentConcatOptions FromExportSettings(ExportSettings settings, Mp4Metadata metadata = null,
             bool deleteSegmentsBeforeFastStart = false)
         {

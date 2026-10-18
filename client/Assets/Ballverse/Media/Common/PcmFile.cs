@@ -1,17 +1,23 @@
 using System;
 using System.IO;
+using Ballverse.Core.Audio;
 
 namespace Ballverse.Media
 {
     /// <summary>
     /// The raw PCM interchange format between the studio audio mix and the native encoders/decoders:
     /// headerless 32-bit float, little-endian, interleaved stereo (L, R), 48 000 Hz. Frame count = file length / 8.
-    /// Pure C#, usable from any thread.
+    /// Pure C#, usable from any thread. Rate and channel count are the Core mix format
+    /// (<see cref="AudioConstants.SampleRate"/>, <see cref="AudioConstants.Channels"/>), so the offline mix (Core) and the
+    /// native encoders can never disagree; the Java (<c>AacPcmEncoder.SAMPLE_RATE</c>) and Objective-C++ plugins hard-code
+    /// the same 48 kHz stereo.
     /// </summary>
     public static class PcmFile
     {
-        public const int SampleRate = 48000;
-        public const int Channels = 2;
+        /// <summary>48 000 Hz (<see cref="AudioConstants.SampleRate"/>).</summary>
+        public const int SampleRate = AudioConstants.SampleRate;
+        /// <summary>2, interleaved L/R (<see cref="AudioConstants.Channels"/>).</summary>
+        public const int Channels = AudioConstants.Channels;
         public const int BytesPerFrame = Channels * sizeof(float);
         /// <summary>Suffix of the temp file used for atomic writes (deleted on any failure).</summary>
         public const string TempSuffix = ".tmp";

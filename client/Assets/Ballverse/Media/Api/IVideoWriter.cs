@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Unity.Collections;
 
 namespace Ballverse.Media
@@ -19,12 +20,21 @@ namespace Ballverse.Media
     /// <see cref="AppendVideoFrame(NativeArray{byte}, long)"/> blocks until a slot frees (up to
     /// <see cref="VideoWriterOptions.AppendTimeoutMs"/>).</para>
     /// <para><b>Threading.</b> Main thread only. Encoding, audio encoding and muxing run on native threads.</para>
+    /// <para><b>Files.</b> The encoder writes a temp file private to this writer next to <see cref="OutputPath"/>
+    /// (<c>&lt;output&gt;.bv&lt;id&gt;.part.mp4</c>); only a successful <see cref="IMediaBridge.FinalizeAsync"/> renames it to
+    /// <see cref="OutputPath"/>. Disposing, cancelling or failing deletes only that temp file, so a late native cleanup can
+    /// never delete the output of a newer writer for the same path.</para>
+    /// <para><b>Release.</b> <see cref="IDisposable.Dispose"/> returns at once and stops the native encoder in the
+    /// background; <see cref="Released"/> / <see cref="ReleaseAsync"/> complete once the native side has stopped, released
+    /// the hardware encoder and deleted its temp file. Until then <see cref="IMediaBridge.OpenWriter"/> refuses the same
+    /// output path; <see cref="MediaBridgeExtensions.OpenWriterAsync"/> waits for it. A redo/retry (§3.8 segment redo) should
+    /// therefore <c>await writer.ReleaseAsync()</c> (or use <c>OpenWriterAsync</c>) before opening the next writer.</para>
     /// </remarks>
     public interface IVideoWriter : IDisposable
     {
         VideoWriterOptions Options { get; }
 
-        /// <summary>Destination MP4 path.</summary>
+        /// <summary>Destination MP4 path. Created only by a successful <see cref="IMediaBridge.FinalizeAsync"/> (rename of the writer's temp file).</summary>
         string OutputPath { get; }
 
         /// <summary>Frames queued but not yet consumed by the encoder.</summary>
@@ -37,6 +47,16 @@ namespace Ballverse.Media
 
         /// <summary>True after <see cref="IMediaBridge.FinalizeAsync"/> started; appends then throw.</summary>
         bool IsFinalizing { get; }
+
+        /// <summary>
+        /// Completes (on the main thread, never faulted) once this writer's native side has stopped: the encoder thread /
+        /// queue has finished, the codec is released and an unfinished temp file is deleted. Pending until the writer is
+        /// disposed or finalized.
+        /// </summary>
+        Task Released { get; }
+
+        /// <summary>Disposes the writer (aborting it if unfinished) and returns <see cref="Released"/>.</summary>
+        Task ReleaseAsync();
 
         /// <summary>Copies the frame to the encoder queue; false when 3 frames are already in flight.</summary>
         /// <exception cref="MediaException">The encoder failed earlier (sticky).</exception>

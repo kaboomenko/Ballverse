@@ -48,6 +48,14 @@ import java.util.concurrent.TimeUnit;
  * A segment of the segmented export has no audio (empty audioPcmPath); {@link SegmentConcat} encodes the mix once when
  * joining the segments.
  *
+ * Files: the writer owns exactly one file, {@code path} — a work file unique to this writer chosen by C#
+ * ({@code <output>.bv<id>.part.mp4}); C# renames it to the output after a successful finish. Every abort path deletes
+ * only that file, so a writer that stops late can never delete the output of a newer writer for the same output.
+ *
+ * Release: {@link #releaseAsync} aborts an unfinished writer and completes its request (MediaBridge.succeed) only after
+ * the writer thread has EXITED — codecs, EGL and muxer released and, if unfinished, the file deleted — so C# can open the
+ * next writer (and hardware encoder) deterministically.
+ *
  * Threading: the public methods are called from the Unity main thread; everything else runs on the writer thread.
  */
 public final class VideoWriter {
@@ -57,6 +65,7 @@ public final class VideoWriter {
     private static final long DRAIN_TIMEOUT_US = 10000;
     private static final long STALL_LIMIT_NS = 10000000000L;
     private static final int EGL_RECORDABLE_ANDROID = 0x3142;
+    private static final long OPEN_FAILURE_JOIN_MS = 5000;
 
     private static final int JOB_FRAME = 1;
     private static final int JOB_FINISH = 2;
@@ -105,6 +114,11 @@ public final class VideoWriter {
     private volatile boolean mCancelled;
     private volatile boolean mDone;
     private Thread mThread;
+
+    // Release signalling (guarded by mReleaseLock)
+    private final Object mReleaseLock = new Object();
+    private boolean mThreadExited;
+    private final List<Long> mReleaseWaiters = new ArrayList<>();
 
     // Writer thread state
     private MediaCodec mVideo;
@@ -176,7 +190,11 @@ public final class VideoWriter {
             mThread = new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    threadMain(ready);
+                    try {
+                        threadMain(ready);
+                    } finally {
+                        onThreadExit();
+                    }
                 }
             }, "BallverseVideoWriter");
             mThread.start();
@@ -194,7 +212,14 @@ public final class VideoWriter {
             releaseCodecs();
             deleteOutput();
         } else {
+            // Do not return before the thread has released the encoder and deleted the file: C# may retry at once.
             mJobs.offer(new Job(JOB_CANCEL, -1, 0));
+            try {
+                mThread.join(OPEN_FAILURE_JOIN_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (mThread.isAlive()) Log.w(TAG, "VideoWriter thread still stopping after a failed open");
         }
         return false;
     }
@@ -254,12 +279,53 @@ public final class VideoWriter {
         if (mThread != null) mJobs.offer(new Job(JOB_CANCEL, -1, 0));
     }
 
-    /** Releases everything; aborts (and deletes the file) if not finished. Safe to call more than once. */
+    /** Releases everything; aborts (and deletes the file) if not finished. Safe to call more than once. Does not wait. */
     public void release() {
         if (!mDone) cancel();
     }
 
+    /**
+     * Like {@link #release()}, then completes requestId (MediaBridge.succeed, "{}") once the writer thread has exited:
+     * encoder, EGL and muxer released and an unfinished file deleted. Immediately if the thread already exited or never
+     * started. Never fails. Safe to call more than once (each request completes).
+     */
+    public void releaseAsync(long requestId) {
+        release();
+        boolean now;
+        synchronized (mReleaseLock) {
+            now = mThread == null || mThreadExited;
+            if (!now) mReleaseWaiters.add(requestId);
+        }
+        if (now) MediaBridge.succeed(requestId, "{}");
+    }
+
+    /** True once the writer thread has exited (or never started). For checks and diagnostics. */
+    public boolean isStopped() {
+        synchronized (mReleaseLock) {
+            return mThread == null || mThreadExited;
+        }
+    }
+
     // ================================================================== writer thread
+
+    /** Last code on the writer thread: makes sure nothing is left behind, then reports pending releases. */
+    private void onThreadExit() {
+        if (!mDone) {
+            // Only reachable through an unexpected Throwable escaping threadMain: abort like a cancel.
+            try {
+                abort();
+            } catch (Throwable t) {
+                Log.e(TAG, "VideoWriter cleanup failed: " + t);
+            }
+        }
+        List<Long> waiters;
+        synchronized (mReleaseLock) {
+            mThreadExited = true;
+            waiters = new ArrayList<>(mReleaseWaiters);
+            mReleaseWaiters.clear();
+        }
+        for (Long id : waiters) MediaBridge.succeed(id, "{}");
+    }
 
     private void threadMain(CountDownLatch ready) {
         try {
@@ -380,6 +446,7 @@ public final class VideoWriter {
         deleteOutput();
     }
 
+    /** Deletes this writer's own (work) file — never any other path. */
     private void deleteOutput() {
         File f = new File(mPath);
         if (f.exists() && !f.delete()) Log.w(TAG, "cannot delete " + mPath);

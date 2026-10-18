@@ -120,5 +120,19 @@ namespace Ballverse.Media.Tests
             CollectionAssert.IsEmpty(_log);
             Assert.AreEqual(MediaErrorCode.EncoderFailed, ((MediaException)task.Exception.InnerException).Code);
         }
+
+        // Writer releases must survive bridge disposal: their completion means "the native writer has stopped".
+        [Test]
+        public void CancelAll_KeepsKeepOnCancelAllOperations()
+        {
+            Task<string> normal = Start(CancellationToken.None);
+            Task<string> release = _ops.Run(null, CancellationToken.None, id => _log.Add("release " + id), null, null, true);
+            _ops.CancelAll();
+            Assert.IsTrue(normal.IsCanceled);
+            Assert.IsFalse(release.IsCompleted);
+            Assert.AreEqual(1, _ops.PendingCount);
+            _ops.Complete(2, NativeStatus.Ok, "{}");
+            Assert.AreEqual("{}", _pump.Wait(release));
+        }
     }
 }

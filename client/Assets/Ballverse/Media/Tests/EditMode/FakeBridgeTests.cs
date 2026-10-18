@@ -31,6 +31,19 @@ namespace Ballverse.Media.Tests
             _dir.Dispose();
         }
 
+        /// <summary>Work directories ("&lt;name&gt;.bv&lt;id&gt;.part.mp4.frames") of writers/joins for output <paramref name="name"/>.</summary>
+        string[] WorkDirs(string name)
+        {
+            return Directory.GetDirectories(_dir.Path, name + ".bv*.part.mp4.frames");
+        }
+
+        string SingleWorkDir(string name)
+        {
+            string[] dirs = WorkDirs(name);
+            Assert.AreEqual(1, dirs.Length, "work directories of " + name + ": " + string.Join(", ", dirs));
+            return dirs[0];
+        }
+
         static VideoWriterOptions SegmentOptions()
         {
             return new VideoWriterOptions(16, 16, Fps, 1000000);
@@ -94,6 +107,7 @@ namespace Ballverse.Media.Tests
             var e = Assert.Throws<MediaException>(() => task.GetAwaiter().GetResult());
             Assert.AreEqual(MediaErrorCode.InvalidState, e.Code);
             Assert.IsFalse(Directory.Exists(_dir.File("out.mp4") + ".frames"));
+            CollectionAssert.IsEmpty(WorkDirs("out.mp4"));
         }
 
         [Test]
@@ -126,15 +140,17 @@ namespace Ballverse.Media.Tests
         {
             IVideoWriter w = _bridge.OpenWriter(_dir.File("c.mp4"), SegmentOptions());
             w.AppendVideoFrame(new byte[16 * 16 * 4], 0);
-            string frames = _dir.File("c.mp4") + ".frames";
-            Assert.IsTrue(Directory.Exists(frames));
+            string frames = SingleWorkDir("c.mp4");
             var cts = new CancellationTokenSource();
             cts.Cancel();
             Task<VideoWriterResult> task = _bridge.FinalizeAsync(w, cts.Token);
+            Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(new byte[16 * 16 * 4], 100000));
             _pump.RunUntil(() => task.IsCompleted);
             Assert.IsTrue(task.IsCanceled);
-            _pump.RunUntil(() => !Directory.Exists(frames), 5000);
-            Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(new byte[16 * 16 * 4], 100000));
+            // Completes only once the writer has stopped and deleted its own work output.
+            Assert.IsTrue(w.Released.IsCompleted);
+            Assert.IsFalse(Directory.Exists(frames));
+            Assert.IsFalse(Directory.Exists(_dir.File("c.mp4") + ".frames"));
         }
 
         // QA round 2: a second FinalizeAsync on a finished writer deleted the finished output.
@@ -177,7 +193,7 @@ namespace Ballverse.Media.Tests
             IVideoWriter w = _bridge.OpenWriter(_dir.File("sticky.mp4"), SegmentOptions());
             var frame = new byte[16 * 16 * 4];
             w.AppendVideoFrame(frame, 0);
-            string frames = _dir.File("sticky.mp4") + ".frames";
+            string frames = SingleWorkDir("sticky.mp4");
             _pump.RunUntil(() => File.Exists(Path.Combine(frames, "frame_000000.png")));
             Directory.Delete(frames, true); // the next PNG write fails → sticky encoder error
             w.AppendVideoFrame(frame, 33334);
@@ -203,7 +219,8 @@ namespace Ballverse.Media.Tests
             Assert.IsTrue(task.IsFaulted);
             Assert.AreSame(sticky, task.Exception.InnerException);
             Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(frame, pts + 100000), "writer must be released");
-            _pump.RunUntil(() => !Directory.Exists(frames), 5000);
+            Assert.IsTrue(w.Released.IsCompleted, "FinalizeAsync must complete only after the native release");
+            Assert.IsFalse(Directory.Exists(frames));
         }
 
         // QA round 2: FinalizeAsync without frames deleted the output under a still-open writer.
@@ -211,12 +228,14 @@ namespace Ballverse.Media.Tests
         public void FinalizeAsync_NoFrames_DisposesWriter()
         {
             IVideoWriter w = _bridge.OpenWriter(_dir.File("empty.mp4"), SegmentOptions());
-            string frames = _dir.File("empty.mp4") + ".frames";
+            string frames = SingleWorkDir("empty.mp4");
             Task<VideoWriterResult> task = _bridge.FinalizeAsync(w, CancellationToken.None);
+            Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(new byte[16 * 16 * 4], 0));
+            _pump.RunUntil(() => task.IsCompleted);
             Assert.IsTrue(task.IsFaulted);
             Assert.IsInstanceOf<InvalidOperationException>(task.Exception.InnerException);
-            Assert.Throws<ObjectDisposedException>(() => w.AppendVideoFrame(new byte[16 * 16 * 4], 0));
-            _pump.RunUntil(() => !Directory.Exists(frames), 5000);
+            Assert.IsTrue(w.Released.IsCompleted);
+            Assert.IsFalse(Directory.Exists(frames));
         }
 
         [Test]
@@ -228,6 +247,7 @@ namespace Ballverse.Media.Tests
             Task<VideoWriterResult> task = _bridge.FinalizeAsync(w, CancellationToken.None);
             Assert.IsTrue(task.IsFaulted);
             Assert.IsInstanceOf<ObjectDisposedException>(task.Exception.InnerException);
+            _pump.Wait(w.Released); // tests must not leave releases pending (OpenWriterAsync waits for them)
         }
 
         [Test]

@@ -20,6 +20,13 @@ namespace Ballverse.Media
         /// <summary>Write every Nth appended frame as PNG (1 = all frames).</summary>
         public int PngFrameStride { get; set; } = 1;
 
+        /// <summary>
+        /// Extra time a disposed/finished writer takes to report its release (models a slow hardware-encoder teardown),
+        /// ms. Lets editor runs and tests exercise the redo path (<see cref="IVideoWriter.ReleaseAsync"/>,
+        /// <see cref="MediaBridgeExtensions.OpenWriterAsync"/>). 0 = none.
+        /// </summary>
+        public int SimulatedReleaseDelayMs { get; set; }
+
         public ThermalState Thermal { get; set; } = ThermalState.Nominal;
         public bool LowPowerMode { get; set; }
         public bool ReduceMotion { get; set; }

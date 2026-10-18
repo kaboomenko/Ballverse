@@ -32,6 +32,7 @@ namespace Ballverse.Media.Internal
             public TaskCompletionSource<string> Tcs;
             public IProgress<double> Progress;
             public CancellationTokenRegistration Registration;
+            public bool KeepOnCancelAll;
         }
 
         long _nextId;
@@ -45,13 +46,15 @@ namespace Ballverse.Media.Internal
         /// <paramref name="ct"/> is already cancelled; otherwise registers the operation, calls
         /// <paramref name="start"/>(id) and only then arms <paramref name="ct"/> (so <paramref name="cancelNative"/>(id)
         /// always follows the start). An exception from <paramref name="start"/> fails the task with
-        /// <paramref name="wrapStartError"/>(exception). Main thread.
+        /// <paramref name="wrapStartError"/>(exception). <paramref name="keepOnCancelAll"/>: <see cref="CancelAll"/> (bridge
+        /// disposal) leaves the operation pending so that it still completes with the native result (writer releases,
+        /// whose completion means "the native side has stopped"). Main thread.
         /// </summary>
         public Task<string> Run(IProgress<double> progress, CancellationToken ct, Action<long> start, Action<long> cancelNative,
-            Func<Exception, MediaException> wrapStartError)
+            Func<Exception, MediaException> wrapStartError, bool keepOnCancelAll = false)
         {
             if (ct.IsCancellationRequested) return Task.FromCanceled<string>(ct);
-            long id = Begin(out Task<string> task, progress);
+            long id = Begin(out Task<string> task, progress, keepOnCancelAll);
             try
             {
                 start(id);
@@ -69,13 +72,14 @@ namespace Ballverse.Media.Internal
         /// Registers an operation and returns its id; call the native start function with the id afterwards, then
         /// <see cref="Arm"/>. Prefer <see cref="Run"/>.
         /// </summary>
-        public long Begin(out Task<string> task, IProgress<double> progress)
+        public long Begin(out Task<string> task, IProgress<double> progress, bool keepOnCancelAll = false)
         {
             long id = Interlocked.Increment(ref _nextId);
             var op = new Op
             {
                 Tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously),
                 Progress = progress,
+                KeepOnCancelAll = keepOnCancelAll,
             };
             _ops[id] = op;
             task = op.Tcs.Task;
@@ -155,11 +159,12 @@ namespace Ballverse.Media.Internal
             });
         }
 
-        /// <summary>Cancels every pending task (bridge disposal).</summary>
+        /// <summary>Cancels every pending task (bridge disposal) except those started with keepOnCancelAll.</summary>
         public void CancelAll()
         {
             foreach (var pair in _ops)
             {
+                if (pair.Value.KeepOnCancelAll) continue;
                 if (_ops.TryRemove(pair.Key, out Op op))
                 {
                     op.Registration.Dispose();
