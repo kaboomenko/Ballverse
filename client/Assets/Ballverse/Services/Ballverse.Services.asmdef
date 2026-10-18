@@ -1,0 +1,30 @@
+{
+    "name": "Ballverse.Services",
+    "rootNamespace": "Ballverse.Services",
+    "references": [
+        "Ballverse.Core",
+        "Unity.Purchasing",
+        "Unity.Purchasing.Security",
+        "Unity.Purchasing.SecurityCore"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.google.ads.mobile",
+            "expression": "[9.0.0,12.0.0)",
+            "define": "BALLVERSE_ADMOB"
+        },
+        {
+            "name": "com.unity.purchasing",
+            "expression": "[5.4.2,6.0.0)",
+            "define": "BALLVERSE_UNITY_IAP"
+        }
+    ],
+    "noEngineReferences": false
+}
