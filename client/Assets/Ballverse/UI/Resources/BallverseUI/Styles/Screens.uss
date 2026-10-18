@@ -203,7 +203,7 @@
 
 .bv-sim__preset-modified {
     font-size: var(--font-xs);
-    color: var(--color-warning);
+    color: var(--color-warning-text);
     margin-left: var(--space-1);
 }
 
@@ -437,7 +437,7 @@
 }
 
 .bv-quest__step--done .bv-quest__check {
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .bv-quest__step--done .bv-quest__step-label {
@@ -526,7 +526,7 @@
 .bv-empty__icon {
     width: 72px;
     height: 72px;
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     margin-bottom: var(--space-4);
 }
 
@@ -597,7 +597,7 @@
     width: 18px;
     height: 18px;
     margin-right: var(--space-2);
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .bv-product__include-label {
@@ -607,7 +607,7 @@
 
 .bv-product__note {
     font-size: var(--font-s);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     margin-bottom: var(--space-1);
 }
 
@@ -693,7 +693,7 @@
 }
 
 .bv-export-done__saved-icon {
-    color: var(--color-success);
+    color: var(--color-success-text);
     margin-right: var(--space-2);
 }
 
@@ -722,13 +722,13 @@
 }
 
 .bv-export-done__upsell .bv-icon {
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     margin-right: var(--space-2);
 }
 
 .bv-export-done__upsell-label {
     font-size: var(--font-s);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
 }
 
 .bv-export-done__more {
@@ -753,7 +753,7 @@
 .bv-consent__icon {
     width: 80px;
     height: 80px;
-    color: var(--color-accent);
+    color: var(--color-accent-text);
 }
 
 .bv-consent__title {
@@ -778,7 +778,7 @@
 
 .bv-consent__point-icon {
     margin-right: var(--space-3);
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .bv-consent__point-label {
@@ -802,7 +802,7 @@
 
 .bv-preset--selected .bv-row__label {
     -unity-font-style: bold;
-    color: var(--color-accent);
+    color: var(--color-accent-text);
 }
 
 .bv-license__name {

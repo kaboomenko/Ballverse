@@ -71,9 +71,12 @@ Unity 6.3 is new and not used here). The material is therefore split:
    (≤ 8): **refraction** (sample offset along the rounded-rectangle SDF normal near the edge, 0–12 px), a soft **edge
    highlight** whose direction follows device tilt by ±4° (off under reduced motion) and the **adaptive tint**: per
    pixel the tint opacity is the minimum that keeps the *weakest* text colour used on glass at **WCAG AA 4.5:1** over
-   the blurred backdrop (never below the theme's 30–40% base). On glass the secondary / tertiary text colours are
-   opaque (`Theme.uss` redefines `--color-text-2/-3` inside `.bv-glass`, values in `Model/Glass/GlassTextPalette`,
-   kept in sync by a test), so every glass text colour keeps 4.5:1, not only the primary one. Only `Graphics.Blit` with a
+   the blurred backdrop (never below the theme's 30–40% base). On glass every text colour is opaque: `Theme.uss`
+   redefines `--color-text-2/-3` and the accent / danger / success / warning *text* tokens (`--color-*-text`) inside
+   `.bv-glass` (values in `Model/Glass/GlassTextPalette`, none weaker than the tertiary text the tint protects), and
+   the fill tokens (`--color-accent`, `--color-warning`, ...) are never used as text colours (a test checks every
+   `color:` declaration), so every glass text colour keeps 4.5:1, not only the primary one. Selected glass tabs show
+   the glass accent text, bold and underlined, with no translucent fill under the label. Only `Graphics.Blit` with a
    material is used, so it works with URP and without camera hooks.
 2. **Each surface** (class `bv-glass`) shows that one texture as its background image, sized to the panel and offset by
    the element's `worldBound` every frame (`GlassSurfaces`, background-size / background-position API), so it displays
@@ -99,7 +102,12 @@ source. The ≤ 1.5 ms tier-B budget must be measured on device (spec spike S3).
 - `Theme.uss`: `bv-theme-dark` (default) / `bv-theme-light`, `bv-contrast`; one accent colour. `ThemePreference.Dark`
   is the zero value and the first-run default; light follows the device only when "Системная" is chosen.
 - Touch targets: every tappable control is at least 44 × 44 pt (`--touch`); settings rows with a switch toggle on a tap
-  anywhere in the row; timeline handles are 44 pt hit areas centred on the segment edges.
+  anywhere in the row; timeline handles are 44 pt hit areas placed by `TimelineGeometry.PlaceHandles`: centred on the
+  segment edges, kept whole inside the screen (the tracks and their ancestors do not clip, so a handle at the reel
+  start reaches over the badge column), moved outwards on short text spans so part of the body stays free; a handle
+  pressed without moving is a tap (selects the text layer).
+- Text colours: `--color-text`, `-2`, `-3` and `--color-{accent,danger,success,warning}-text` (AA on the background
+  and surfaces, glass-safe inside `.bv-glass`); the plain colour tokens are fills.
 - The panel is scaled to a 390-unit-wide reference, so panel units ≈ points.
 - Safe area: layouts contain spacer elements `bv-safe-top` / `bv-safe-bottom` sized by `SafeAreaController`; the
   simulation renders edge to edge underneath.
@@ -129,7 +137,11 @@ source. The ≤ 1.5 ms tier-B budget must be measured on device (spec spike S3).
   Input System package (`BALLVERSE_INPUT_SYSTEM`, set by the asmdef version define).
 - iOS: a swipe from the left edge (≤ 20 pt from the edge, ≥ 72 pt to the right) is back (`EdgeSwipeBack`,
   `UiShell.EdgeSwipeBackEnabled`, on by default on iOS); in the interactive game it pauses with a confirmation; on a tab
-  root it does nothing.
+  root it does nothing. While an element holds the pointer Unity sends its events only to that element, so the shell
+  also watches `PointerCaptureEvent`: a plain tap target (`Tap.On`, class `bv-tap-target`) is followed until release,
+  and once the press moves ≥ 16 pt right, mostly horizontally, app-root takes the pointer (the tap is cancelled); a
+  dragging element (slider, sheet handle, timeline, arena, preview) keeps its gesture and the swipe is dropped. A new
+  press with the same pointer id always restarts the recognizer.
 - Interactive arena: presses within 24 pt of a screen edge or in the bar strips never reach the game
   (`ArenaInputPolicy`, spec §2.6 / §4.3).
 - Studio preview (`PreviewGestures`): drag the PiP window (snapped by Core magnets on release), drag / pinch a slot to
@@ -141,7 +153,10 @@ source. The ≤ 1.5 ms tier-B budget must be measured on device (spec spike S3).
 Every element registered with `Tap.On` / `TapOrLongPress` is a button for VoiceOver / TalkBack; icon-only buttons get
 labels by element name (`A11yLabels`, keys `a11y.*`), others are read by their text; screen, sheet and dialog titles
 are headings. `ScreenReaderBridge` mirrors the top-most modal layer into Unity 6's `AssistiveSupport.activeHierarchy`
-while a screen reader is on (iOS / Android). It needs the built-in Accessibility module
+while a screen reader is on (iOS / Android). It runs in `LateUpdate`, after the panel update: a change (screen, sheet,
+dialog, language) is read once its new elements are laid out (`ScreenReaderSync`; a new element has NaN bounds until
+the next panel update), and the visible UI is re-read twice a second so nodes that appear without an event (transition
+end, result card, chrome) are republished; otherwise only the frames move. It needs the built-in Accessibility module
 (`com.unity.modules.accessibility` in `Packages/manifest.json`; the asmdef sets `BALLVERSE_ACCESSIBILITY` when it is
 present). Without the module the bridge is a no-op; the same module supplies the system font scale fallback
 (`AccessibilitySettings.fontScale`).
@@ -159,7 +174,8 @@ and edge gestures, arena dead zone, chrome policy, safe-area math, glass tiers a
 colour, appearance resolution (dark default, language fallback), device-locale formats, and that both string tables
 have the same keys and contain every UXML key, every key literal in `Runtime/` and every common parameter label /
 option. Static checks keep the Unity-side fixes in place (inline sizing of the shell container, key binding only on
-fresh layouts, 44 pt touch targets, no roadmap teasers or sale wording).
+fresh layouts, 44 pt touch targets, no clipping ancestor of the timeline tracks, no fill colour as a text colour, edge
+swipe capture handling, screen-reader sync after layout, no roadmap teasers or sale wording).
 
 The EditMode tests in `Tests/Editor` run in Unity (GameCI). `Tests~` is not wired into a workflow yet (the workflow
 files belong to the infrastructure track).
@@ -168,8 +184,9 @@ files belong to the infrastructure track).
 
 - CI: `Tests~` (dotnet) is not run by any workflow yet; add a `dotnet test "client/Assets/Ballverse/UI/Tests~/Ballverse.UI.Model.Tests"` step
   (infrastructure track). The EditMode tests in `Tests/Editor` run with GameCI's EditMode job once it is on main.
-- Screen readers and the system font scale need `com.unity.modules.accessibility` in `client/Packages/manifest.json`
-  (not listed in the bootstrap manifest today); without it they are compiled out.
+- Screen readers and the system font scale need `"com.unity.modules.accessibility": "1.0.0"` in
+  `client/Packages/manifest.json` (not listed in the bootstrap manifest today; the bootstrap / owner track has to add
+  it). Until then release 1 has no VoiceOver / TalkBack support: the bridge is compiled out.
 - Mode names: the tables follow spec §2.8 ("Геометрия отскоков", "Хеликс-дроп"); `Core.ModeCatalog` on the
   core-integration branch carries its own `NameRu` values, so one of the two should become the single source.
 - Not verified on a device: glass cost and look, gesture feel (PiP drag, pinch, edge swipe), VoiceOver / TalkBack

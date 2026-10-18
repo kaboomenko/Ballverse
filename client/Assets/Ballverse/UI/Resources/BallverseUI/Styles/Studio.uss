@@ -99,15 +99,19 @@
     color: var(--color-text-2);
     margin-top: 2px;
     white-space: nowrap;
+    border-bottom-width: 2px;
+    border-bottom-color: rgba(0, 0, 0, 0);
 }
 
-.bv-tool-tab--selected {
-    background-color: var(--color-control);
-}
-
+/* Selection on glass: like the tab bar (Components.uss), no translucent fill under the label. */
 .bv-tool-tab--selected .bv-tool-tab__icon,
 .bv-tool-tab--selected .bv-tool-tab__label {
-    color: var(--color-accent);
+    color: var(--color-accent-text);
+}
+
+.bv-tool-tab--selected .bv-tool-tab__label {
+    -unity-font-style: bold;
+    border-bottom-color: var(--color-accent-text);
 }
 
 /* Fullscreen preview. */
@@ -193,14 +197,21 @@
     color: var(--color-text-3);
 }
 
+/* Tracks do not clip: a trim handle at the start or end of the reel reaches past the track (over the badge column or
+   the side padding) and must still be hit there, since UI Toolkit never picks the children of a clipping element
+   outside its rect. No ancestor up to the screen layer clips either (ShellStaticChecksTests). Thumbnails clip inside
+   .bv-timeline__thumbs; the music track clips because its bar slides while dragged. */
 .bv-timeline__track {
     flex-grow: 1;
     border-radius: 8px;
     background-color: var(--color-surface);
+}
+
+.bv-timeline__track--music {
     overflow: hidden;
 }
 
-/* Segments do not clip: their edge handles reach 22 pt outside so the hit area is 44 pt wide (spec §4.4). */
+/* Segments do not clip: their edge handles reach outside so the hit area is 44 pt wide (spec §4.4). */
 .bv-timeline__segment {
     position: absolute;
     top: 0;
@@ -240,7 +251,8 @@
     opacity: 0.75;
 }
 
-/* Edge handle: transparent 44 pt hit area centred on the edge, thin visible grip in the middle. */
+/* Edge handle: transparent 44 pt hit area, thin visible grip on the segment edge. These offsets centre it on the edge
+   until TimelineView places it (TimelineGeometry.PlaceHandles: outwards on short spans, inside the screen). */
 .bv-timeline__handle {
     position: absolute;
     top: 0;

@@ -113,21 +113,115 @@ namespace Ballverse.UI
 
             appRoot.RegisterCallback<PointerDownEvent>(OnEdgeDown, TrickleDown.TrickleDown);
             appRoot.RegisterCallback<PointerUpEvent>(OnEdgeUp, TrickleDown.TrickleDown);
-            appRoot.RegisterCallback<PointerCancelEvent>(e => _edgeSwipe.Cancel(e.pointerId), TrickleDown.TrickleDown);
+            appRoot.RegisterCallback<PointerCancelEvent>(OnEdgeCancel, TrickleDown.TrickleDown);
+            appRoot.RegisterCallback<PointerCaptureEvent>(OnPointerCaptured, TrickleDown.TrickleDown);
         }
+
+        // ---- iOS edge swipe (spec §4.6) ----
+        // The recognizer listens on app-root in the trickle-down phase. While another element holds a pointer, Unity
+        // sends that pointer's events to the capturing element only (trickle-down on its ancestors is skipped), so
+        // app-root would never see the release. Capture is therefore watched too (PointerCaptureEvent trickles down to
+        // app-root): a plain tap target (Tap.On) is followed like Unity's ScrollView follows its captured child, and when
+        // the motion turns into an edge swipe app-root takes the pointer over (the target gets PointerCaptureOut and its
+        // Clickable cancels instead of clicking); a dragging element (slider, sheet handle, timeline, arena, preview)
+        // keeps its gesture and the swipe is cancelled.
+
+        VisualElement _edgeFollowed;
 
         void OnEdgeDown(PointerDownEvent e)
         {
             if (!EdgeSwipeBackEnabled) return;
+            // A second finger leaves the tracked press (and the target it is followed through) alone.
+            if (!_edgeSwipe.Tracking || _edgeSwipe.IsTracking(e.pointerId)) UnfollowEdgeTarget();
             var root = _ctx.AppRoot.worldBound;
             _edgeSwipe.Down(e.pointerId, e.position.x - root.x, e.position.y - root.y, root.width);
         }
 
         void OnEdgeUp(PointerUpEvent e)
         {
+            EdgeRelease(e.pointerId, e.position);
+        }
+
+        void OnEdgeCancel(PointerCancelEvent e)
+        {
+            _edgeSwipe.Cancel(e.pointerId);
+            ReleaseEdgeCapture(e.pointerId);
+        }
+
+        void OnPointerCaptured(PointerCaptureEvent e)
+        {
+            if (!_edgeSwipe.IsTracking(e.pointerId)) return;
+            var captor = e.target as VisualElement;
+            if (captor == null || captor == _ctx.AppRoot) return;
+            if (captor.ClassListContains(Tap.TargetClass)) FollowEdgeTarget(captor);
+            else
+            {
+                UnfollowEdgeTarget();
+                _edgeSwipe.Cancel(e.pointerId);
+            }
+        }
+
+        void FollowEdgeTarget(VisualElement target)
+        {
+            UnfollowEdgeTarget();
+            _edgeFollowed = target;
+            target.RegisterCallback<PointerMoveEvent>(OnFollowedMove);
+            target.RegisterCallback<PointerUpEvent>(OnFollowedUp);
+            target.RegisterCallback<PointerCancelEvent>(OnFollowedCancel);
+            target.RegisterCallback<PointerCaptureOutEvent>(OnFollowedCaptureOut);
+        }
+
+        void UnfollowEdgeTarget()
+        {
+            var target = _edgeFollowed;
+            if (target == null) return;
+            _edgeFollowed = null;
+            target.UnregisterCallback<PointerMoveEvent>(OnFollowedMove);
+            target.UnregisterCallback<PointerUpEvent>(OnFollowedUp);
+            target.UnregisterCallback<PointerCancelEvent>(OnFollowedCancel);
+            target.UnregisterCallback<PointerCaptureOutEvent>(OnFollowedCaptureOut);
+        }
+
+        void OnFollowedMove(PointerMoveEvent e)
+        {
             var root = _ctx.AppRoot.worldBound;
-            if (_edgeSwipe.Up(e.pointerId, e.position.x - root.x, e.position.y - root.y) && EdgeSwipeBackEnabled)
-                _ctx.Navigator.SwipeBack();
+            if (!_edgeSwipe.Move(e.pointerId, e.position.x - root.x, e.position.y - root.y)) return;
+            // The press is an edge swipe: take the pointer from the tap target (it cancels on PointerCaptureOut), so
+            // the rest of the gesture, release included, comes to app-root.
+            if (!_ctx.AppRoot.HasPointerCapture(e.pointerId)) _ctx.AppRoot.CapturePointer(e.pointerId);
+        }
+
+        void OnFollowedUp(PointerUpEvent e)
+        {
+            if (!_edgeSwipe.IsTracking(e.pointerId)) return;
+            UnfollowEdgeTarget();
+            EdgeRelease(e.pointerId, e.position);
+        }
+
+        void OnFollowedCancel(PointerCancelEvent e)
+        {
+            if (!_edgeSwipe.IsTracking(e.pointerId)) return;
+            UnfollowEdgeTarget();
+            _edgeSwipe.Cancel(e.pointerId);
+        }
+
+        void OnFollowedCaptureOut(PointerCaptureOutEvent e)
+        {
+            // The target let go (released on up, or app-root took over): its later events reach app-root again.
+            if (_edgeSwipe.IsTracking(e.pointerId) || !_edgeSwipe.Tracking) UnfollowEdgeTarget();
+        }
+
+        void EdgeRelease(int pointerId, Vector3 position)
+        {
+            var root = _ctx.AppRoot.worldBound;
+            bool swipe = _edgeSwipe.Up(pointerId, position.x - root.x, position.y - root.y);
+            ReleaseEdgeCapture(pointerId);
+            if (swipe && EdgeSwipeBackEnabled) _ctx.Navigator.SwipeBack();
+        }
+
+        void ReleaseEdgeCapture(int pointerId)
+        {
+            if (_ctx.AppRoot.HasPointerCapture(pointerId)) _ctx.AppRoot.ReleasePointer(pointerId);
         }
 
         /// <summary>
@@ -200,14 +294,18 @@ namespace Ballverse.UI
             _ctx.SafeArea.Refresh();
             _ctx.Navigator.Tick(deltaTime);
             _questCelebration.Tick();
-            _screenReader.Update(deltaTime);
         }
 
-        /// <summary>Per-frame glass pass (from <see cref="BallverseUIRoot"/>.LateUpdate).</summary>
+        /// <summary>
+        /// Per-frame glass pass and screen-reader sync (from <see cref="BallverseUIRoot"/>.LateUpdate). Both run after the
+        /// panel update of this frame (PreLateUpdate.UIElementsUpdatePanels precedes ScriptRunBehaviourLateUpdate), so
+        /// what Update or input events changed has been styled and laid out by the time the screen reader reads it.
+        /// </summary>
         public void LateUpdate()
         {
             if (_disposed) return;
             _ctx.Glass.Update();
+            _screenReader.Update(Time.unscaledDeltaTime);
         }
 
         public void OpenMode(string modeId)
@@ -263,6 +361,7 @@ namespace Ballverse.UI
             _disposed = true;
             if (_vms.Settings != null) _vms.Settings.Changed -= OnAppearanceInputsChanged;
             if (_vms.SystemAppearance != null) _vms.SystemAppearance.Changed -= OnAppearanceInputsChanged;
+            UnfollowEdgeTarget();
             _questCelebration.Dispose();
             _exportFlow.Dispose();
             _ctx.Dialogs.CloseAll();

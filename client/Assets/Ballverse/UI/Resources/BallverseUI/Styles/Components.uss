@@ -53,7 +53,7 @@
 
 .bv-btn--destructive .bv-btn__label,
 .bv-btn--destructive .bv-icon {
-    color: var(--color-danger);
+    color: var(--color-danger-text);
 }
 
 .bv-btn--plain {
@@ -62,7 +62,7 @@
 
 .bv-btn--plain .bv-btn__label,
 .bv-btn--plain .bv-icon {
-    color: var(--color-accent);
+    color: var(--color-accent-text);
 }
 
 .bv-btn--block {
@@ -123,7 +123,7 @@
 }
 
 .bv-link {
-    color: var(--color-accent);
+    color: var(--color-accent-text);
     font-size: var(--font-s);
     padding: var(--space-2);
     min-height: var(--touch);
@@ -396,7 +396,7 @@
 
 .bv-row--destructive .bv-row__label,
 .bv-row--destructive .bv-row__icon {
-    color: var(--color-danger);
+    color: var(--color-danger-text);
 }
 
 .bv-divider {
@@ -420,7 +420,7 @@
 }
 
 .bv-note--warning {
-    color: var(--color-warning);
+    color: var(--color-warning-text);
 }
 
 .bv-textfield {
@@ -601,11 +601,11 @@
 }
 
 .bv-banner--warning .bv-banner__icon {
-    color: var(--color-warning);
+    color: var(--color-warning-text);
 }
 
 .bv-banner--success .bv-banner__icon {
-    color: var(--color-success);
+    color: var(--color-success-text);
 }
 
 .bv-progress {
@@ -756,7 +756,7 @@
     height: 40px;
     align-self: center;
     margin-bottom: var(--space-3);
-    color: var(--color-accent);
+    color: var(--color-accent-text);
 }
 
 .bv-dialog__title {
@@ -889,15 +889,20 @@
     color: var(--color-text-2);
     margin-top: 2px;
     white-space: nowrap;
+    border-bottom-width: 2px;
+    border-bottom-color: rgba(0, 0, 0, 0);
 }
 
-.bv-tabbar__item--selected {
-    background-color: var(--color-control);
-}
-
+/* Selection on glass: no translucent fill under the label (it would brighten the backdrop the adaptive tint bounds,
+   spec §4.5); the glass-safe accent text colour plus bold and an underline (not colour alone, spec §4.8). */
 .bv-tabbar__item--selected .bv-tabbar__icon,
 .bv-tabbar__item--selected .bv-tabbar__label {
-    color: var(--color-accent);
+    color: var(--color-accent-text);
+}
+
+.bv-tabbar__item--selected .bv-tabbar__label {
+    -unity-font-style: bold;
+    border-bottom-color: var(--color-accent-text);
 }
 
 .bv-tabbar-spacer {

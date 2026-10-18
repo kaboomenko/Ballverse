@@ -15,6 +15,12 @@ namespace Ballverse.UI.Components
         /// <summary>Optional haptic tick for taps (wired by the app to the haptics service and setting).</summary>
         public static Action Haptic { get; set; }
 
+        /// <summary>
+        /// Class of every <see cref="On"/> element. Its Clickable captures the pointer on press; the shell's iOS edge swipe
+        /// may take a press over from such a plain tap target once it moves like a swipe (dragging controls keep theirs).
+        /// </summary>
+        public const string TargetClass = "bv-tap-target";
+
         /// <param name="pressedStyle">Adds the pressed (scale) visual; off for whole rows that are a larger hit area.</param>
         public static Clickable On(VisualElement element, Action action, bool pressedStyle = true)
         {
@@ -26,6 +32,7 @@ namespace Ballverse.UI.Components
                 action?.Invoke();
             });
             element.AddManipulator(c);
+            element.AddToClassList(TargetClass);
             if (pressedStyle) element.AddToClassList("bv-tappable");
             // Screen readers announce and activate it like a button (spec §4.8).
             A11y.Button(element, () =>

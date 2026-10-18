@@ -13,7 +13,10 @@ namespace Ballverse.UI.Screens
     /// music. S and V have trim handles; V is dragged to shift it against S (also before S: the offset may be negative);
     /// text spans are dragged to change when they appear (body) and their start / end (handles); the music bar is dragged
     /// to choose where the track starts. Edits are previewed while dragging and committed on release through the events.
-    /// Handles are 44 pt wide hit areas centred on the segment edges (spec §4.4) with a thin visible grip.
+    /// Handles are 44 pt wide hit areas (spec §4.4) with a thin visible grip on the segment edge, placed by
+    /// <see cref="TimelineGeometry.PlaceHandles"/>: centred on the edges, pushed outwards on short spans so part of the
+    /// body stays free, and kept inside the screen. The tracks do not clip (Studio.uss), so a handle reaching past the
+    /// track is still hit. A press on a handle that does not move is a tap (on a text span it selects the layer).
     /// </summary>
     public sealed class TimelineView : VisualElement
     {
@@ -188,8 +191,8 @@ namespace Ballverse.UI.Screens
             track.Add(seg);
             PlaceSegment(seg, isSim);
             var kind = isSim ? EditTarget.SimTrim : EditTarget.VideoTrim;
-            new EdgeDrag(this, left, kind, true);
-            new EdgeDrag(this, right, kind, false);
+            new EdgeDrag(this, left, kind, true, null);
+            new EdgeDrag(this, right, kind, false, null);
             if (!isSim) new BodyDrag(this, seg, EditTarget.VideoShift, -1, null);
         }
 
@@ -220,8 +223,54 @@ namespace Ballverse.UI.Screens
 
         void Place(VisualElement element, long startUs, long lengthUs)
         {
-            element.style.left = _geo.ToX(startUs);
-            element.style.width = Mathf.Max(MinSegmentWidth, _geo.Width(lengthUs));
+            float x = _geo.ToX(startUs);
+            float width = Mathf.Max(MinSegmentWidth, _geo.Width(lengthUs));
+            element.style.left = x;
+            element.style.width = width;
+            PlaceHandles(element, x, width);
+        }
+
+        /// <summary>Positions the segment's trim handles (if it has any) and their grips on the segment edges.</summary>
+        void PlaceHandles(VisualElement segment, float x, float width)
+        {
+            var left = segment.Q<VisualElement>(className: "bv-timeline__handle--left");
+            var right = segment.Q<VisualElement>(className: "bv-timeline__handle--right");
+            if (left == null || right == null) return;
+            // Pickable band in track coordinates: up to the screen edges (no ancestor between the track and the screen
+            // layer clips; QaRound2StaticChecks keeps it so). Measured against the page root, which fills the screen
+            // layer and moves with the track, so a push transition's translate does not skew it.
+            float bandMin = float.NegativeInfinity;
+            float bandMax = float.PositiveInfinity;
+            var track = segment.parent;
+            var screen = PageRoot().worldBound;
+            if (track != null)
+            {
+                var tb = track.worldBound;
+                if (!float.IsNaN(tb.x) && !float.IsNaN(screen.x) && !float.IsNaN(screen.width))
+                {
+                    bandMin = screen.xMin - tb.xMin;
+                    bandMax = screen.xMax - tb.xMin;
+                }
+            }
+            var p = TimelineGeometry.PlaceHandles(x, width, bandMin, bandMax);
+            SetHandle(left, p.LeftX, p.LeftEdgeInHandle);
+            SetHandle(right, p.RightX, p.RightEdgeInHandle);
+        }
+
+        /// <summary>The screen this timeline is on (class <c>bv-page</c>, full screen), else the app root.</summary>
+        VisualElement PageRoot()
+        {
+            for (var e = parent; e != null; e = e.parent)
+                if (e.ClassListContains("bv-page")) return e;
+            return _ctx.AppRoot;
+        }
+
+        static void SetHandle(VisualElement handle, float x, float edge)
+        {
+            handle.style.left = x;
+            handle.style.right = StyleKeyword.Auto;
+            var grip = handle.Q<VisualElement>(className: "bv-timeline__grip");
+            if (grip != null) grip.style.translate = new Translate(edge - TimelineGeometry.HandleWidth / 2f, 0);
         }
 
         void BuildTextTrack()
@@ -243,8 +292,9 @@ namespace Ballverse.UI.Screens
                 int index = item.LayerIndex;
                 // Tap selects the layer (opens the text tool), drag moves it in time, the edges change in / out.
                 new BodyDrag(this, pill, EditTarget.TextShift, index, () => TextSelected?.Invoke(index));
-                new EdgeDrag(this, left, EditTarget.TextTrim, true, index);
-                new EdgeDrag(this, right, EditTarget.TextTrim, false, index);
+                // A handle that is pressed without moving acts like the body: on short spans the handles cover most of it.
+                new EdgeDrag(this, left, EditTarget.TextTrim, true, () => TextSelected?.Invoke(index), index);
+                new EdgeDrag(this, right, EditTarget.TextTrim, false, () => TextSelected?.Invoke(index), index);
                 _textTrack.Add(pill);
             }
         }
@@ -465,7 +515,10 @@ namespace Ballverse.UI.Screens
             }
         }
 
-        /// <summary>Drag of an edge handle (trim of S / V, start / end of a text span).</summary>
+        /// <summary>
+        /// Drag of an edge handle (trim of S / V, start / end of a text span). Movement below
+        /// <see cref="ShiftThreshold"/> is a tap: nothing is trimmed and <c>tap</c> runs (if any).
+        /// </summary>
         sealed class EdgeDrag
         {
             readonly TimelineView _view;
@@ -473,15 +526,18 @@ namespace Ballverse.UI.Screens
             readonly EditTarget _target;
             readonly bool _start;
             readonly int _layer;
+            readonly Action _tap;
             int _pointer = -1;
             float _x0;
+            bool _moved;
 
-            public EdgeDrag(TimelineView view, VisualElement handle, EditTarget target, bool start, int layer = -1)
+            public EdgeDrag(TimelineView view, VisualElement handle, EditTarget target, bool start, Action tap, int layer = -1)
             {
                 _view = view;
                 _handle = handle;
                 _target = target;
                 _start = start;
+                _tap = tap;
                 _layer = layer;
                 handle.RegisterCallback<PointerDownEvent>(OnDown);
                 handle.RegisterCallback<PointerMoveEvent>(OnMove);
@@ -494,6 +550,7 @@ namespace Ballverse.UI.Screens
                 if (_pointer >= 0) return;
                 _pointer = e.pointerId;
                 _x0 = e.position.x;
+                _moved = false;
                 _handle.CapturePointer(_pointer);
                 _handle.AddToClassList("bv-timeline__handle--active");
                 _view.BeginEdit();
@@ -503,25 +560,40 @@ namespace Ballverse.UI.Screens
             void OnMove(PointerMoveEvent e)
             {
                 if (e.pointerId != _pointer) return;
-                _view.Preview(_target, _start, _view.UsPerPixel(e.position.x - _x0), _layer);
                 e.StopPropagation();
+                float dx = e.position.x - _x0;
+                if (!_moved && Mathf.Abs(dx) < ShiftThreshold) return;
+                _moved = true;
+                _view.Preview(_target, _start, _view.UsPerPixel(dx), _layer);
             }
 
             void OnUp(PointerUpEvent e)
             {
                 if (e.pointerId != _pointer) return;
+                e.StopPropagation();
+                if (!_moved)
+                {
+                    Release();
+                    _view.EndEdit();
+                    _tap?.Invoke();
+                    return;
+                }
                 _view.Preview(_target, _start, _view.UsPerPixel(e.position.x - _x0), _layer);
                 Finish(true);
-                e.StopPropagation();
+            }
+
+            void Release()
+            {
+                int id = _pointer;
+                _pointer = -1;
+                _handle.RemoveFromClassList("bv-timeline__handle--active");
+                if (id >= 0 && _handle.HasPointerCapture(id)) _handle.ReleasePointer(id);
             }
 
             void Finish(bool commit)
             {
                 if (_pointer < 0) return;
-                int id = _pointer;
-                _pointer = -1;
-                _handle.RemoveFromClassList("bv-timeline__handle--active");
-                if (_handle.HasPointerCapture(id)) _handle.ReleasePointer(id);
+                Release();
                 if (commit) _view.Commit(_target, _start, _layer);
                 else _view.CancelEdit();
             }

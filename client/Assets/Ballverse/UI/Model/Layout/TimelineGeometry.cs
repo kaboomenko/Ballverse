@@ -159,11 +159,94 @@ namespace Ballverse.UI.Layout
             return new TrimRange(start, start + length);
         }
 
+        /// <summary>Width of a trim handle's hit area (spec §4.4: 44 × 44 pt touch zones).</summary>
+        public const float HandleWidth = 44f;
+        /// <summary>Part of a short segment's body left uncovered by its handles, so a tap selects it and a drag moves it.</summary>
+        public const float MinExposedBody = 16f;
+
+        /// <summary>
+        /// Places the two edge handles of a segment (S / V clip, text span), each <see cref="HandleWidth"/> wide.
+        /// Normally a handle is centred on its edge (half inside the segment). Each handle stays whole inside the pickable
+        /// band [<paramref name="bandMin"/>, <paramref name="bandMax"/>]: the horizontal span, in track coordinates, where a
+        /// point can still reach it (no clipping ancestor cuts it off; the screen edge does), so near the screen edge it
+        /// moves further into the segment. On a short segment the handles reach less far into it, so at least
+        /// <see cref="MinExposedBody"/> of the body stays uncovered; when the band forces one handle inwards the other moves
+        /// outwards to compensate. Only a short span at the very end of the reel may end up covered (a press on a handle
+        /// that does not move still selects it). Handles never overlap each other. Positions are panel units, track
+        /// coordinates in, segment coordinates out. Pure.
+        /// </summary>
+        /// <param name="segmentX">Left edge of the segment in track coordinates.</param>
+        /// <param name="segmentWidth">Drawn width of the segment.</param>
+        public static HandlePlacement PlaceHandles(float segmentX, float segmentWidth, float bandMin, float bandMax)
+        {
+            float w = Math.Max(0f, segmentWidth);
+            // How far each handle reaches into the segment.
+            float budget = Math.Max(0f, w - MinExposedBody);
+            float half = HandleWidth / 2f;
+            float minInnerLeft = Math.Max(0f, bandMin - segmentX + HandleWidth);
+            float minInnerRight = Math.Max(0f, segmentX + w + HandleWidth - bandMax);
+            float innerLeft = Math.Max(Math.Min(half, budget / 2f), minInnerLeft);
+            float innerRight = Math.Max(Math.Min(half, budget / 2f), minInnerRight);
+            float excess = innerLeft + innerRight - budget;
+            if (excess > 0f)
+            {
+                float r = Math.Min(excess, innerRight - minInnerRight);
+                innerRight -= r;
+                excess -= r;
+                innerLeft -= Math.Min(excess, innerLeft - minInnerLeft);
+            }
+            float left = innerLeft - HandleWidth;
+            float right = w - innerRight;
+            if (left + HandleWidth > right)
+            {
+                // Short span against the right screen edge: the start handle moves out to the left of the end handle.
+                left = right - HandleWidth;
+                if (segmentX + left < bandMin)
+                {
+                    // A band too narrow for two handles (not the shipped layout): keep the start one, end one after it.
+                    left = bandMin - segmentX;
+                    right = left + HandleWidth;
+                }
+            }
+            return new HandlePlacement(left, right, w);
+        }
+
         /// <summary>One frame at <paramref name="fps"/> in microseconds (for the ±1 frame offset buttons).</summary>
         public static long FrameUs(int fps)
         {
             if (fps <= 0) throw new ArgumentOutOfRangeException(nameof(fps));
             return MicrosPerSecond / fps;
+        }
+    }
+
+    /// <summary>Where a segment's two trim handles sit, relative to the segment's left edge (see <see cref="TimelineGeometry.PlaceHandles"/>).</summary>
+    public readonly struct HandlePlacement
+    {
+        /// <summary>Left of the start handle.</summary>
+        public float LeftX { get; }
+        /// <summary>Left of the end handle.</summary>
+        public float RightX { get; }
+        readonly float _segmentWidth;
+
+        public HandlePlacement(float leftX, float rightX, float segmentWidth)
+        {
+            LeftX = leftX;
+            RightX = rightX;
+            _segmentWidth = segmentWidth;
+        }
+
+        /// <summary>Segment start edge inside the start handle (where its grip is drawn), clamped to the handle.</summary>
+        public float LeftEdgeInHandle => Clamp(-LeftX);
+
+        /// <summary>Segment end edge inside the end handle, clamped to the handle.</summary>
+        public float RightEdgeInHandle => Clamp(_segmentWidth - RightX);
+
+        /// <summary>Width of the body not covered by either handle.</summary>
+        public float ExposedBody => Math.Max(0f, Math.Min(_segmentWidth, RightX) - Math.Max(0f, LeftX + TimelineGeometry.HandleWidth));
+
+        static float Clamp(float x)
+        {
+            return Math.Max(0f, Math.Min(TimelineGeometry.HandleWidth, x));
         }
     }
 }

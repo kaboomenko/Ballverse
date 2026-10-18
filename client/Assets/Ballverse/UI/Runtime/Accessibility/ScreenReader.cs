@@ -50,22 +50,46 @@ namespace Ballverse.UI.Accessibility
     /// Mirrors the visible interactive UI into Unity's screen-reader hierarchy (<c>UnityEngine.Accessibility.AssistiveSupport</c>,
     /// iOS VoiceOver and Android TalkBack, Unity 6) while a screen reader is on: one node per registered button and
     /// screen title in the top-most modal layer (dialog, else dimming sheet, else screen + open sheets + tab bar).
-    /// Rebuilt when the screen, sheets, dialogs or language change; node frames follow the elements. Needs the built-in
+    /// Driven from <see cref="UiShell.LateUpdate"/>, after the panel update, and scheduled by <see cref="ScreenReaderSync"/>:
+    /// a change (screen, sheet, dialog, language) is read once its elements are laid out (a new element has NaN bounds
+    /// until the next panel update), and the visible UI is re-read twice a second so nodes that appear without an event
+    /// (transition end, result card, chrome) are published too; otherwise only the node frames move. Needs the built-in
     /// Accessibility module (<c>com.unity.modules.accessibility</c>, define <c>BALLVERSE_ACCESSIBILITY</c> from the asmdef);
     /// without it this class does nothing.
     /// </summary>
 #if BALLVERSE_ACCESSIBILITY
     public sealed class ScreenReaderBridge : IDisposable
     {
-        const float RefreshSeconds = 0.5f;
         const float StatusPollSeconds = 1f;
+
+        readonly struct NodeSpec
+        {
+            public readonly VisualElement Element;
+            public readonly string Label;
+            public readonly bool Heading;
+            public readonly Action Invoke;
+
+            public NodeSpec(VisualElement element, string label, bool heading, Action invoke)
+            {
+                Element = element;
+                Label = label;
+                Heading = heading;
+                Invoke = invoke;
+            }
+
+            public bool SameAs(NodeSpec other)
+            {
+                return ReferenceEquals(Element, other.Element) && Heading == other.Heading && string.Equals(Label, other.Label, StringComparison.Ordinal);
+            }
+        }
 
         readonly UiContext _ctx;
         readonly VisualElement _root;
+        readonly ScreenReaderSync _sync = new ScreenReaderSync();
+        readonly List<NodeSpec> _published = new List<NodeSpec>();
+        readonly List<NodeSpec> _read = new List<NodeSpec>();
         AccessibilityHierarchy _hierarchy;
         bool _enabled;
-        bool _dirty = true;
-        float _sinceRefresh;
         float _sinceStatusPoll = StatusPollSeconds;
         bool _disposed;
 
@@ -81,12 +105,13 @@ namespace Ballverse.UI.Accessibility
 
         public bool Active => _hierarchy != null;
 
-        /// <summary>Something visible changed (screen, sheet, dialog, language): rebuild on the next update.</summary>
+        /// <summary>Something visible changed (screen, sheet, dialog, language): rebuild once it is laid out.</summary>
         public void MarkDirty()
         {
-            _dirty = true;
+            _sync.MarkDirty();
         }
 
+        /// <summary>Per frame, after the panel update (from <see cref="UiShell.LateUpdate"/>).</summary>
         public void Update(float deltaTime)
         {
             if (_disposed || !PlatformSupported) return;
@@ -98,38 +123,74 @@ namespace Ballverse.UI.Accessibility
                 if (enabled != _enabled)
                 {
                     _enabled = enabled;
-                    _dirty = true;
+                    _sync.MarkDirty();
                     if (!enabled) Deactivate();
                 }
             }
-            if (!_enabled) return;
-            if (_dirty)
+            if (!_enabled || !_sync.Due(deltaTime)) return;
+
+            _read.Clear();
+            bool ready = true;
+            foreach (var layer in ModalLayers()) Collect(layer, ref ready);
+            switch (_sync.Decide(ready, !SameAsPublished()))
             {
-                _dirty = false;
-                Rebuild();
-                return;
-            }
-            _sinceRefresh += deltaTime;
-            if (_sinceRefresh >= RefreshSeconds && _hierarchy != null)
-            {
-                _sinceRefresh = 0f;
-                _hierarchy.RefreshNodeFrames();
+                case ScreenReaderStep.PublishScreen:
+                    Publish(true);
+                    break;
+                case ScreenReaderStep.PublishLayout:
+                    Publish(false);
+                    break;
+                case ScreenReaderStep.RefreshFrames:
+                    _hierarchy?.RefreshNodeFrames();
+                    break;
             }
         }
 
-        void Rebuild()
+        bool SameAsPublished()
+        {
+            if (_hierarchy == null || _read.Count != _published.Count) return false;
+            for (int i = 0; i < _read.Count; i++)
+                if (!_read[i].SameAs(_published[i])) return false;
+            return true;
+        }
+
+        void Publish(bool screenChanged)
         {
             var hierarchy = new AccessibilityHierarchy();
             var scale = PanelToScreenScale();
-            foreach (var layer in ModalLayers()) Collect(hierarchy, layer, scale);
+            foreach (var spec in _read)
+            {
+                var node = hierarchy.AddNode(spec.Label);
+                var target = spec.Element;
+                node.frameGetter = () => Frame(target, scale);
+                if (spec.Heading)
+                {
+                    node.role = AccessibilityRole.Header;
+                    continue;
+                }
+                node.role = AccessibilityRole.Button;
+                var invoke = spec.Invoke;
+                if (invoke != null)
+                {
+                    node.invoked += () =>
+                    {
+                        if (!target.enabledInHierarchy) return false;
+                        invoke();
+                        return true;
+                    };
+                }
+            }
+            _published.Clear();
+            _published.AddRange(_read);
             _hierarchy = hierarchy;
-            _sinceRefresh = 0f;
             AssistiveSupport.activeHierarchy = hierarchy;
-            AssistiveSupport.notificationDispatcher.SendScreenChanged();
+            if (screenChanged) AssistiveSupport.notificationDispatcher.SendScreenChanged();
+            else AssistiveSupport.notificationDispatcher.SendLayoutChanged();
         }
 
         void Deactivate()
         {
+            _published.Clear();
             if (_hierarchy == null) return;
             _hierarchy = null;
             AssistiveSupport.activeHierarchy = null;
@@ -169,15 +230,23 @@ namespace Ballverse.UI.Accessibility
             return false;
         }
 
-        void Collect(AccessibilityHierarchy hierarchy, VisualElement element, Vector2 scale)
+        /// <summary>
+        /// Reads the nodes under <paramref name="element"/>. Hidden subtrees (display none, visibility hidden) are skipped;
+        /// a shown element without a layout yet clears <paramref name="ready"/> (it is read once laid out). Opacity is
+        /// ignored: dialogs and screens fade in from 0, and hidden chrome ends with visibility hidden.
+        /// </summary>
+        void Collect(VisualElement element, ref bool ready)
         {
-            if (!IsShown(element)) return;
+            var state = StateOf(element);
+            if (state == Shown.Hidden) return;
+            if (state == Shown.NotLaidOut)
+            {
+                ready = false;
+                return;
+            }
             if (IsHeading(element) && element is Label title && !string.IsNullOrEmpty(title.text))
             {
-                var heading = hierarchy.AddNode(title.text);
-                heading.role = AccessibilityRole.Header;
-                var target = title;
-                heading.frameGetter = () => Frame(target, scale);
+                _read.Add(new NodeSpec(title, title.text, true, null));
                 return;
             }
             if (A11y.TryGet(element, out var entry))
@@ -185,26 +254,13 @@ namespace Ballverse.UI.Accessibility
                 string label = LabelOf(element, entry);
                 if (!string.IsNullOrEmpty(label))
                 {
-                    var node = hierarchy.AddNode(label);
-                    node.role = AccessibilityRole.Button;
-                    var target = element;
-                    node.frameGetter = () => Frame(target, scale);
-                    var invoke = entry.Invoke;
-                    if (invoke != null)
-                    {
-                        node.invoked += () =>
-                        {
-                            if (!target.enabledInHierarchy) return false;
-                            invoke();
-                            return true;
-                        };
-                    }
                     // A labelled button is announced as one node; its inner texts are not separate nodes.
+                    _read.Add(new NodeSpec(element, label, false, entry.Invoke));
                     return;
                 }
             }
             var children = element.hierarchy;
-            for (int i = 0; i < children.childCount; i++) Collect(hierarchy, children[i], scale);
+            for (int i = 0; i < children.childCount; i++) Collect(children[i], ref ready);
         }
 
         string LabelOf(VisualElement element, A11y.Entry entry)
@@ -217,17 +273,24 @@ namespace Ballverse.UI.Accessibility
             string text = null;
             element.Query<Label>().ForEach(l =>
             {
-                if (text == null && IsShown(l) && !string.IsNullOrEmpty(l.text)) text = l.text;
+                if (text == null && StateOf(l) != Shown.Hidden && !string.IsNullOrEmpty(l.text)) text = l.text;
             });
             return text;
         }
 
-        static bool IsShown(VisualElement e)
+        enum Shown
+        {
+            Visible = 0,
+            Hidden = 1,
+            NotLaidOut = 2,
+        }
+
+        static Shown StateOf(VisualElement e)
         {
             var s = e.resolvedStyle;
-            if (s.display == DisplayStyle.None || s.visibility == Visibility.Hidden || s.opacity <= 0.01f) return false;
+            if (s.display == DisplayStyle.None || s.visibility == Visibility.Hidden) return Shown.Hidden;
             var b = e.worldBound;
-            return !(float.IsNaN(b.width) || float.IsNaN(b.height));
+            return float.IsNaN(b.x) || float.IsNaN(b.y) || float.IsNaN(b.width) || float.IsNaN(b.height) ? Shown.NotLaidOut : Shown.Visible;
         }
 
         Vector2 PanelToScreenScale()
