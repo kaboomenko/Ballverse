@@ -70,13 +70,13 @@ Ballverse/
 
 | Сборка (asmdef) | Отвечает за | Зависит от |
 |---|---|---|
-| `Ballverse.Core` | Модели (параметры, схема параметров, пресеты, проект, таймлайн), ГСЧ (PCG32), оценка зрелищности, права и правила рекламы (`Entitlements`, `AdPolicy`), формат реплея и потока рендера, миграции схем | — (только BCL) |
+| `Ballverse.Core` | Модели (параметры, схема параметров, пресеты, проект, таймлайн), ГСЧ (PCG32), оценка зрелищности, права и правила рекламы (`Entitlements`, `AdPolicy`), формат реплея и потока рендера, миграции схем, значения Remote Config, геометрия кадра студии (раскладки, Cover/Fit, PiP, водяной знак, зоны площадок), детерминированный звуковой микшер и нормализация громкости | — (только BCL + Newtonsoft.Json) |
 | `Ballverse.Sim` | `IPhysicsWorld` и реализация на `LowLevelPhysics2D`, `SimRunner` (фикс. шаг, ввод, запись), `ModeRegistry`, headless-прогоны кандидатов | Core |
 | `Ballverse.Modes.Mxx` | Режим: генератор, правила, автопилот, привязка к виду | Core, Sim, Render (только API) |
 | `Ballverse.Render` | Пакетный рендер из потока рендера, темы, VFX, пост-эффекты, офлайн-рендер в `RenderTexture` | Core |
-| `Ballverse.Audio` | Банк сэмплов, микшер событий, нормализация громкости | Core |
+| `Ballverse.Audio` | Банк сэмплов (декодирование OGG в PCM), мост к аудиопотоку Unity (`OnAudioFilterRead`); сам микшер и нормализация — чистый C# в `Core/Audio` | Core |
 | `Ballverse.Media` | `IMediaBridge` (C#), P/Invoke в нативные библиотеки, фейк для редактора (декод через `VideoPlayer`, запись PNG-последовательности) | Core |
-| `Ballverse.Studio` | Таймлайн-плеер, компоновщик кадра, раскладки, текст, экспортный конвейер | Core, Render, Audio, Media |
+| `Ballverse.Studio` | Таймлайн-плеер, компоновщик кадра (рисует по геометрии из `Core/Layout`), текст, экспортный конвейер | Core, Render, Audio, Media |
 | `Ballverse.Services` | `IAds`, `IPurchases`, `IAnalytics`, `IRemoteConfig`, `ICrash`, `IConsent`, реализации на SDK + фейки | Core |
 | `Ballverse.UI` | Экраны и компоненты UI Toolkit, стеклянный материал, локализация, навигация | Core, Services (интерфейсы) |
 | `Ballverse.App` | Корень композиции (VContainer, MIT, или ручная сборка зависимостей), порядок инициализации, жизненный цикл | все |

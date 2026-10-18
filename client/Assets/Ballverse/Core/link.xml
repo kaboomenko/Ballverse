@@ -1,0 +1,8 @@
+<!--
+  IL2CPP managed code stripping: Ballverse.Core DTOs (projects, presets, config, cache) are created and filled
+  by Newtonsoft.Json through reflection, so the stripper cannot see their constructors and setters.
+  Preserve the whole assembly: it is small and pure C#.
+-->
+<linker>
+  <assembly fullname="Ballverse.Core" preserve="all" />
+</linker>
