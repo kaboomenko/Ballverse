@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Ballverse.Services
 {
@@ -17,6 +18,13 @@ namespace Ballverse.Services
 
         /// <summary>After a rewarded ad closes without the reward, the reward callback is still awaited this long.</summary>
         public const long RewardGraceMs = 1000;
+
+        /// <summary>
+        /// The <see cref="BeforeShow"/> hook (ATT pre-prompt and system dialog) must continue within this time; otherwise the
+        /// presentation is abandoned with <c>NotReady</c>, so the export runs without the ad and the interstitial is skipped
+        /// (Р14, IN4). A late continuation is ignored.
+        /// </summary>
+        public const long BeforeShowTimeoutMs = 60_000;
 
         const string Tag = "Ads";
 
@@ -47,11 +55,19 @@ namespace Ballverse.Services
             public long GraceDeadlineMs;
         }
 
+        sealed class PendingHook
+        {
+            public long DeadlineMs;
+            public bool Settled;
+            public Action Abandon;
+        }
+
         readonly IAdNetwork _network;
         readonly IClock _clock;
         readonly IServiceLog _log;
         readonly Slot _rewarded = new Slot(AdFormat.Rewarded);
         readonly Slot _interstitial = new Slot(AdFormat.Interstitial);
+        readonly List<PendingHook> _pendingHooks = new List<PendingHook>(2);
         RewardedSession _rewardedSession;
         AdFormat _showingFormat;
 
@@ -157,6 +173,7 @@ namespace Ballverse.Services
         {
             TickSlot(_rewarded);
             TickSlot(_interstitial);
+            TickPendingHooks();
             var session = _rewardedSession;
             if (session != null && session.Closed && !session.Finished && _clock.MonotonicMs >= session.GraceDeadlineMs)
                 FinishRewarded(session, RewardedShowResult.ClosedEarly);
@@ -169,7 +186,7 @@ namespace Ballverse.Services
                 done?.Invoke(RewardedShowResult.NotReady);
                 return;
             }
-            RunBeforeShow(() => PresentRewarded(done));
+            RunBeforeShow(() => PresentRewarded(done), () => done?.Invoke(RewardedShowResult.NotReady));
         }
 
         public void ShowInterstitial(Action<InterstitialShowResult> done)
@@ -179,10 +196,13 @@ namespace Ballverse.Services
                 done?.Invoke(InterstitialShowResult.NotReady);
                 return;
             }
-            RunBeforeShow(() => PresentInterstitial(done));
+            RunBeforeShow(() => PresentInterstitial(done), () => done?.Invoke(InterstitialShowResult.NotReady));
         }
 
-        void RunBeforeShow(Action next)
+        /// <summary>Number of presentations waiting for the <see cref="BeforeShow"/> hook.</summary>
+        public int PendingBeforeShowCount => _pendingHooks.Count;
+
+        void RunBeforeShow(Action next, Action abandon)
         {
             var hook = BeforeShow;
             if (hook == null)
@@ -190,24 +210,38 @@ namespace Ballverse.Services
                 next();
                 return;
             }
-            bool continued = false;
+            var pending = new PendingHook { DeadlineMs = _clock.MonotonicMs + BeforeShowTimeoutMs, Abandon = abandon };
+            _pendingHooks.Add(pending);
+            Action proceed = () =>
+            {
+                if (pending.Settled) return;
+                pending.Settled = true;
+                _pendingHooks.Remove(pending);
+                next();
+            };
             try
             {
-                hook(() =>
-                {
-                    if (continued) return;
-                    continued = true;
-                    next();
-                });
+                hook(proceed);
             }
             catch (Exception e)
             {
                 _log.Error(Tag, "BeforeShow hook threw.", e);
-                if (!continued)
-                {
-                    continued = true;
-                    next();
-                }
+                proceed();
+            }
+        }
+
+        void TickPendingHooks()
+        {
+            if (_pendingHooks.Count == 0) return;
+            long now = _clock.MonotonicMs;
+            for (int i = _pendingHooks.Count - 1; i >= 0; i--)
+            {
+                var pending = _pendingHooks[i];
+                if (pending.Settled || now < pending.DeadlineMs) continue;
+                pending.Settled = true;
+                _pendingHooks.RemoveAt(i);
+                _log.Warning(Tag, "BeforeShow (ATT) did not continue in time; the ad is skipped.");
+                pending.Abandon?.Invoke();
             }
         }
 

@@ -5,7 +5,8 @@ using Ballverse.Core.Monetization;
 namespace Ballverse.Services
 {
     /// <summary>
-    /// In-app purchases (spec §5.1, §5.4, §5.5) with the release-1 catalog (<see cref="Release1Catalog"/>). Rights are known
+    /// In-app purchases (spec §5.1, §5.4, §5.5) with the release catalog of Core <see cref="MonetizationConfig"/> (release
+    /// builds: <see cref="MonetizationConfig.Release1"/>, which sells only the three ad products). Rights are known
     /// from frame 0 through the signed cache and recomputed from the store on every start, resume and restore; pending
     /// purchases grant nothing until paid; refunds remove rights. Main thread only.
     /// </summary>
@@ -24,8 +25,20 @@ namespace Ballverse.Services
         /// <summary>Products waiting for payment or approval (spec §5.4: show "ожидает подтверждения").</summary>
         IReadOnlyList<string> PendingProductIds { get; }
 
-        /// <summary>Rights of the owned products under the release-1 rules (<see cref="Release1Entitlements"/>).</summary>
+        /// <summary>
+        /// Rights of the owned products: Core <c>Entitlements.From(OwnedProductIds, Config, WatermarkGrandfathered)</c>
+        /// (release 1: No Ads Bundle, or both ad removals, also give NO_WATERMARK).
+        /// </summary>
         EntitlementSet Entitlements { get; }
+
+        /// <summary>The release catalog and entitlement rules in force (pass it to Core <c>Storefront</c> functions).</summary>
+        MonetizationConfig Config { get; }
+
+        /// <summary>
+        /// Persisted Core <see cref="WatermarkGrandfathering"/> flag: the user obtained NO_WATERMARK under the release-1 No Ads
+        /// rule, which keeps applying to them if a later release turns the rule off (pass it to Core <c>Storefront</c> functions).
+        /// </summary>
+        bool WatermarkGrandfathered { get; }
 
         bool IsPurchaseInProgress { get; }
 

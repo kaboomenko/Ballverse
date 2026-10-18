@@ -11,9 +11,9 @@ namespace Ballverse.Services
         readonly TrackingDecisionFlow _tracking;
         Action<ConsentGatherResult> _pending;
 
-        public FakeConsentService(ITrackingAuthorization tracking = null)
+        public FakeConsentService(ITrackingAuthorization tracking = null, IClock clock = null, IServiceLog log = null)
         {
-            _tracking = new TrackingDecisionFlow(tracking ?? new NoTrackingAuthorization());
+            _tracking = new TrackingDecisionFlow(tracking ?? new NoTrackingAuthorization(), clock, log);
         }
 
         /// <summary>Result <see cref="Gather"/> will produce.</summary>
@@ -30,6 +30,11 @@ namespace Ballverse.Services
 
         public PrivacyOptionsRequirement ScriptedPrivacyOptions { get; set; } = PrivacyOptionsRequirement.NotRequired;
 
+        /// <summary>TCF values "written" by a completed gather or by the privacy options form.</summary>
+        public TcfSignals ScriptedTcf { get; set; }
+
+        public int PrivacyOptionsCalls { get; private set; }
+
         public int GatherCalls { get; private set; }
 
         public ConsentGatherState GatherState { get; private set; }
@@ -39,6 +44,8 @@ namespace Ballverse.Services
         public bool CanRequestAds { get; set; }
 
         public PrivacyOptionsRequirement PrivacyOptions { get; private set; }
+
+        public TcfSignals Tcf { get; private set; }
 
         public event Action ConsentChanged;
 
@@ -73,6 +80,7 @@ namespace Ballverse.Services
                 Requirement = ScriptedRequirement;
                 CanRequestAds = ScriptedCanRequestAds;
                 PrivacyOptions = ScriptedPrivacyOptions;
+                Tcf = ScriptedTcf;
             }
             var result = new ConsentGatherResult(CanRequestAds, Requirement, ScriptedError);
             var callbacks = _pending;
@@ -81,8 +89,13 @@ namespace Ballverse.Services
             ConsentChanged?.Invoke();
         }
 
+        /// <summary>The "form" applies the scripted values (the user's new choice) and closes.</summary>
         public void ShowPrivacyOptions(Action<string> done)
         {
+            PrivacyOptionsCalls++;
+            Requirement = ScriptedRequirement;
+            CanRequestAds = ScriptedCanRequestAds;
+            Tcf = ScriptedTcf;
             done?.Invoke(null);
             ConsentChanged?.Invoke();
         }

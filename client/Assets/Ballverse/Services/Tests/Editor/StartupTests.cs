@@ -117,31 +117,135 @@ namespace Ballverse.Services.Tests
             Assert.AreEqual(true, analytics.AppliedConsent.Value.AnalyticsStorage);
             Assert.AreEqual(true, analytics.AppliedConsent.Value.AdStorage);
             Assert.AreEqual("false", analytics.SentUserProperties[AnalyticsUserProperties.HasNoExportAds]);
+            Assert.AreEqual("false", analytics.SentUserProperties[AnalyticsUserProperties.HasNoWatermark]);
         }
 
         [Test]
-        public void AnsweredFormLeavesAdSignalsToTcf()
+        public void AcceptedFormGrantsAnalyticsStorageAndLeavesAdSignalsToTcf()
         {
             _consent.ScriptedRequirement = ConsentRequirement.Obtained;
+            _consent.ScriptedTcf = new TcfSignals(true, "11111111111");
             var s = Create();
             s.Tick();
-            var consent = ((RecordingAnalyticsService)s.Analytics).AppliedConsent.Value;
+            var analytics = (RecordingAnalyticsService)s.Analytics;
+            var consent = analytics.AppliedConsent.Value;
             Assert.AreEqual(true, consent.AnalyticsStorage);
             Assert.IsNull(consent.AdStorage);
             Assert.IsNull(consent.AdPersonalization);
+            Assert.AreEqual(true, analytics.CollectionEnabled);
         }
 
         [Test]
-        public void FailedConsentWithoutDecisionDeniesAnalyticsStorage()
+        public void RefusedFormDeniesAnalyticsStorage()
+        {
+            // UMP reports OBTAINED for "Do not consent" too; the TCF purposes carry the refusal.
+            _consent.ScriptedRequirement = ConsentRequirement.Obtained;
+            _consent.ScriptedTcf = new TcfSignals(true, "00000000000");
+            var s = Create();
+            s.Tick();
+            var analytics = (RecordingAnalyticsService)s.Analytics;
+            Assert.AreEqual(false, analytics.AppliedConsent.Value.AnalyticsStorage);
+            Assert.AreEqual(true, analytics.CollectionEnabled, "the user decided: cookieless measurement only");
+        }
+
+        [Test]
+        public void PrivacyOptionsChangesReachConsentMode()
+        {
+            _consent.ScriptedRequirement = ConsentRequirement.Obtained;
+            _consent.ScriptedTcf = new TcfSignals(true, "11111111111");
+            var s = Create();
+            s.Tick();
+            var analytics = (RecordingAnalyticsService)s.Analytics;
+            Assert.AreEqual(true, analytics.AppliedConsent.Value.AnalyticsStorage);
+
+            _consent.ScriptedTcf = new TcfSignals(true, "00000000000");
+            s.Consent.ShowPrivacyOptions(_ => { });
+            Assert.AreEqual(false, analytics.AppliedConsent.Value.AnalyticsStorage);
+
+            _consent.ScriptedTcf = new TcfSignals(true, "11111111111");
+            s.Consent.ShowPrivacyOptions(_ => { });
+            Assert.AreEqual(true, analytics.AppliedConsent.Value.AnalyticsStorage);
+        }
+
+        [Test]
+        public void NoAnalyticsAreSentWithoutADecision()
+        {
+            // Spec §9.1: collection starts after the user's UMP decision where one is required.
+            _consent.ScriptedRequirement = ConsentRequirement.Required;
+            _consent.ScriptedCanRequestAds = false;
+            var s = Create();
+            var analytics = (RecordingAnalyticsService)s.Analytics;
+            s.Analytics.LogEvent(AnalyticsEvents.StudioOpen);
+            s.Tick();
+            Assert.IsTrue(s.Startup.ConsentSettled);
+            Assert.IsNull(analytics.CollectionEnabled);
+            Assert.AreEqual(0, analytics.Sent.Count);
+            s.Analytics.LogEvent(AnalyticsEvents.StudioOpen);
+            Assert.AreEqual(0, analytics.Sent.Count);
+
+            // The form is answered on a later attempt: the buffered events go out with the decision.
+            _consent.ScriptedRequirement = ConsentRequirement.Obtained;
+            _consent.ScriptedCanRequestAds = true;
+            _consent.ScriptedTcf = new TcfSignals(true, "11111111111");
+            _clock.Advance(ServicesStartup.ConsentRetryFirstDelayMs);
+            s.Tick();
+            Assert.AreEqual(2, _consent.GatherCalls);
+            Assert.AreEqual(true, analytics.CollectionEnabled);
+            Assert.AreEqual(2, analytics.Sent.Count);
+        }
+
+        [Test]
+        public void FailedConsentWithoutDecisionKeepsAnalyticsBuffered()
         {
             _consent.ScriptedError = "update_timeout";
             _consent.ScriptedRequirement = ConsentRequirement.Unknown;
             var s = Create();
             s.Tick();
             var analytics = (RecordingAnalyticsService)s.Analytics;
-            Assert.AreEqual(false, analytics.AppliedConsent.Value.AnalyticsStorage);
-            Assert.AreEqual(true, analytics.CollectionEnabled);
+            Assert.IsNull(analytics.AppliedConsent);
+            Assert.IsNull(analytics.CollectionEnabled);
             Assert.IsTrue(s.Startup.ConsentSettled);
+        }
+
+        [Test]
+        public void FailedConsentIsGatheredAgainWithBackoffAndOnResume()
+        {
+            _consent.ScriptedError = "update_timeout";
+            _consent.ScriptedRequirement = ConsentRequirement.Unknown;
+            _consent.ScriptedCanRequestAds = false;
+            var s = Create();
+            s.Tick();
+            Assert.AreEqual(1, _consent.GatherCalls);
+            Assert.AreEqual(ConsentGatherState.Failed, _consent.GatherState);
+
+            _clock.Advance(ServicesStartup.ConsentRetryFirstDelayMs - 1);
+            s.Tick();
+            Assert.AreEqual(1, _consent.GatherCalls);
+            _clock.Advance(1);
+            s.Tick();
+            Assert.AreEqual(2, _consent.GatherCalls, "first retry after 30 s");
+
+            // Still offline: the next retry waits twice as long, but returning to the app retries at once.
+            s.Tick();
+            Assert.AreEqual(2, _consent.GatherCalls);
+            s.OnApplicationResumed();
+            Assert.AreEqual(3, _consent.GatherCalls);
+
+            // The network is back: a decision arrives, ads start, retries stop.
+            _consent.ScriptedError = null;
+            _consent.ScriptedRequirement = ConsentRequirement.NotRequired;
+            _consent.ScriptedCanRequestAds = true;
+            _clock.Advance(ServicesStartup.ConsentRetryDelayMs(3));
+            s.Tick();
+            Assert.AreEqual(4, _consent.GatherCalls);
+            s.Tick();
+            Assert.AreEqual(AdsServiceState.Ready, s.Ads.State);
+            _clock.Advance(ServicesStartup.ConsentRetryMaxDelayMs);
+            s.Tick();
+            s.OnApplicationResumed();
+            Assert.AreEqual(4, _consent.GatherCalls);
+            Assert.AreEqual(60_000, ServicesStartup.ConsentRetryDelayMs(2));
+            Assert.AreEqual(ServicesStartup.ConsentRetryMaxDelayMs, ServicesStartup.ConsentRetryDelayMs(20));
         }
 
         [Test]
@@ -174,6 +278,8 @@ namespace Ballverse.Services.Tests
             Assert.IsFalse(s.Ads.IsKeepLoaded(AdFormat.Interstitial));
             Assert.IsTrue(s.Entitlements.Contains(Entitlement.NoWatermark));
             Assert.AreEqual(Ballverse.Core.Ads.ExportWithoutAdReason.Entitlement, s.RewardedExport.RequestExport("p").Reason);
+            var analytics = (RecordingAnalyticsService)s.Analytics;
+            Assert.AreEqual("true", analytics.SentUserProperties[AnalyticsUserProperties.HasNoWatermark]);
         }
 
         [Test]
@@ -200,6 +306,75 @@ namespace Ballverse.Services.Tests
             Assert.AreEqual(1, prePrompts);
             Assert.AreEqual(1, tracking.RequestCount);
             Assert.AreEqual(TrackingAuthorizationStatus.Authorized, s.Consent.TrackingStatus);
+        }
+
+        [Test]
+        public void ThrowingAttPrePromptNeverBlocksLaterExportsOrInterstitials()
+        {
+            var tracking = new FakeTrackingAuthorization();
+            _consent = new FakeConsentService(tracking, _clock);
+            int prePrompts = 0;
+            _consent.AttPrePrompt = new CallbackPrePrompt(next =>
+            {
+                prePrompts++;
+                throw new System.InvalidOperationException("screen failed");
+            });
+            var s = Create();
+            s.Tick();
+            _clock.Advance(3000);
+            s.Tick();
+            s.RewardedExport.SetInStudio(true);
+
+            for (int i = 0; i < 2; i++)
+            {
+                string project = "p" + i;
+                Assert.IsTrue(s.RewardedExport.RequestExport(project).IsShowOffer);
+                Ballverse.Core.Ads.RewardedGateStep? step = null;
+                s.RewardedExport.WatchAd(project, st => step = st);
+                s.Tick();
+                Assert.IsTrue(step.HasValue, "export " + i + " continues");
+                Assert.IsFalse(s.RewardedExport.IsBusy);
+                s.RewardedExport.OnExportFinished(project, Ballverse.Core.Ads.ExportResult.Succeeded);
+            }
+            Assert.AreEqual(1, prePrompts);
+
+            for (int round = 0; round < 2; round++)
+            {
+                for (int i = 0; i < 3; i++) s.Interstitials.OnGameCompleted(Ballverse.Core.Ads.GameRunSummary.FinishedRegular(600));
+                _clock.Advance(200_000);
+                s.Tick();
+                var d = s.Interstitials.EvaluateNaturalBreak(Ballverse.Core.Ads.NaturalBreakKind.Retry, false, false, false);
+                Assert.IsTrue(d.IsShow, "round " + round);
+                bool? shown = null;
+                s.Interstitials.ShowInterstitial(x => shown = x);
+                Assert.IsTrue(shown.HasValue, "interstitial " + round + " calls back");
+            }
+        }
+
+        [Test]
+        public void UnansweredAttPrePromptLetsTheExportRunWithoutTheAd()
+        {
+            var tracking = new FakeTrackingAuthorization();
+            _consent = new FakeConsentService(tracking, _clock);
+            _consent.AttPrePrompt = new CallbackPrePrompt(next => { }); // closed by navigation, never answers
+            var s = Create();
+            s.Tick();
+            _clock.Advance(3000);
+            s.Tick();
+            s.RewardedExport.SetInStudio(true);
+            Assert.IsTrue(s.RewardedExport.RequestExport("p").IsShowOffer);
+            Ballverse.Core.Ads.RewardedGateStep? step = null;
+            s.RewardedExport.WatchAd("p", st => step = st);
+            s.Tick();
+            Assert.IsNull(step);
+            Assert.IsTrue(s.RewardedExport.IsBusy);
+
+            _clock.Advance(AdsService.BeforeShowTimeoutMs);
+            s.Tick();
+            Assert.IsTrue(step.HasValue);
+            Assert.AreEqual(Ballverse.Core.Ads.ExportFunding.AdUnavailable, step.Value.Funding);
+            Assert.IsFalse(s.RewardedExport.IsBusy);
+            Assert.AreEqual(0, s.FakeAds.ShowCalls);
         }
 
         [Test]

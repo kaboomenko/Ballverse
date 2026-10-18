@@ -111,13 +111,16 @@ namespace Ballverse.Services
         public const string OwnedModesCount = "owned_modes_count";
         public const string HasNoExportAds = "has_no_export_ads";
         public const string HasNoInterstitials = "has_no_interstitials";
+
+        /// <summary>Release-1 spec §9.2 (docs-release1): NO_WATERMARK owned (No Ads, both ad removals, later Ultimate).</summary>
+        public const string HasNoWatermark = "has_no_watermark";
         public const string ExportsTotal = "exports_total";
         public const string UiLanguage = "ui_language";
         public const string FirstMode = "first_mode";
 
         static readonly HashSet<string> s_all = new HashSet<string>
         {
-            Tier, OwnedModesCount, HasNoExportAds, HasNoInterstitials, ExportsTotal, UiLanguage, FirstMode,
+            Tier, OwnedModesCount, HasNoExportAds, HasNoInterstitials, HasNoWatermark, ExportsTotal, UiLanguage, FirstMode,
         };
 
         public static bool IsKnown(string name)

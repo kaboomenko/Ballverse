@@ -96,10 +96,14 @@ namespace Ballverse.Services
             }
         }
 
-        /// <summary>The app returned to the foreground: re-read purchases (pending approvals, refunds; spec §5.4).</summary>
+        /// <summary>
+        /// The app returned to the foreground: re-read purchases (pending approvals, refunds; spec §5.4) and retry a consent
+        /// gather that has not produced a decision yet (offline first launch).
+        /// </summary>
         public void OnApplicationResumed()
         {
             Purchases.RefreshPurchases();
+            Startup.OnApplicationResumed();
         }
     }
 }

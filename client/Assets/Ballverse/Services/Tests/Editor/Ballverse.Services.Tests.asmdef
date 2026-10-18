@@ -3,6 +3,7 @@
     "rootNamespace": "Ballverse.Services.Tests",
     "references": [
         "Ballverse.Services",
+        "Ballverse.Services.Editor",
         "Ballverse.Core",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"

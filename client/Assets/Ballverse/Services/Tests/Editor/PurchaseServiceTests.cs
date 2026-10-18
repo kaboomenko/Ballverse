@@ -21,10 +21,65 @@ namespace Ballverse.Services.Tests
             _log = new MemoryServiceLog();
         }
 
-        PurchaseService Create(FakeStoreBackend backend, IReceiptValidator validator = null)
+        PurchaseService Create(IStoreBackend backend, IReceiptValidator validator = null, MonetizationConfig config = null)
         {
             var cache = new EntitlementStore(_store, new PrefsDeviceKeyStore(_store), _clock, _log);
-            return new PurchaseService(backend, cache, validator ?? new FakeReceiptValidator(), _clock, _analytics, _log);
+            return new PurchaseService(backend, cache, validator ?? new FakeReceiptValidator(), config, _clock, _analytics, _log);
+        }
+
+        /// <summary>A store whose purchases reads are answered by the test (delays, reordering) and whose orders are scripted.</summary>
+        sealed class ScriptedStoreBackend : IStoreBackend
+        {
+            IStoreBackendListener _listener;
+
+            public int FetchRequests;
+            public int ConfirmCalls;
+
+            public bool IsAvailable => true;
+
+            public IStoreBackendListener Listener { set => _listener = value; }
+
+            public void Connect(IReadOnlyList<string> productIds)
+            {
+                _listener.OnConnected();
+                var products = new List<StoreProduct>();
+                foreach (string id in productIds) products.Add(new StoreProduct(id, "$1", id, id, "USD", 1m, true));
+                _listener.OnProductsFetched(products);
+            }
+
+            public void FetchPurchases()
+            {
+                FetchRequests++;
+            }
+
+            public void Answer(params StorePurchase[] purchases)
+            {
+                _listener.OnPurchasesFetched(purchases);
+            }
+
+            public void DeliverPending(string productId)
+            {
+                _listener.OnPurchasePending(new StorePurchase(productId, "tx-" + productId, StorePurchaseState.AwaitingConfirmation, "{}", null));
+            }
+
+            public void Purchase(string productId)
+            {
+            }
+
+            public void Confirm(StorePurchase purchase)
+            {
+                ConfirmCalls++;
+            }
+
+            public void Restore(System.Action<bool, string> done)
+            {
+                done?.Invoke(true, null);
+            }
+
+            public static StorePurchase Confirmed(string productId)
+            {
+                return new StorePurchase(productId, "tx-" + productId, StorePurchaseState.Confirmed, "{\"Payload\":\"signed\"}", null);
+            }
         }
 
         [Test]
@@ -164,6 +219,121 @@ namespace Ballverse.Services.Tests
             Assert.AreEqual("validation_failed", outcome.Value.ErrorCode);
             Assert.IsTrue(service.Entitlements.IsEmpty);
             Assert.AreEqual(0, backend.ConfirmCalls);
+        }
+
+        [Test]
+        public void AlreadyConfirmedPurchasesAreVerifiedOnEveryRead()
+        {
+            // Spec §5.5: restore, reinstall and every launch read acknowledged purchases; they must pass the signature check too.
+            var backend = new ScriptedStoreBackend();
+            var validator = new FakeReceiptValidator { Accept = false };
+            var service = Create(backend, validator);
+            service.Initialize();
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds));
+            Assert.AreEqual(1, validator.Calls);
+            Assert.AreEqual(0, service.OwnedProductIds.Count);
+            Assert.IsTrue(service.Entitlements.IsEmpty);
+            Assert.Greater(_log.WarningCount, 0);
+
+            validator.Accept = true;
+            service.RefreshPurchases();
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds));
+            CollectionAssert.AreEqual(new[] { ProductIds.NoAds }, service.OwnedProductIds);
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoWatermark));
+            Assert.AreEqual(0, backend.ConfirmCalls, "confirmed orders are not confirmed again");
+        }
+
+        [Test]
+        public void ReadRequestedBeforeAPurchaseDoesNotDropIt()
+        {
+            var backend = new ScriptedStoreBackend();
+            var service = Create(backend);
+            service.Initialize();
+            Assert.AreEqual(1, backend.FetchRequests);
+            backend.Answer();
+
+            // Resume read requested, then the purchase sheet closes with a paid purchase, then the old read answers.
+            service.RefreshPurchases();
+            Assert.AreEqual(2, backend.FetchRequests);
+            backend.DeliverPending(ProductIds.NoAds);
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoExportAds));
+            backend.Answer(); // stale: predates the purchase
+
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoExportAds), "right kept");
+            Assert.AreEqual(3, backend.FetchRequests, "purchases read again");
+            var reloaded = Create(new FakeStoreBackend(new FakeStoreConfig { ConnectSucceeds = false }));
+            Assert.IsTrue(reloaded.Entitlements.Contains(Entitlement.NoExportAds), "cache not overwritten without it");
+
+            // The fresh read is authoritative: with the purchase it stays; a later read without it (refund) removes it.
+            backend.Answer(ScriptedStoreBackend.Confirmed(ProductIds.NoAds));
+            Assert.IsTrue(service.Entitlements.Contains(Entitlement.NoExportAds));
+            service.RefreshPurchases();
+            backend.Answer();
+            Assert.IsTrue(service.Entitlements.IsEmpty);
+            Assert.AreEqual(4, backend.FetchRequests);
+        }
+
+        [Test]
+        public void FreshReadAfterAPurchaseIsAuthoritative()
+        {
+            var backend = new ScriptedStoreBackend();
+            var service = Create(backend);
+            service.Initialize();
+            backend.Answer();
+            backend.DeliverPending(ProductIds.RemoveExportAds);
+            service.RefreshPurchases(); // requested after the grant
+            backend.Answer();           // e.g. refunded already
+            Assert.IsTrue(service.Entitlements.IsEmpty);
+            Assert.AreEqual(2, backend.FetchRequests, "no extra read");
+        }
+
+        [Test]
+        public void Release1RulesComeFromCoreMonetizationConfig()
+        {
+            var service = Create(new FakeStoreBackend());
+            Assert.AreSame(MonetizationConfig.Release1, service.Config);
+            service.Initialize();
+            CollectionAssert.AreEqual(MonetizationConfig.Release1.SellableProductIds, ProductIdsOf(service.Products));
+
+            var config = new FakeStoreConfig();
+            config.InitiallyOwned.Add(ProductIds.RemoveExportAds);
+            var one = Create(new FakeStoreBackend(config));
+            one.Initialize();
+            Assert.IsFalse(one.Entitlements.Contains(Entitlement.NoWatermark), "one ad removal keeps the watermark");
+            Assert.IsFalse(one.WatermarkGrandfathered);
+        }
+
+        [Test]
+        public void WatermarkRightSurvivesALaterReleaseThatDropsTheNoAdsRule()
+        {
+            // docs-release1 §5.0.2: a right bought earlier is never taken away.
+            var config = new FakeStoreConfig();
+            config.InitiallyOwned.Add(ProductIds.RemoveExportAds);
+            config.InitiallyOwned.Add(ProductIds.RemoveInterstitialAds);
+            var release1 = Create(new FakeStoreBackend(config));
+            release1.Initialize();
+            Assert.IsTrue(release1.Entitlements.Contains(Entitlement.NoWatermark));
+            Assert.IsTrue(release1.WatermarkGrandfathered);
+            Assert.AreEqual("1", _store.GetString(EntitlementStore.WatermarkGrandfatheredKey));
+
+            var later = MonetizationConfig.Release1.WithWatermarkWithNoAds(false);
+            var next = Create(new FakeStoreBackend(config), config: later);
+            next.Initialize();
+            Assert.IsTrue(next.Entitlements.Contains(Entitlement.NoWatermark), "grandfathered");
+
+            // A user who never qualified under the rule gets nothing from the flag.
+            _store = new MemoryKeyValueStore();
+            var newcomer = Create(new FakeStoreBackend(config), config: later);
+            newcomer.Initialize();
+            Assert.IsFalse(newcomer.Entitlements.Contains(Entitlement.NoWatermark));
+            Assert.IsFalse(newcomer.WatermarkGrandfathered);
+        }
+
+        static List<string> ProductIdsOf(IReadOnlyList<StoreProduct> products)
+        {
+            var ids = new List<string>();
+            foreach (var p in products) ids.Add(p.Id);
+            return ids;
         }
 
         [Test]

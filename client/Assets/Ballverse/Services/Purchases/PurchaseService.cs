@@ -9,9 +9,14 @@ namespace Ballverse.Services
     /// <list type="bullet">
     /// <item>start: rights from the signed cache (<see cref="EntitlementStore"/>), then connect; a store that does not answer
     /// within <see cref="ConnectTimeoutMs"/> leaves the service <see cref="PurchaseServiceState.Unavailable"/> on the cache;</item>
-    /// <item>a successful purchases read is authoritative: it replaces the owned list (refunds disappear) and refreshes the cache;</item>
-    /// <item>a paid purchase is verified (<see cref="IReceiptValidator"/>), granted, then confirmed — "grant then confirm", so a
-    /// crash in between re-delivers it at the next start; an unverified one is neither granted nor confirmed;</item>
+    /// <item>a successful purchases read is authoritative: it replaces the owned list (refunds disappear) and refreshes the cache —
+    /// except for a purchase granted after that read was requested (the read predates it): it is kept and the purchases are
+    /// read once more;</item>
+    /// <item>every paid purchase is verified (<see cref="IReceiptValidator"/>) before it grants anything — new, interrupted and
+    /// already confirmed ones alike (launch, reinstall, restore); a new one is granted, then confirmed ("grant then confirm",
+    /// so a crash in between re-delivers it at the next start); an unverified one is neither granted nor confirmed;</item>
+    /// <item>rights are Core <c>Entitlements.From(owned, config, watermarkGrandfathered)</c>; the Core
+    /// <see cref="WatermarkGrandfathering"/> flag is updated and persisted on every recompute;</item>
     /// <item>deferred purchases grant nothing and are listed in <see cref="PendingProductIds"/>.</item>
     /// </list>
     /// </summary>
@@ -31,6 +36,7 @@ namespace Ballverse.Services
         readonly IStoreBackend _backend;
         readonly EntitlementStore _cache;
         readonly IReceiptValidator _validator;
+        readonly MonetizationConfig _config;
         readonly IClock _clock;
         readonly IAnalyticsService _analytics;
         readonly IServiceLog _log;
@@ -38,6 +44,11 @@ namespace Ballverse.Services
         SortedSet<string> _owned = new SortedSet<string>(StringComparer.Ordinal);
         readonly SortedSet<string> _pending = new SortedSet<string>(StringComparer.Ordinal);
         readonly HashSet<string> _confirming = new HashSet<string>(StringComparer.Ordinal);
+        // Product → number of purchases reads requested when it was granted by OnPurchasePending (stale-read protection).
+        readonly Dictionary<string, int> _grantedAtFetch = new Dictionary<string, int>(StringComparer.Ordinal);
+        int _fetchesIssued;
+        int _fetchesAnswered;
+        bool _watermarkGrandfathered;
         List<StoreProduct> _products = new List<StoreProduct>();
         string[] _ownedView = Array.Empty<string>();
         string[] _pendingView = Array.Empty<string>();
@@ -48,19 +59,24 @@ namespace Ballverse.Services
         bool _fetchInFlight;
         long _connectStartedMs;
 
-        public PurchaseService(IStoreBackend backend, EntitlementStore cache, IReceiptValidator validator, IClock clock,
-            IAnalyticsService analytics, IServiceLog log)
+        /// <param name="config">Release catalog and rules; null means <see cref="MonetizationConfig.Release1"/> (what release
+        /// builds ship), unlike Core where null means the full catalog.</param>
+        public PurchaseService(IStoreBackend backend, EntitlementStore cache, IReceiptValidator validator, MonetizationConfig config,
+            IClock clock, IAnalyticsService analytics, IServiceLog log)
         {
             _backend = backend ?? throw new ArgumentNullException(nameof(backend));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _validator = validator ?? AcceptAllReceiptValidator.Instance;
+            _config = config ?? MonetizationConfig.Release1;
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _analytics = analytics ?? throw new ArgumentNullException(nameof(analytics));
             _log = log ?? NullServiceLog.Instance;
 
+            _watermarkGrandfathered = _cache.LoadWatermarkGrandfathered();
             foreach (string id in _cache.Load()) _owned.Add(id);
             RefreshViews();
-            Entitlements = Release1Entitlements.From(_owned);
+            UpdateWatermarkGrandfathering();
+            Entitlements = ComputeEntitlements();
             _backend.Listener = this;
         }
 
@@ -73,6 +89,10 @@ namespace Ballverse.Services
         public IReadOnlyList<string> PendingProductIds => _pendingView;
 
         public EntitlementSet Entitlements { get; private set; }
+
+        public MonetizationConfig Config => _config;
+
+        public bool WatermarkGrandfathered => _watermarkGrandfathered;
 
         public bool IsPurchaseInProgress => _active != null;
 
@@ -111,7 +131,7 @@ namespace Ballverse.Services
             _connectStartedMs = _clock.MonotonicMs;
             try
             {
-                _backend.Connect(Release1Catalog.SoldProductIds);
+                _backend.Connect(_config.SellableProductIds);
             }
             catch (Exception e)
             {
@@ -131,12 +151,12 @@ namespace Ballverse.Services
 
         public void Purchase(string productId, string source, Action<PurchaseOutcome> done)
         {
-            if (!Release1Catalog.IsSold(productId))
+            if (!_config.IsSellable(productId))
             {
                 done?.Invoke(new PurchaseOutcome(productId, PurchaseResultKind.NotAvailable, "not_sold"));
                 return;
             }
-            if (Release1Entitlements.IsRedundantPurchase(_owned, productId))
+            if (IsRedundantPurchase(productId))
             {
                 done?.Invoke(new PurchaseOutcome(productId, PurchaseResultKind.AlreadyOwned, null));
                 return;
@@ -230,12 +250,13 @@ namespace Ballverse.Services
             if (_active != null) CompleteActive(_active.ProductId, PurchaseResultKind.Failed, "store_disconnected");
             if (_restoring) CompleteRestore(false, "store_disconnected");
             _fetchInFlight = false;
+            _fetchesAnswered = _fetchesIssued; // outstanding reads are not answered after a disconnect
         }
 
         public void OnProductsFetched(IReadOnlyList<StoreProduct> products)
         {
             var list = new List<StoreProduct>();
-            foreach (string id in Release1Catalog.SoldProductIds)
+            foreach (string id in _config.SellableProductIds)
             {
                 foreach (var p in products)
                 {
@@ -260,6 +281,8 @@ namespace Ballverse.Services
         public void OnPurchasesFetched(IReadOnlyList<StorePurchase> purchases)
         {
             _fetchInFlight = false;
+            // Reads are answered in request order; this answer belongs to read number `answered`.
+            int answered = _fetchesAnswered < _fetchesIssued ? ++_fetchesAnswered : _fetchesIssued;
             _confirming.Clear();
             var owned = new SortedSet<string>(StringComparer.Ordinal);
             var pending = new SortedSet<string>(StringComparer.Ordinal);
@@ -270,7 +293,9 @@ namespace Ballverse.Services
                 switch (p.State)
                 {
                     case StorePurchaseState.Confirmed:
-                        owned.Add(p.ProductId);
+                        // Spec §5.5: verified on every read, not only when new (restore, reinstall, every launch).
+                        if (_validator.Validate(p, out string confirmedError)) owned.Add(p.ProductId);
+                        else _log.Warning(Tag, "Unverified purchase of " + p.ProductId + " ignored (" + confirmedError + ").");
                         break;
                     case StorePurchaseState.AwaitingConfirmation:
                         if (_validator.Validate(p, out string error))
@@ -288,17 +313,49 @@ namespace Ballverse.Services
                         break;
                 }
             }
+            bool reread = KeepGrantsNewerThan(answered, owned);
             pending.ExceptWith(owned);
             _pending.Clear();
             _pending.UnionWith(pending);
             ReplaceOwned(owned);
             foreach (var p in toConfirm) Confirm(p);
             if (_restoring) CompleteRestore(_restoreError == null, _restoreError);
+            if (reread) FetchPurchasesNow(force: false);
+        }
+
+        /// <summary>
+        /// A read requested before a purchase was granted may be answered after it, without it. Such grants stay owned (the
+        /// caller then reads again); a read requested after the grant is authoritative and settles it.
+        /// </summary>
+        bool KeepGrantsNewerThan(int answeredRead, SortedSet<string> owned)
+        {
+            if (_grantedAtFetch.Count == 0) return false;
+            bool reread = false;
+            List<string> settled = null;
+            foreach (var grant in _grantedAtFetch)
+            {
+                if (answeredRead > grant.Value)
+                {
+                    (settled ?? (settled = new List<string>())).Add(grant.Key);
+                }
+                else if (!owned.Contains(grant.Key))
+                {
+                    owned.Add(grant.Key);
+                    reread = true;
+                    _log.Info(Tag, "Purchases read predates the purchase of " + grant.Key + "; kept, reading again.");
+                }
+            }
+            if (settled != null)
+            {
+                foreach (string id in settled) _grantedAtFetch.Remove(id);
+            }
+            return reread;
         }
 
         public void OnPurchasesFetchFailed(string reason)
         {
             _fetchInFlight = false;
+            if (_fetchesAnswered < _fetchesIssued) _fetchesAnswered++;
             _log.Warning(Tag, "Purchases fetch failed (" + reason + "); keeping cached rights.");
             if (_restoring) CompleteRestore(false, "fetch_failed");
         }
@@ -314,6 +371,7 @@ namespace Ballverse.Services
             }
             bool changed = _owned.Add(purchase.ProductId);
             bool wasPending = _pending.Remove(purchase.ProductId);
+            _grantedAtFetch[purchase.ProductId] = _fetchesIssued;
             if (changed || wasPending) CommitOwned();
             Confirm(purchase);
             if (IsActive(purchase.ProductId))
@@ -372,6 +430,7 @@ namespace Ballverse.Services
         public void OnEntitlementRevoked(string productId)
         {
             if (string.IsNullOrEmpty(productId)) return;
+            _grantedAtFetch.Remove(productId);
             if (_owned.Remove(productId))
             {
                 _log.Info(Tag, "Revoked " + productId + " (refund).");
@@ -385,6 +444,7 @@ namespace Ballverse.Services
         {
             if (_fetchInFlight && !force) return;
             _fetchInFlight = true;
+            _fetchesIssued++;
             try
             {
                 _backend.FetchPurchases();
@@ -420,10 +480,31 @@ namespace Ballverse.Services
         {
             _cache.Save(_owned);
             RefreshViews();
-            var updated = Release1Entitlements.From(_owned);
+            UpdateWatermarkGrandfathering();
+            var updated = ComputeEntitlements();
             if (updated == Entitlements) return;
             Entitlements = updated;
             EntitlementsChanged?.Invoke(updated);
+        }
+
+        EntitlementSet ComputeEntitlements()
+        {
+            return Ballverse.Core.Monetization.Entitlements.From(_owned, _config, _watermarkGrandfathered);
+        }
+
+        /// <summary>Core <see cref="WatermarkGrandfathering.Update(bool, IEnumerable{string}, MonetizationConfig)"/>, persisted.</summary>
+        void UpdateWatermarkGrandfathering()
+        {
+            if (_watermarkGrandfathered) return;
+            if (!WatermarkGrandfathering.Update(false, _owned, _config)) return;
+            _watermarkGrandfathered = true;
+            _cache.SaveWatermarkGrandfathered();
+        }
+
+        /// <summary>True when the current rights already contain everything <paramref name="productId"/> grants.</summary>
+        bool IsRedundantPurchase(string productId)
+        {
+            return ProductCatalog.TryGet(productId, out var product) && Entitlements.IsSupersetOf(product.Grants);
         }
 
         void RefreshViews()

@@ -86,6 +86,12 @@ namespace Ballverse.Services
 
         PrivacyOptionsRequirement PrivacyOptions { get; }
 
+        /// <summary>
+        /// The TCF values UMP wrote with the user's actual choice (refreshed after every gather and privacy options form);
+        /// default when not written or unreadable. Drives Consent Mode (<see cref="ConsentModeRules"/>).
+        /// </summary>
+        TcfSignals Tcf { get; }
+
         /// <summary>Raised after <see cref="Gather"/> completes or the privacy options form closes.</summary>
         event Action ConsentChanged;
 

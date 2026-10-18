@@ -8,7 +8,9 @@ namespace Ballverse.Services
     /// <code>
     /// Frame 0  : Crashlytics → cached rights and ad policy state (already loaded by the constructors) → UI and simulation start
     /// Frame 1+ : Remote Config (activate cached, background fetch, 3 s) · IAP connect → purchases → rights → cache
-    ///            UMP consent (form on top if required)
+    ///            UMP consent (form on top if required); analytics collection and Consent Mode follow the user's decision
+    ///            (spec §9.1, <see cref="ConsentModeRules"/>), also when it changes later in the privacy options form;
+    ///            without a decision (offline, form failed) consent is gathered again with backoff and on resume
     ///            Ads SDK: only once consent allows ads and not earlier than 3 s after the first frame; then preload
     ///            ATT: deferred to the first ad show (IAdsService.BeforeShow → IConsentService.EnsureTrackingDecision)
     /// </code>
@@ -18,6 +20,11 @@ namespace Ballverse.Services
     {
         /// <summary>Spec §7.9: the ads SDK starts no earlier than 3 s after the first frame.</summary>
         public const long AdsStartDelayMs = 3000;
+
+        /// <summary>First retry of a consent gather that ended without a decision allowing ads; doubles up to <see cref="ConsentRetryMaxDelayMs"/>.</summary>
+        public const long ConsentRetryFirstDelayMs = 30_000;
+
+        public const long ConsentRetryMaxDelayMs = 300_000;
 
         const string Tag = "Startup";
 
@@ -35,6 +42,8 @@ namespace Ballverse.Services
         bool _frame0Done;
         bool _started;
         long _firstTickMs;
+        int _consentFailures;
+        long _nextConsentRetryMs = -1;
 
         public ServicesStartup(ICrashReporter crash, IRemoteConfigService remoteConfig, IPurchaseService purchases,
             IConsentService consent, IAdsService ads, IAnalyticsService analytics, AdPolicyStore adPolicy,
@@ -82,6 +91,7 @@ namespace Ballverse.Services
                 PublishEntitlementProperties(entitlements);
             };
             _ads.BeforeShow = _consent.EnsureTrackingDecision;
+            _consent.ConsentChanged += ApplyConsentMode;
             PublishEntitlementProperties(_purchases.Entitlements);
         }
 
@@ -97,6 +107,7 @@ namespace Ballverse.Services
                 _purchases.Initialize();
                 _consent.Gather(OnConsentGathered);
             }
+            if (_nextConsentRetryMs >= 0 && now >= _nextConsentRetryMs) RetryConsent("backoff");
             if (!AdsStarted && _consent.CanRequestAds && now - _firstTickMs >= AdsStartDelayMs)
             {
                 AdsStarted = true;
@@ -106,27 +117,65 @@ namespace Ballverse.Services
             }
         }
 
+        /// <summary>The app returned to the foreground: retry a consent gather that has not produced a decision yet.</summary>
+        public void OnApplicationResumed()
+        {
+            if (_started && NeedsConsentRetry()) RetryConsent("resume");
+        }
+
         void OnConsentGathered(ConsentGatherResult result)
         {
             ConsentSettled = true;
             if (result.Error != null) _crash.Log("consent: " + result.Error);
-
-            // Consent Mode (spec §9.1). Outside consent regions everything is granted. After a UMP answer analytics storage is
-            // granted and the TCF string written by UMP governs the ad signals (not overridden). Without a decision (form not
-            // answered, offline first launch) analytics storage is denied: Firebase then sends cookieless signals only.
-            switch (result.Requirement)
+            ApplyConsentMode();
+            if (NeedsConsentRetry())
             {
-                case ConsentRequirement.NotRequired:
-                    _analytics.SetConsent(AnalyticsConsent.AllGranted);
-                    break;
-                case ConsentRequirement.Obtained:
-                    _analytics.SetConsent(new AnalyticsConsent(true, null, null, null));
-                    break;
-                default:
-                    _analytics.SetConsent(new AnalyticsConsent(false, null, null, null));
-                    break;
+                long delay = ConsentRetryDelayMs(++_consentFailures);
+                _nextConsentRetryMs = _clock.MonotonicMs + delay;
+                _log.Info(Tag, "No consent decision allowing ads yet; gathering again in " + delay + " ms.");
             }
-            _analytics.SetCollectionEnabled(true);
+            else
+            {
+                _consentFailures = 0;
+                _nextConsentRetryMs = -1;
+            }
+        }
+
+        /// <summary>30 s, 60 s, 120 s, 240 s, then every 300 s.</summary>
+        public static long ConsentRetryDelayMs(int failures)
+        {
+            long delay = ConsentRetryFirstDelayMs;
+            for (int i = 1; i < failures && delay < ConsentRetryMaxDelayMs; i++) delay *= 2;
+            return Math.Min(delay, ConsentRetryMaxDelayMs);
+        }
+
+        bool NeedsConsentRetry()
+        {
+            if (_consent.CanRequestAds || _consent.GatherState == ConsentGatherState.Gathering) return false;
+            // Only while there is no decision: the update failed (offline, timeout) or the required form was not answered.
+            return _consent.GatherState == ConsentGatherState.Failed
+                   || _consent.Requirement == ConsentRequirement.Required
+                   || _consent.Requirement == ConsentRequirement.Unknown;
+        }
+
+        void RetryConsent(string reason)
+        {
+            _nextConsentRetryMs = -1;
+            if (!NeedsConsentRetry()) return;
+            _log.Info(Tag, "Gathering consent again (" + reason + ").");
+            _consent.Gather(OnConsentGathered);
+        }
+
+        /// <summary>
+        /// Consent Mode and analytics collection from the current consent state (spec §9.1). Runs after every gather and
+        /// whenever the decision changes (privacy options form). Without a decision nothing is enabled: events stay buffered.
+        /// </summary>
+        void ApplyConsentMode()
+        {
+            var decision = ConsentModeRules.Decide(_consent.Requirement, _consent.Tcf);
+            if (!decision.HasDecision) return;
+            _analytics.SetConsent(decision.Consent);
+            if (_analytics.CollectionEnabled != true) _analytics.SetCollectionEnabled(true);
         }
 
         void RefreshAdPreload()
@@ -139,6 +188,7 @@ namespace Ballverse.Services
         {
             _analytics.SetUserProperty(AnalyticsUserProperties.HasNoExportAds, entitlements.Contains(Entitlement.NoExportAds) ? "true" : "false");
             _analytics.SetUserProperty(AnalyticsUserProperties.HasNoInterstitials, entitlements.Contains(Entitlement.NoInterstitials) ? "true" : "false");
+            _analytics.SetUserProperty(AnalyticsUserProperties.HasNoWatermark, entitlements.Contains(Entitlement.NoWatermark) ? "true" : "false");
             _analytics.SetUserProperty(AnalyticsUserProperties.OwnedModesCount,
                 entitlements.ModeCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }

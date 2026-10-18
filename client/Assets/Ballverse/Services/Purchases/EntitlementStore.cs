@@ -70,6 +70,9 @@ namespace Ballverse.Services
     {
         public const string CacheKey = "ballverse.entitlements.v1";
 
+        /// <summary>Core <see cref="WatermarkGrandfathering"/> flag ("1" once set; never cleared).</summary>
+        public const string WatermarkGrandfatheredKey = "ballverse.watermark_no_ads_grandfathered.v1";
+
         const string Tag = "Entitlements";
 
         readonly IKeyValueStore _store;
@@ -113,6 +116,34 @@ namespace Ballverse.Services
             }
             SavedAtUnixMs = entry.SavedAtUnixMs;
             return entry.OwnedProductIds;
+        }
+
+        /// <summary>The persisted watermark grandfathering flag; false when missing or unreadable. Never throws.</summary>
+        public bool LoadWatermarkGrandfathered()
+        {
+            try
+            {
+                return _store.GetString(WatermarkGrandfatheredKey) == "1";
+            }
+            catch (Exception e)
+            {
+                _log.Error(Tag, "Reading the watermark grandfathering flag failed.", e);
+                return false;
+            }
+        }
+
+        /// <summary>Persists the flag once it became true (it is never cleared, see <see cref="WatermarkGrandfathering"/>).</summary>
+        public void SaveWatermarkGrandfathered()
+        {
+            try
+            {
+                _store.SetString(WatermarkGrandfatheredKey, "1");
+                _store.Save();
+            }
+            catch (Exception e)
+            {
+                _log.Error(Tag, "Saving the watermark grandfathering flag failed.", e);
+            }
         }
 
         /// <summary>Stores the result of a successful store read.</summary>

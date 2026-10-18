@@ -32,19 +32,22 @@ namespace Ballverse.Services
         readonly IServiceLog _log;
         readonly ConsentDebugOptions _debug;
         readonly TrackingDecisionFlow _tracking;
+        readonly ITcfStorage _tcf;
         Action<ConsentGatherResult> _pending;
         int _attempt;
         bool _awaitingUpdate;
         long _updateStartedMs;
         string _lastError;
 
-        public UmpConsentService(MainThreadQueue queue, IClock clock, ITrackingAuthorization tracking, ConsentDebugOptions debug, IServiceLog log)
+        public UmpConsentService(MainThreadQueue queue, IClock clock, ITrackingAuthorization tracking, ITcfStorage tcf,
+            ConsentDebugOptions debug, IServiceLog log)
         {
             _queue = queue ?? throw new ArgumentNullException(nameof(queue));
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
             _log = log ?? NullServiceLog.Instance;
             _debug = debug;
-            _tracking = new TrackingDecisionFlow(tracking ?? new NoTrackingAuthorization());
+            _tracking = new TrackingDecisionFlow(tracking ?? new NoTrackingAuthorization(), _clock, _log);
+            _tcf = tcf ?? NoTcfStorage.Instance;
             RefreshFromSdk();
         }
 
@@ -55,6 +58,8 @@ namespace Ballverse.Services
         public bool CanRequestAds { get; private set; }
 
         public PrivacyOptionsRequirement PrivacyOptions { get; private set; }
+
+        public TcfSignals Tcf { get; private set; }
 
         public event Action ConsentChanged;
 
@@ -178,6 +183,7 @@ namespace Ballverse.Services
             {
                 _log.Error(Tag, "Reading UMP consent state failed.", e);
             }
+            Tcf = _tcf.Read();
         }
 
         static ConsentRequirement Map(ConsentStatus status)

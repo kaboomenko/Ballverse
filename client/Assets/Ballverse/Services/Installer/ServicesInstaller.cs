@@ -5,12 +5,27 @@ using UnityEngine;
 namespace Ballverse.Services
 {
     /// <summary>
-    /// Registration entry point of the services layer for the App composition root (spec §7.3). There is no shared
-    /// <c>IAppModule</c> contract yet, so the App calls:
+    /// Registration entry point of the services layer for the App composition root (spec §7.3). Ballverse.Services cannot
+    /// reference Ballverse.App, so the App's <c>IAppModule</c> contract (unity/bootstrap branch: <c>Ballverse.App.IAppModule</c>
+    /// with <c>Register</c> / <c>Start</c> / <c>Shutdown</c>, <c>AppStartPhase</c>, <c>AppModuleCatalog</c>) wraps this class in
+    /// a <c>ServicesModule</c> under <c>Assets/Ballverse/App/Modules/</c>:
     /// <code>
-    /// var services = ServicesInstaller.CreateAndRun();   // frame 0, returns immediately
-    /// // or: var services = ServicesInstaller.Create(options); ServicesRunner.Attach(services);
+    /// public sealed class ServicesModule : IAppModule
+    /// {
+    ///     BallverseServices _services; ServicesRunner _runner;
+    ///     public string Name => "Services";
+    ///     public AppStartPhase Phase => AppStartPhase.Immediate;   // frame-0 part only: crash, cached rights, ad policy
+    ///     public void Register(AppServices s) { _services = ServicesInstaller.Create(); /* publish _services.Ads, .Purchases, … */ }
+    ///     public void Start(AppModuleContext c) { _runner = ServicesRunner.Attach(_services); }
+    ///     public void Shutdown() { _runner?.Detach(); }
+    /// }
     /// </code>
+    /// The services do their own frame-1+ phasing (<see cref="ServicesStartup"/>: Remote Config → IAP → consent → ads after
+    /// the first frame, as <c>AppModuleCatalog</c> intends), so they need one per-frame owner: either the
+    /// <see cref="ServicesRunner"/> (as above) or the App's own update loop calling <see cref="BallverseServices.Tick"/> and
+    /// <see cref="BallverseServices.OnApplicationResumed"/> (from <c>IAppLifecycle.Resumed</c>) — never both. Without the App
+    /// (tests, sample scenes): <c>ServicesInstaller.CreateAndRun()</c>.
+    /// <para>
     /// Implementations per build (spec §7.1 "every external dependency behind an interface with a fake"):
     /// <list type="table">
     /// <item><term>Ads + consent</term><description><c>BALLVERSE_ADMOB</c> (set automatically when the
@@ -22,6 +37,7 @@ namespace Ballverse.Services
     /// set by hand once the Firebase SDK and config files are added): Firebase; otherwise log-based fakes and build defaults.</description></item>
     /// <item><term>Editor</term><description>fakes (<see cref="ServicesConfig.editorMode"/>).</description></item>
     /// </list>
+    /// </para>
     /// </summary>
     public static class ServicesInstaller
     {
@@ -93,14 +109,14 @@ namespace Ballverse.Services
                         debug.TestDeviceHashedIds.AddRange(options.UmpTestDeviceHashedIds);
                         debug.TestDeviceHashedIds.AddRange(Config().umpTestDeviceHashedIds);
                     }
-                    var ump = new UmpConsentService(queue, clock, tracking, debug, log);
+                    var ump = new UmpConsentService(queue, clock, tracking, CreateTcfStorage(log), debug, log);
                     tickables.Add(ump);
                     consent = ump;
                 }
                 else
 #endif
                 {
-                    consent = new FakeConsentService(tracking);
+                    consent = new FakeConsentService(tracking, clock, log);
                 }
             }
 
@@ -150,7 +166,8 @@ namespace Ballverse.Services
 #endif
             }
             var entitlementStore = new EntitlementStore(store, new PrefsDeviceKeyStore(store), clock, log);
-            var purchases = new PurchaseService(backend, entitlementStore, validator, clock, analytics, log);
+            var purchases = new PurchaseService(backend, entitlementStore, validator, options.Monetization ?? MonetizationConfig.Release1,
+                clock, analytics, log);
             tickables.Add(purchases);
 
             // ---- Ad policies (Core) ----
@@ -185,6 +202,20 @@ namespace Ballverse.Services
             }
             return requested;
         }
+
+#if BALLVERSE_ADMOB
+        static ITcfStorage CreateTcfStorage(IServiceLog log)
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            return new AndroidTcfStorage(log);
+#elif UNITY_IOS && !UNITY_EDITOR
+            return new IosTcfStorage(log);
+#else
+            _ = log;
+            return NoTcfStorage.Instance;
+#endif
+        }
+#endif
 
         static ITrackingAuthorization CreateTracking(MainThreadQueue queue, bool fakes)
         {

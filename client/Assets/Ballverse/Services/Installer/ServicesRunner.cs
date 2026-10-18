@@ -27,6 +27,15 @@ namespace Ballverse.Services
             return runner;
         }
 
+        /// <summary>Stops ticking and destroys the runner object (App module shutdown). The services themselves stay usable.</summary>
+        public void Detach()
+        {
+            if (_services != null) _services.Ads.FullScreenChanged -= OnFullScreenChanged;
+            _services = null;
+            if (_muteAudioDuringAds) AudioListener.pause = false;
+            Destroy(gameObject);
+        }
+
         void Update()
         {
             if (_services != null) _services.Tick();
@@ -45,6 +54,7 @@ namespace Ballverse.Services
         void OnDestroy()
         {
             if (_services != null) _services.Ads.FullScreenChanged -= OnFullScreenChanged;
+            _services = null;
             if (_muteAudioDuringAds) AudioListener.pause = false;
         }
     }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Ballverse.Core.Monetization;
 
 namespace Ballverse.Services
 {
@@ -45,6 +46,13 @@ namespace Ballverse.Services
 
         /// <summary>Development build behaviour (verbose logs, Remote Config without fetch cache). Default: <c>Debug.isDebugBuild</c>.</summary>
         public bool? DeveloperBuild { get; set; }
+
+        /// <summary>
+        /// Release catalog and entitlement rules (Core). Default: <see cref="MonetizationConfig.Release1"/> — sells only Remove
+        /// Export Ads, Remove Interstitial Ads and No Ads Bundle; No Ads or both removals also give NO_WATERMARK. The App may
+        /// pass <c>MonetizationConfig.Release1.WithFreeModes(...)</c> after resolving Remote Config <c>free_modes</c>.
+        /// </summary>
+        public MonetizationConfig Monetization { get; set; }
 
         /// <summary>Fake store setup when fakes are used.</summary>
         public FakeStoreConfig FakeStore { get; set; }

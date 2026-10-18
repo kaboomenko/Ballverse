@@ -7,7 +7,9 @@ namespace Ballverse.Services
     /// <summary>
     /// App Tracking Transparency through the tiny native bridge <c>Plugins/iOS/BallverseTracking.mm</c>
     /// (<c>ATTrackingManager</c>). The completion handler arrives on an arbitrary thread and is moved to the main thread.
-    /// The Info.plist text (NSUserTrackingUsageDescription) is set in the Google Mobile Ads settings asset.
+    /// The Info.plist text (NSUserTrackingUsageDescription) comes from the Google Mobile Ads settings or, when empty, from the
+    /// build step <c>Editor/IosTrackingUsageDescription.cs</c>; without it the bridge skips the request (iOS would terminate
+    /// the app) and reports the status unchanged.
     /// </summary>
     public sealed class IosTrackingAuthorization : ITrackingAuthorization
     {

@@ -148,6 +148,51 @@ namespace Ballverse.Services.Tests
         }
 
         [Test]
+        public void BeforeShowHookThatThrowsStillShowsTheAd()
+        {
+            _ads.Initialize();
+            _ads.SetKeepLoaded(AdFormat.Interstitial, true);
+            _ads.BeforeShow = next => throw new System.InvalidOperationException("pre-prompt broke");
+            InterstitialShowResult? result = null;
+            _ads.ShowInterstitial(r => result = r);
+            Assert.AreEqual(InterstitialShowResult.Shown, result);
+            Assert.AreEqual(0, _ads.PendingBeforeShowCount);
+        }
+
+        [Test]
+        public void BeforeShowHookThatNeverContinuesIsAbandoned()
+        {
+            // Р14 / IN4: an ATT pre-prompt that never answers must not hold the export or the game up.
+            _ads.Initialize();
+            _ads.SetKeepLoaded(AdFormat.Rewarded, true);
+            _ads.SetKeepLoaded(AdFormat.Interstitial, true);
+            var continuations = new List<System.Action>();
+            _ads.BeforeShow = next => continuations.Add(next);
+            RewardedShowResult? rewarded = null;
+            InterstitialShowResult? interstitial = null;
+            _ads.ShowRewarded(r => rewarded = r);
+            _ads.ShowInterstitial(r => interstitial = r);
+            Assert.AreEqual(2, _ads.PendingBeforeShowCount);
+
+            _clock.Advance(AdsService.BeforeShowTimeoutMs - 1);
+            _ads.Tick();
+            Assert.IsNull(rewarded);
+            Assert.IsNull(interstitial);
+
+            _clock.Advance(1);
+            _ads.Tick();
+            Assert.AreEqual(RewardedShowResult.NotReady, rewarded);
+            Assert.AreEqual(InterstitialShowResult.NotReady, interstitial);
+            Assert.AreEqual(0, _ads.PendingBeforeShowCount);
+
+            // A late answer is ignored: no surprise ad a minute later.
+            foreach (var c in continuations) c();
+            Assert.AreEqual(0, _network.ShowCalls);
+            Assert.IsFalse(_ads.IsShowing);
+            Assert.IsTrue(_ads.IsReady(AdFormat.Rewarded), "the unused ad stays loaded for the next export");
+        }
+
+        [Test]
         public void StaleAdsAreReplaced()
         {
             _ads.Initialize();
