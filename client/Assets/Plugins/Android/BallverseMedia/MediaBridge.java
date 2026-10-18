@@ -225,6 +225,25 @@ public final class MediaBridge {
         });
     }
 
+    // ---------------------------------------------------------------- segmented export
+
+    /**
+     * Joins video-only MP4 segments (newline-separated paths, in order) without re-encoding and encodes the PcmFile
+     * mix (empty path = silent) into one AAC track: {@link SegmentConcat}. Result: {"frames","durationUs"}.
+     */
+    public static void concatSegments(long id, final String segmentsNewlineSeparated, final String pcmPath, final String outPath,
+            final int fps, final int audioBitrate) {
+        final long requestId = id;
+        submit(id, MediaError.MUXER_FAILED, new Job() {
+            @Override
+            public String run(AtomicBoolean cancel) throws Exception {
+                String[] segments = segmentsNewlineSeparated == null || segmentsNewlineSeparated.length() == 0
+                        ? new String[0] : segmentsNewlineSeparated.split("\n");
+                return SegmentConcat.run(segments, pcmPath, outPath, fps, audioBitrate, cancel, requestId);
+            }
+        });
+    }
+
     // ---------------------------------------------------------------- gallery / share
 
     /** Result: {"status": "saved"|"permission_denied"|"failed", "location", "addedToAlbum", "message"}. */

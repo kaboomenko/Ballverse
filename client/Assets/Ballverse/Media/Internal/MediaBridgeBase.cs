@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,6 +25,12 @@ namespace Ballverse.Media.Internal
         /// <summary>Decodes audio to f32le interleaved at the source rate/channels (or already 48 kHz stereo) into <paramref name="rawPath"/>.</summary>
         protected abstract Task<NativeAudioDto> DecodeAudioNativeAsync(string path, string rawPath, AudioDecodeRange range, CancellationToken ct);
         protected abstract VideoWriterBase CreateWriter(string outputPath, VideoWriterOptions options);
+        /// <summary>
+        /// Remuxes the segments (validated, in order) into <paramref name="outFile"/> with one AAC track from
+        /// <paramref name="pcmPath"/> (null = silent). Cancellation must stop native work; the caller deletes the output.
+        /// </summary>
+        protected abstract Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
+            SegmentConcatOptions options, CancellationToken ct);
         protected abstract Task<GallerySaveResult> SaveNativeAsync(string file, string album, CancellationToken ct);
         protected abstract void ShareNative(string file, string caption);
         protected abstract DeviceSignals GetSignalsNative();
@@ -135,6 +142,7 @@ namespace Ballverse.Media.Internal
             catch
             {
                 TryDelete(outputPcmPath);
+                TryDelete(outputPcmPath + PcmFile.TempSuffix);
                 throw;
             }
             finally
@@ -161,16 +169,64 @@ namespace Ballverse.Media.Internal
             Enter(nameof(FinalizeAsync));
             if (writer == null) throw new ArgumentNullException(nameof(writer));
             if (!(writer is VideoWriterBase w)) throw new ArgumentException("writer was not created by this bridge", nameof(writer));
+            if (ct.IsCancellationRequested)
+            {
+                // Never start the native finish for a token that is already cancelled: abort the writer (deletes the
+                // partial file natively) and report the cancellation.
+                w.Dispose();
+                ct.ThrowIfCancellationRequested();
+            }
             string path = ResultPathOf(w);
             try
             {
                 WriterFinish finish = await w.FinishAsync(ct);
-                bool fastStart = await Task.Run(() => FinishFile(path, ct), ct);
+                Mp4Metadata metadata = w.Options.Metadata;
+                bool fastStart = await Task.Run(() => FinishFile(path, metadata, ct), ct);
                 return new VideoWriterResult(path, finish.Frames, finish.DurationUs, fastStart, Backend == MediaBackend.Fake);
             }
             catch
             {
-                TryDelete(w.OutputPath);
+                DeleteOutput(path);
+                throw;
+            }
+        }
+
+        public async Task<VideoWriterResult> ConcatSegmentsAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
+            SegmentConcatOptions options, CancellationToken ct)
+        {
+            Enter(nameof(ConcatSegmentsAsync));
+            if (segments == null) throw new ArgumentNullException(nameof(segments));
+            if (segments.Count == 0) throw new ArgumentException("no segments", nameof(segments));
+            if (string.IsNullOrEmpty(outFile)) throw new ArgumentNullException(nameof(outFile));
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            var list = new List<string>(segments.Count);
+            foreach (string segment in segments)
+            {
+                if (string.IsNullOrEmpty(segment)) throw new ArgumentException("null or empty segment path", nameof(segments));
+                if (segment.IndexOf('\n') >= 0 || segment.IndexOf('\r') >= 0) throw new ArgumentException("segment path contains a line break: " + segment, nameof(segments));
+                if (string.Equals(Path.GetFullPath(segment), Path.GetFullPath(outFile), StringComparison.Ordinal))
+                    throw new ArgumentException("the output must not be one of the segments", nameof(outFile));
+                RequireSegment(segment);
+                list.Add(segment);
+            }
+            if (!string.IsNullOrEmpty(pcmPath) && !File.Exists(pcmPath))
+                throw new MediaException(MediaErrorCode.FileNotFound, "audio PCM file not found: " + pcmPath);
+            string pcm = PcmFile.CountFrames(pcmPath) > 0 ? pcmPath : null;
+            ct.ThrowIfCancellationRequested();
+            string dir = Path.GetDirectoryName(outFile);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            string path = ConcatResultPath(outFile);
+            DeleteOutput(path);
+            try
+            {
+                WriterFinish finish = await ConcatNativeAsync(list, pcm, outFile, options, ct);
+                Mp4Metadata metadata = options.Metadata;
+                bool fastStart = await Task.Run(() => FinishFile(path, metadata, ct), ct);
+                return new VideoWriterResult(path, finish.Frames, finish.DurationUs, fastStart, Backend == MediaBackend.Fake);
+            }
+            catch
+            {
+                DeleteOutput(path);
                 throw;
             }
         }
@@ -181,11 +237,35 @@ namespace Ballverse.Media.Internal
             return writer.OutputPath;
         }
 
-        /// <summary>Post-processing on a worker thread; default: ensure moov is at the front. Returns the fast-start flag.</summary>
-        protected virtual bool FinishFile(string path, CancellationToken ct)
+        /// <summary>Where <see cref="ConcatSegmentsAsync"/> output lives (the MP4; the fake backend: a frame directory).</summary>
+        protected virtual string ConcatResultPath(string outFile)
         {
-            if (Mp4FastStart.IsFastStart(path)) return true;
-            Mp4FastStart.Apply(path, ct);
+            return outFile;
+        }
+
+        /// <summary>Checks that a segment exists (an MP4 file; the fake backend: a frame directory).</summary>
+        protected virtual void RequireSegment(string path)
+        {
+            RequireFile(path);
+        }
+
+        /// <summary>Deletes a failed/cancelled output and its post-processing temp file (worker or main thread).</summary>
+        protected virtual void DeleteOutput(string path)
+        {
+            TryDelete(path);
+            TryDelete(path + Mp4FastStart.TempSuffix);
+        }
+
+        /// <summary>True when the platform writer stores <see cref="Mp4Metadata"/> itself (iOS AVAssetWriter).</summary>
+        protected virtual bool WritesMetadataNatively => false;
+
+        /// <summary>
+        /// Post-processing on a worker thread; default: move moov to the front and add the metadata box unless the
+        /// native writer stored it. Returns the fast-start flag.
+        /// </summary>
+        protected virtual bool FinishFile(string path, Mp4Metadata metadata, CancellationToken ct)
+        {
+            Mp4FastStart.Apply(path, WritesMetadataNatively ? null : metadata, ct);
             return true;
         }
 
@@ -224,7 +304,7 @@ namespace Ballverse.Media.Internal
             if (Disposed) throw new ObjectDisposedException(nameof(IMediaBridge));
         }
 
-        static void RequireFile(string path)
+        protected static void RequireFile(string path)
         {
             if (string.IsNullOrEmpty(path)) throw new ArgumentNullException(nameof(path));
             if (!File.Exists(path)) throw new MediaException(MediaErrorCode.FileNotFound, "file not found: " + path);

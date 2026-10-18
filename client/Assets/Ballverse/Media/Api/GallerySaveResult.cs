@@ -16,8 +16,9 @@ namespace Ballverse.Media
         public string Location { get; }
         /// <summary>
         /// Whether the item was placed into the named album. Android: always when saved (folder Movies/&lt;album&gt;).
-        /// iOS: add-only access cannot create or look up albums, so the video goes to the library (Recents) and is added to
-        /// the album only when the user has already granted full library access.
+        /// iOS (release 1): always false — the app uses add-only Photos access (spec §3.8, NSPhotoLibraryAddUsageDescription),
+        /// which cannot create or look up albums, so the video goes to the library (Recents). An iOS "Ballverse" album needs
+        /// full library access and its own permission prompt; that is an open owner decision.
         /// </summary>
         public bool AddedToAlbum { get; }
         public string ErrorMessage { get; }

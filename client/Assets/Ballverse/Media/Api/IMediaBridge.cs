@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,7 +15,10 @@ namespace Ballverse.Media
     /// to the main thread through the Unity synchronization context, so every returned task completes — and every
     /// <c>await</c> resumes — on the main thread. Progress callbacks are also invoked on the main thread.</para>
     /// <para><b>Cancellation.</b> Cancelling a token completes the task as cancelled immediately and asks the native side
-    /// to stop; partial files produced by the cancelled operation are deleted natively.</para>
+    /// to stop; partial output of the cancelled operation is deleted (natively, and by the C# side for its own
+    /// post-processing temp files such as <c>*.faststart.tmp</c> / <c>*.tmp</c>). A token that is already cancelled when
+    /// a method is called never starts the native operation. Exception: once the system accepted a gallery save it
+    /// cannot be undone.</para>
     /// <para><b>Errors.</b> Failures surface as <see cref="MediaException"/> with a <see cref="MediaErrorCode"/>; expected
     /// user outcomes (picker dismissed, gallery permission denied) are results, not exceptions.</para>
     /// <para><b>Native handles.</b> Readers and writers own native decoders/encoders: dispose them. A finalizer releases
@@ -72,6 +76,28 @@ namespace Ballverse.Media
         /// the writer. On failure or cancellation the partial file is deleted.
         /// </summary>
         Task<VideoWriterResult> FinalizeAsync(IVideoWriter writer, CancellationToken ct);
+
+        /// <summary>
+        /// Segmented export (spec §3.8, §7.5): joins finished video-only segment files without re-encoding and encodes
+        /// the PCM mix into ONE AAC-LC track (no priming clicks between segments), producing a single MP4 with
+        /// <c>moov</c> at the front and the given metadata. Android: MediaExtractor + MediaMuxer remux + MediaCodec AAC;
+        /// iOS: AVAssetReader passthrough → AVAssetWriter passthrough video + AAC input.
+        /// </summary>
+        /// <param name="segments">
+        /// <see cref="VideoWriterResult.Path"/> of each segment, in order. Each segment is one writer's output
+        /// (<see cref="VideoWriterOptions.AudioPcmPath"/> = null), starts with an IDR frame and has the same size, fps and
+        /// encoder settings as the others (checked: different codec configurations fail with
+        /// <see cref="MediaErrorCode.InvalidState"/>). Timing rule: <see cref="SegmentConcatOptions"/>. The segment files
+        /// are not deleted.
+        /// </param>
+        /// <param name="pcmPath">The mix in the <see cref="PcmFile"/> format, or null / empty file for a silent video. Audio past the video end is trimmed.</param>
+        /// <param name="outFile">Destination MP4 (replaced). Deleted again on failure or cancellation.</param>
+        /// <returns>Frame count (sum of the segments' frames) and duration (frames / fps).</returns>
+        /// <remarks>Spec §7.5 lists <c>Task&lt;string&gt; ConcatSegmentsAsync(segments, pcmPath, outFile, ct)</c>; this
+        /// version also takes the fps (for exact segment offsets), audio bitrate and metadata, and returns the frame count
+        /// for the §3.8 acceptance check. The fake backend joins PNG-sequence segment directories.</remarks>
+        Task<VideoWriterResult> ConcatSegmentsAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
+            SegmentConcatOptions options, CancellationToken ct);
 
         /// <summary>
         /// Saves a finished video to the device gallery: Android 10+ MediaStore <c>Movies/&lt;album&gt;</c> without

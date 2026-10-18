@@ -1,5 +1,6 @@
 #if UNITY_ANDROID
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Ballverse.Media.Internal;
@@ -39,19 +40,13 @@ namespace Ballverse.Media.Android
 
         Task<string> Start(string method, IProgress<double> progress, CancellationToken ct, params object[] args)
         {
-            long id = _ops.Begin(out Task<string> task, progress, ct, CancelNative);
-            try
+            return _ops.Run(progress, ct, id =>
             {
                 var full = new object[args.Length + 1];
                 full[0] = id;
                 Array.Copy(args, 0, full, 1, args.Length);
                 _bridge.CallStatic(method, full);
-            }
-            catch (Exception e)
-            {
-                _ops.Fail(id, new MediaException(MediaErrorCode.Unknown, "Java call " + method + " failed: " + e.Message, e));
-            }
-            return task;
+            }, CancelNative, e => new MediaException(MediaErrorCode.Unknown, "Java call " + method + " failed: " + e.Message, e));
         }
 
         void CancelNative(long id)
@@ -85,6 +80,15 @@ namespace Ballverse.Media.Android
         protected override VideoWriterBase CreateWriter(string outputPath, VideoWriterOptions options)
         {
             return new AndroidVideoWriter(outputPath, options, _ops);
+        }
+
+        protected override async Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
+            SegmentConcatOptions options, CancellationToken ct)
+        {
+            string json = await Start("concatSegments", null, ct, string.Join("\n", segments), pcmPath ?? string.Empty, outFile,
+                options.Fps, options.AudioBitrateBps);
+            NativeWriterDto dto = NativeJson.Parse<NativeWriterDto>(json);
+            return new WriterFinish(dto.frames, dto.durationUs);
         }
 
         protected override async Task<GallerySaveResult> SaveNativeAsync(string file, string album, CancellationToken ct)
@@ -289,15 +293,8 @@ namespace Ballverse.Media.Android
         protected override async Task<WriterFinish> FinishCore(CancellationToken ct)
         {
             AndroidJavaObject writer = _writer;
-            long id = _ops.Begin(out Task<string> task, null, ct, _ => writer.Call("cancel"));
-            try
-            {
-                writer.Call("finishAsync", id);
-            }
-            catch (Exception e)
-            {
-                _ops.Fail(id, new MediaException(MediaErrorCode.EncoderFailed, e.Message, e));
-            }
+            Task<string> task = _ops.Run(null, ct, id => writer.Call("finishAsync", id), _ => writer.Call("cancel"),
+                e => new MediaException(MediaErrorCode.EncoderFailed, e.Message, e));
             NativeWriterDto dto = NativeJson.Parse<NativeWriterDto>(await task);
             return new WriterFinish(dto.frames, dto.durationUs);
         }

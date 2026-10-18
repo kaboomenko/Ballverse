@@ -2,6 +2,9 @@
 // AVAssetReader + AVAssetReaderVideoCompositionOutput: the video composition applies preferredTransform (rotation),
 // scales into the requested box and — with SDR BT.709 colour properties — tone-maps HDR (HLG/PQ/Dolby Vision) to SDR.
 // Output BGRA pixel buffers are swizzled into the caller's RGBA32 buffer (top-down, tightly packed).
+// The reader's time range ends at the END OF THE VIDEO TRACK (not the asset): a composition renders black frames where
+// the track has no media (e.g. phone clips whose audio is slightly longer), and "after the last frame return the last
+// frame" must return the real last frame, as on Android.
 // Driven synchronously from one C# worker thread; not thread-safe.
 #import "BVMediaCommon.h"
 #import <Accelerate/Accelerate.h>
@@ -30,6 +33,7 @@ static const int64_t kSeekForwardThresholdUs = 3000000;
     int64_t _currentPts;
     int64_t _nextPts;
     BOOL _endOfStream;
+    CMTime _videoEnd;
 }
 
 - (instancetype)initWithPath:(NSString*)path maxWidth:(int)maxWidth maxHeight:(int)maxHeight toneMap:(BOOL)toneMap
@@ -44,7 +48,11 @@ static const int64_t kSeekForwardThresholdUs = 3000000;
     _track = [_asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
     if (_track == nil) { BVSetLastError(BV_ERR_NO_VIDEO_TRACK, @"no video track"); return nil; }
     CMTime duration = _asset.duration;
-    _durationUs = CMTIME_IS_NUMERIC(duration) ? (int64_t)llround(CMTimeGetSeconds(duration) * 1e6) : 0;
+    CMTimeRange trackRange = _track.timeRange;
+    _videoEnd = CMTIMERANGE_IS_VALID(trackRange) && CMTIME_IS_NUMERIC(trackRange.duration) && CMTimeGetSeconds(trackRange.duration) > 0
+        ? CMTimeRangeGetEnd(trackRange) : duration;
+    if (CMTIME_IS_NUMERIC(duration) && CMTimeCompare(_videoEnd, duration) > 0) _videoEnd = duration;
+    _durationUs = CMTIME_IS_NUMERIC(_videoEnd) ? (int64_t)llround(CMTimeGetSeconds(_videoEnd) * 1e6) : 0;
 
     CGSize natural = _track.naturalSize;
     CGAffineTransform t = _track.preferredTransform;
@@ -117,7 +125,11 @@ static const int64_t kSeekForwardThresholdUs = 3000000;
     NSError* error = nil;
     _reader = [[AVAssetReader alloc] initWithAsset:_asset error:&error];
     if (_reader == nil) { BVSetLastError(BV_ERR_DECODER_FAILED, error.localizedDescription); return NO; }
-    if (ptsUs > 0) _reader.timeRange = CMTimeRangeMake(CMTimeMake(ptsUs, 1000000), kCMTimePositiveInfinity);
+    // Start at ptsUs (clamped so the range never starts at or after the video end), stop at the video track's end.
+    if (_durationUs > 0 && ptsUs >= _durationUs) ptsUs = MAX((int64_t)0, _durationUs - 2000000);
+    CMTime start = ptsUs > 0 ? CMTimeMake(ptsUs, 1000000) : kCMTimeZero;
+    if (CMTIME_IS_NUMERIC(_videoEnd) && CMTimeCompare(_videoEnd, start) > 0) _reader.timeRange = CMTimeRangeFromTimeToTime(start, _videoEnd);
+    else if (ptsUs > 0) _reader.timeRange = CMTimeRangeMake(start, kCMTimePositiveInfinity);
     NSDictionary* settings = @{ (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA) };
     _output = [AVAssetReaderVideoCompositionOutput assetReaderVideoCompositionOutputWithVideoTracks:@[ _track ] videoSettings:settings];
     _output.videoComposition = _composition;

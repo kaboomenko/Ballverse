@@ -1,5 +1,6 @@
 // Ballverse MediaBridge (iOS): callbacks, cancellation registry, errors, share sheet, device signals.
 #import "BVMediaCommon.h"
+#import <AVFoundation/AVFoundation.h>
 
 #include <cmath>
 #include <string>
@@ -107,6 +108,28 @@ int64_t BVFreeSpaceBytes(void)
     NSDictionary* attrs = [[NSFileManager defaultManager] attributesOfFileSystemForPath:NSHomeDirectory() error:nil];
     NSNumber* free = attrs[NSFileSystemFreeSize];
     return free != nil ? free.longLongValue : -1;
+}
+
+NSArray<AVMetadataItem*>* BVMetadataItems(NSString* title, NSString* creationIso8601)
+{
+    NSMutableArray<AVMetadataItem*>* items = [NSMutableArray array];
+    if (title.length > 0)
+    {
+        AVMutableMetadataItem* item = [AVMutableMetadataItem metadataItem];
+        item.keySpace = AVMetadataKeySpaceCommon;
+        item.key = AVMetadataCommonKeyTitle;
+        item.value = title;
+        [items addObject:item];
+    }
+    if (creationIso8601.length > 0)
+    {
+        AVMutableMetadataItem* item = [AVMutableMetadataItem metadataItem];
+        item.keySpace = AVMetadataKeySpaceCommon;
+        item.key = AVMetadataCommonKeyCreationDate;
+        item.value = creationIso8601;
+        [items addObject:item];
+    }
+    return items;
 }
 
 void BVComputeOutputSize(int displayWidth, int displayHeight, int maxWidth, int maxHeight, int* outWidth, int* outHeight)

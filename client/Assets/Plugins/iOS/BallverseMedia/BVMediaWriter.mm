@@ -1,7 +1,7 @@
 // Ballverse MediaBridge (iOS): H.264 + AAC MP4 writer (spec §3.8).
 // AVAssetWriter (MPEG-4, shouldOptimizeForNetworkUse = moov first) with an AVAssetWriterInputPixelBufferAdaptor
 // (BGRA, IOSurface-backed pool) for H.264 High (auto level; Baseline fallback when High is rejected) and an AAC-LC
-// 48 kHz stereo input fed from a raw f32le PCM file.
+// 48 kHz stereo input fed from a raw f32le PCM file. Optional title/date metadata (spec §3.8; never location).
 //
 // Threading: BVWriter_Append runs on the caller (Unity main) thread: it waits for one of 3 in-flight slots, copies the
 // RGBA frame into a pooled CVPixelBuffer (vImage RGBA→BGRA swizzle) and hands it to a private serial queue that
@@ -60,6 +60,7 @@ static const int64_t kStallLimitUs = 10000000;
 
 - (instancetype)initWithPath:(NSString*)path width:(int)width height:(int)height fps:(int)fps bitrate:(int)bitrate
                     keyframe:(int)keyframeSeconds audioPath:(NSString*)audioPath audioBitrate:(int)audioBitrate
+                       title:(NSString*)title creationDate:(NSString*)creationDate
 {
     if ((self = [super init]) == nil) return nil;
     _path = [path copy];
@@ -81,6 +82,7 @@ static const int64_t kStallLimitUs = 10000000;
     _writer = [[AVAssetWriter alloc] initWithURL:[NSURL fileURLWithPath:path] fileType:AVFileTypeMPEG4 error:&error];
     if (_writer == nil) { BVSetLastError(BV_ERR_IO, error.localizedDescription); return nil; }
     _writer.shouldOptimizeForNetworkUse = YES;
+    _writer.metadata = BVMetadataItems(title, creationDate);
 
     NSDictionary* color = @{
         AVVideoColorPrimariesKey : AVVideoColorPrimaries_ITU_R_709_2,
@@ -413,12 +415,13 @@ static const int64_t kStallLimitUs = 10000000;
 extern "C" {
 
 void* BVWriter_Open(const char* path, int32_t width, int32_t height, int32_t fps, int32_t bitrate, int32_t keyframeIntervalSeconds,
-                    const char* audioPcmPath, int32_t audioBitrate)
+                    const char* audioPcmPath, int32_t audioBitrate, const char* title, const char* creationIso8601)
 {
     @autoreleasepool
     {
         BVVideoWriter* writer = [[BVVideoWriter alloc] initWithPath:BVString(path) width:width height:height fps:fps bitrate:bitrate
-                                                           keyframe:keyframeIntervalSeconds audioPath:BVString(audioPcmPath) audioBitrate:audioBitrate];
+                                                           keyframe:keyframeIntervalSeconds audioPath:BVString(audioPcmPath) audioBitrate:audioBitrate
+                                                              title:BVString(title) creationDate:BVString(creationIso8601)];
         if (writer == nil)
         {
             [[NSFileManager defaultManager] removeItemAtPath:BVString(path) error:nil];

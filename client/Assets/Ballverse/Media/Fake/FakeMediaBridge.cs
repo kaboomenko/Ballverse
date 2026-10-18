@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Threading;
@@ -141,9 +142,32 @@ namespace Ballverse.Media.Fake
             return ((FakeVideoWriter)writer).FramesDirectory;
         }
 
-        protected override bool FinishFile(string path, CancellationToken ct)
+        protected override string ConcatResultPath(string outFile)
         {
-            return false; // no MP4 container
+            return outFile + FakeVideoWriter.FramesSuffix;
+        }
+
+        protected override void RequireSegment(string path)
+        {
+            if (!File.Exists(Path.Combine(path, FakeVideoWriter.ManifestName)))
+                throw new MediaException(MediaErrorCode.FileNotFound, "fake segment (frame directory with manifest.json) not found: " + path);
+        }
+
+        protected override void DeleteOutput(string path)
+        {
+            FakeVideoWriter.DeleteDirectory(path);
+        }
+
+        protected override bool FinishFile(string path, Mp4Metadata metadata, CancellationToken ct)
+        {
+            return false; // no MP4 container; the manifest carries the metadata
+        }
+
+        protected override Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
+            SegmentConcatOptions options, CancellationToken ct)
+        {
+            string outDir = ConcatResultPath(outFile);
+            return Task.Run(() => FakeVideoWriter.Concat(segments, pcmPath, outDir, options, ct), ct);
         }
 
         protected override Task<GallerySaveResult> SaveNativeAsync(string file, string album, CancellationToken ct)
@@ -287,7 +311,14 @@ namespace Ballverse.Media.Fake
             public long durationUs;
             public int pngFrameStride;
             public bool hasAudio;
+            public int segments;
+            public string title;
+            public string creationTime;
         }
+
+        public const string FramesSuffix = ".frames";
+        public const string ManifestName = "manifest.json";
+        const string AudioName = "audio.wav";
 
         readonly int _stride;
         readonly SemaphoreSlim _slots = new SemaphoreSlim(3, 3);
@@ -301,7 +332,7 @@ namespace Ballverse.Media.Fake
         public FakeVideoWriter(string outputPath, VideoWriterOptions options, int stride) : base(outputPath, options)
         {
             _stride = stride;
-            FramesDirectory = outputPath + ".frames";
+            FramesDirectory = outputPath + FramesSuffix;
             if (Directory.Exists(FramesDirectory)) Directory.Delete(FramesDirectory, true);
             Directory.CreateDirectory(FramesDirectory);
             _worker = Task.Run(WorkerLoop);
@@ -319,7 +350,7 @@ namespace Ballverse.Media.Fake
                 {
                     if (_workerError == null && item.index % _stride == 0)
                     {
-                        string file = Path.Combine(FramesDirectory, "frame_" + item.index.ToString("D6", CultureInfo.InvariantCulture) + ".png");
+                        string file = Path.Combine(FramesDirectory, FrameFileName(item.index));
                         PngWriter.WriteRgba(file, item.data, Options.Width, Options.Height);
                     }
                 }
@@ -376,18 +407,84 @@ namespace Ballverse.Media.Fake
             long durationUs = _lastPts + Options.FrameDurationUs;
             int frames = _frames;
             string audio = Options.AudioPcmPath;
+            Mp4Metadata metadata = Options.Metadata;
             await Task.Run(() =>
             {
                 bool hasAudio = audio != null && PcmFile.CountFrames(audio) > 0;
-                if (hasAudio) WavWriter.FromPcmFile(audio, Path.Combine(FramesDirectory, "audio.wav"), durationUs * PcmFile.SampleRate / 1000000);
+                if (hasAudio) WavWriter.FromPcmFile(audio, Path.Combine(FramesDirectory, AudioName), durationUs * PcmFile.SampleRate / 1000000);
                 var manifest = new Manifest
                 {
                     width = Options.Width, height = Options.Height, fps = Options.Fps, frames = frames, durationUs = durationUs,
-                    pngFrameStride = _stride, hasAudio = hasAudio,
+                    pngFrameStride = _stride, hasAudio = hasAudio, segments = 1,
+                    title = metadata?.Title ?? string.Empty, creationTime = metadata?.CreationTimeIso8601 ?? string.Empty,
                 };
-                File.WriteAllText(Path.Combine(FramesDirectory, "manifest.json"), JsonUtility.ToJson(manifest, true));
+                File.WriteAllText(Path.Combine(FramesDirectory, ManifestName), JsonUtility.ToJson(manifest, true));
             }, ct);
             return new WriterFinish(frames, durationUs);
+        }
+
+        static string FrameFileName(int index)
+        {
+            return "frame_" + index.ToString("D6", CultureInfo.InvariantCulture) + ".png";
+        }
+
+        internal static void DeleteDirectory(string dir)
+        {
+            try
+            {
+                if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Media] could not delete " + dir + ": " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// Fake <see cref="IMediaBridge.ConcatSegmentsAsync"/>: renumbers the segments' PNG frames into one directory,
+        /// writes the PCM mix (trimmed to the video) as audio.wav and a manifest. Worker thread.
+        /// </summary>
+        internal static WriterFinish Concat(IReadOnlyList<string> segments, string pcmPath, string outDir, SegmentConcatOptions options,
+            CancellationToken ct)
+        {
+            Directory.CreateDirectory(outDir);
+            int total = 0;
+            int width = 0, height = 0, stride = 1;
+            for (int s = 0; s < segments.Count; s++)
+            {
+                ct.ThrowIfCancellationRequested();
+                Manifest m = JsonUtility.FromJson<Manifest>(File.ReadAllText(Path.Combine(segments[s], ManifestName)));
+                if (m == null || m.frames <= 0) throw new MediaException(MediaErrorCode.Corrupt, "bad fake segment manifest: " + segments[s]);
+                if (m.fps != options.Fps) throw new MediaException(MediaErrorCode.InvalidState, "segment " + s + " has " + m.fps + " fps, expected " + options.Fps);
+                if (s == 0)
+                {
+                    width = m.width;
+                    height = m.height;
+                    stride = m.pngFrameStride;
+                }
+                else if (m.width != width || m.height != height)
+                {
+                    throw new MediaException(MediaErrorCode.InvalidState, "segment " + s + " is " + m.width + "x" + m.height + ", expected " + width + "x" + height);
+                }
+                for (int i = 0; i < m.frames; i++)
+                {
+                    string src = Path.Combine(segments[s], FrameFileName(i));
+                    if (File.Exists(src)) File.Copy(src, Path.Combine(outDir, FrameFileName(total + i)), true);
+                }
+                total += m.frames;
+            }
+            long durationUs = options.SegmentStartUs(total);
+            bool hasAudio = PcmFile.CountFrames(pcmPath) > 0;
+            if (hasAudio) WavWriter.FromPcmFile(pcmPath, Path.Combine(outDir, AudioName), durationUs * PcmFile.SampleRate / 1000000);
+            ct.ThrowIfCancellationRequested();
+            var manifest = new Manifest
+            {
+                width = width, height = height, fps = options.Fps, frames = total, durationUs = durationUs, pngFrameStride = stride,
+                hasAudio = hasAudio, segments = segments.Count,
+                title = options.Metadata?.Title ?? string.Empty, creationTime = options.Metadata?.CreationTimeIso8601 ?? string.Empty,
+            };
+            File.WriteAllText(Path.Combine(outDir, ManifestName), JsonUtility.ToJson(manifest, true));
+            return new WriterFinish(total, durationUs);
         }
 
         protected override void ReleaseCore()

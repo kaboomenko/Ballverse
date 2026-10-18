@@ -19,53 +19,60 @@ namespace Ballverse.Media
             if (inputRate <= 0) throw new ArgumentOutOfRangeException(nameof(inputRate));
             if (inputChannels <= 0) throw new ArgumentOutOfRangeException(nameof(inputChannels));
             PcmFile.EnsureLittleEndian();
-            string tmp = outputPath + ".tmp";
+            string tmp = outputPath + PcmFile.TempSuffix;
             long written = 0;
-            using (var input = new FileStream(inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16))
-            using (var output = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+            try
             {
-                var inBytes = new byte[ChunkFrames * inputChannels * sizeof(float)];
-                var inSamples = new float[ChunkFrames * inputChannels];
-                var stereo = new float[ChunkFrames * 2];
-                var resampler = inputRate == PcmFile.SampleRate ? null : new SincResampler(inputRate, PcmFile.SampleRate, 2);
-                var outBytes = new byte[0];
-                int frameBytes = inputChannels * sizeof(float);
-                while (true)
+                using (var input = new FileStream(inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16))
+                using (var output = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
                 {
-                    ct.ThrowIfCancellationRequested();
-                    int got = PcmFile.ReadFully(input, inBytes, inBytes.Length);
-                    int frames = got / frameBytes;
-                    if (frames > 0)
+                    var inBytes = new byte[ChunkFrames * inputChannels * sizeof(float)];
+                    var inSamples = new float[ChunkFrames * inputChannels];
+                    var stereo = new float[ChunkFrames * 2];
+                    var resampler = inputRate == PcmFile.SampleRate ? null : new SincResampler(inputRate, PcmFile.SampleRate, 2);
+                    var outBytes = new byte[0];
+                    int frameBytes = inputChannels * sizeof(float);
+                    while (true)
                     {
-                        Buffer.BlockCopy(inBytes, 0, inSamples, 0, frames * frameBytes);
-                        Downmix(inSamples, inputChannels, frames, stereo);
+                        ct.ThrowIfCancellationRequested();
+                        int got = PcmFile.ReadFully(input, inBytes, inBytes.Length);
+                        int frames = got / frameBytes;
+                        if (frames > 0)
+                        {
+                            Buffer.BlockCopy(inBytes, 0, inSamples, 0, frames * frameBytes);
+                            Downmix(inSamples, inputChannels, frames, stereo);
+                        }
+                        bool eof = got < inBytes.Length;
+                        float[] outSamples;
+                        int outCount;
+                        if (resampler == null)
+                        {
+                            outSamples = stereo;
+                            outCount = frames * 2;
+                        }
+                        else
+                        {
+                            resampler.Push(stereo, frames);
+                            if (eof) resampler.EndOfInput();
+                            outCount = resampler.Drain(out outSamples);
+                        }
+                        if (outCount > 0)
+                        {
+                            if (outBytes.Length < outCount * sizeof(float)) outBytes = new byte[outCount * sizeof(float)];
+                            Buffer.BlockCopy(outSamples, 0, outBytes, 0, outCount * sizeof(float));
+                            output.Write(outBytes, 0, outCount * sizeof(float));
+                            written += outCount / 2;
+                        }
+                        if (eof) break;
                     }
-                    bool eof = got < inBytes.Length;
-                    float[] outSamples;
-                    int outCount;
-                    if (resampler == null)
-                    {
-                        outSamples = stereo;
-                        outCount = frames * 2;
-                    }
-                    else
-                    {
-                        resampler.Push(stereo, frames);
-                        if (eof) resampler.EndOfInput();
-                        outCount = resampler.Drain(out outSamples);
-                    }
-                    if (outCount > 0)
-                    {
-                        if (outBytes.Length < outCount * sizeof(float)) outBytes = new byte[outCount * sizeof(float)];
-                        Buffer.BlockCopy(outSamples, 0, outBytes, 0, outCount * sizeof(float));
-                        output.Write(outBytes, 0, outCount * sizeof(float));
-                        written += outCount / 2;
-                    }
-                    if (eof) break;
                 }
+                PcmFile.ReplaceWith(tmp, outputPath);
             }
-            if (File.Exists(outputPath)) File.Delete(outputPath);
-            File.Move(tmp, outputPath);
+            catch
+            {
+                PcmFile.DeleteQuietly(tmp);
+                throw;
+            }
             return written;
         }
 

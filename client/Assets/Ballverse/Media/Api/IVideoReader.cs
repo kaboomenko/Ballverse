@@ -17,8 +17,11 @@ namespace Ballverse.Media
     /// thread; <see cref="TryReadFrameAt"/> never blocks.</para>
     /// <para><b>Memory.</b> Frames live in a pool of <see cref="MaxFramesInFlight"/> (3) native buffers per reader.
     /// A returned <see cref="VideoFrame"/> holds one buffer until it is disposed: dispose every frame as soon as its data
-    /// is uploaded/copied, otherwise the worker stalls once all 3 buffers are held. Ready frames for times earlier than
-    /// a newer request are dropped automatically (forward reading), and a backward request drops all prefetched frames.</para>
+    /// is uploaded/copied, otherwise the worker stalls once all 3 buffers are held. While the caller holds at most
+    /// <see cref="MaxFramesInFlight"/> − 1 frames every read completes: prefetched frames never take the last free buffer
+    /// from a requested time (they are dropped and decoded again later). Ready frames for times earlier than a newer
+    /// request are dropped automatically (forward reading), and a backward request drops all prefetched frames. Frame
+    /// pixels are read-only (the reader reuses a converted buffer for repeated source frames).</para>
     /// </remarks>
     public interface IVideoReader : IDisposable
     {

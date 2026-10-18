@@ -31,6 +31,9 @@ import java.util.concurrent.TimeUnit;
  *
  * Frame selection: readFrame(t) yields the last frame with pts <= t (first frame if t precedes it). Forward reads
  * decode on; backward jumps or jumps > 3 s seek to the previous sync frame.
+ * Repeated frames (e.g. a 30 fps source read at 60 fps for export) are converted from YUV only once: the reader
+ * remembers which source frame each output buffer holds and copies an already converted buffer instead (C# treats
+ * frame buffers as read-only).
  * HDR: on API 33+ the decoder is asked for SDR output (KEY_COLOR_TRANSFER_REQUEST); if it declines, 10-bit P010 frames
  * are tone-mapped by YuvConverter.
  */
@@ -56,6 +59,9 @@ public final class VideoReader {
     private final Semaphore mImageAvailable = new Semaphore(0);
     private YuvConverter mConverter;
     private final List<ByteBuffer> mBuffers = new ArrayList<>();
+    /** pts of the frame whose RGBA is in mBuffers[i] (Long.MIN_VALUE = none); only this class writes the buffers. */
+    private final List<Long> mBufferPts = new ArrayList<>();
+    private int mConversions;
 
     private int mRotation;
     private int mWidth;
@@ -133,6 +139,7 @@ public final class VideoReader {
     public int allocateFrameBuffer() {
         ByteBuffer b = ByteBuffer.allocateDirect(mWidth * mHeight * 4).order(ByteOrder.LITTLE_ENDIAN);
         mBuffers.add(b);
+        mBufferPts.add(Long.MIN_VALUE);
         return mBuffers.size() - 1;
     }
 
@@ -144,7 +151,7 @@ public final class VideoReader {
     public long readFrame(long ptsUs, int bufferIndex) {
         try {
             Frame f = seekAndDecode(ptsUs);
-            convert(f.image, mBuffers.get(bufferIndex));
+            fill(f, bufferIndex);
             return f.ptsUs;
         } catch (MediaError e) {
             mLastError = e.toNative();
@@ -155,9 +162,38 @@ public final class VideoReader {
         return Long.MIN_VALUE;
     }
 
+    /** YUV→RGBA conversions done so far (diagnostics: repeated frames are copied, not converted). */
+    public int conversionCount() {
+        return mConversions;
+    }
+
     public void close() {
         releaseAll();
         mBuffers.clear();
+        mBufferPts.clear();
+    }
+
+    /**
+     * Puts frame f into buffer #index: nothing to do if the buffer already holds it, a memcpy if another buffer holds
+     * it, otherwise the YUV conversion.
+     */
+    private void fill(Frame f, int index) throws MediaError {
+        if (mBufferPts.get(index) == f.ptsUs) return;
+        ByteBuffer dst = mBuffers.get(index);
+        mBufferPts.set(index, Long.MIN_VALUE); // invalid while being written
+        for (int i = 0; i < mBuffers.size(); i++) {
+            if (i == index || mBufferPts.get(i) != f.ptsUs) continue;
+            ByteBuffer src = mBuffers.get(i).duplicate();
+            src.clear();
+            dst.clear();
+            dst.put(src);
+            dst.clear();
+            mBufferPts.set(index, f.ptsUs);
+            return;
+        }
+        convert(f.image, dst);
+        mConversions++;
+        mBufferPts.set(index, f.ptsUs);
     }
 
     // ------------------------------------------------------------------ open

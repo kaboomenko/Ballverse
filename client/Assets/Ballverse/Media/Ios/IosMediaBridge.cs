@@ -1,5 +1,6 @@
 #if UNITY_IOS
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using AOT;
@@ -35,6 +36,10 @@ namespace Ballverse.Media.Ios
 
         public override MediaBackend Backend => MediaBackend.Ios;
 
+        // AVAssetWriter stores the title/date itself (writer and concatenation); the C# post-processing only verifies
+        // that moov is at the front.
+        protected override bool WritesMetadataNatively => true;
+
         [MonoPInvokeCallback(typeof(IosNative.ResultCallback))]
         static void OnResult(long requestId, int status, IntPtr utf8Json)
         {
@@ -58,16 +63,8 @@ namespace Ballverse.Media.Ios
 
         static Task<string> Start(IProgress<double> progress, CancellationToken ct, Action<long> start)
         {
-            long id = s_ops.Begin(out Task<string> task, progress, ct, IosNative.BVMedia_Cancel);
-            try
-            {
-                start(id);
-            }
-            catch (Exception e)
-            {
-                s_ops.Fail(id, new MediaException(MediaErrorCode.Unknown, "native call failed: " + e.Message, e));
-            }
-            return task;
+            return s_ops.Run(progress, ct, start, IosNative.BVMedia_Cancel,
+                e => new MediaException(MediaErrorCode.Unknown, "native call failed: " + e.Message, e));
         }
 
         protected override async Task<string> PickNativeAsync(string destinationDirectory, string baseName, IProgress<double> progress, CancellationToken ct)
@@ -96,6 +93,17 @@ namespace Ballverse.Media.Ios
         protected override VideoWriterBase CreateWriter(string outputPath, VideoWriterOptions options)
         {
             return new IosVideoWriter(outputPath, options);
+        }
+
+        protected override async Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
+            SegmentConcatOptions options, CancellationToken ct)
+        {
+            string joined = string.Join("\n", segments);
+            Mp4Metadata m = options.Metadata;
+            string json = await Start(null, ct, id => IosNative.BVMedia_ConcatSegments(id, joined, pcmPath ?? string.Empty, outFile,
+                options.Fps, options.AudioBitrateBps, m?.Title ?? string.Empty, m?.CreationTimeIso8601 ?? string.Empty));
+            NativeWriterDto dto = NativeJson.Parse<NativeWriterDto>(json);
+            return new WriterFinish(dto.frames, dto.durationUs);
         }
 
         protected override async Task<GallerySaveResult> SaveNativeAsync(string file, string album, CancellationToken ct)
@@ -187,7 +195,8 @@ namespace Ballverse.Media.Ios
             public IosVideoWriter(string outputPath, VideoWriterOptions o) : base(outputPath, o)
             {
                 _handle = IosNative.BVWriter_Open(outputPath, o.Width, o.Height, o.Fps, o.VideoBitrateBps, o.KeyframeIntervalSeconds,
-                    o.AudioPcmPath ?? string.Empty, o.AudioBitrateBps);
+                    o.AudioPcmPath ?? string.Empty, o.AudioBitrateBps, o.Metadata?.Title ?? string.Empty,
+                    o.Metadata?.CreationTimeIso8601 ?? string.Empty);
                 if (_handle == IntPtr.Zero)
                 {
                     GC.SuppressFinalize(this);

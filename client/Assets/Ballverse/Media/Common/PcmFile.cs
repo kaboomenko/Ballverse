@@ -13,6 +13,8 @@ namespace Ballverse.Media
         public const int SampleRate = 48000;
         public const int Channels = 2;
         public const int BytesPerFrame = Channels * sizeof(float);
+        /// <summary>Suffix of the temp file used for atomic writes (deleted on any failure).</summary>
+        public const string TempSuffix = ".tmp";
 
         /// <summary>Frames in an existing PCM file (0 if it does not exist).</summary>
         public static long CountFrames(string path)
@@ -38,20 +40,51 @@ namespace Ballverse.Media
             if (offset < 0 || count < 0 || offset + count > samples.Length) throw new ArgumentOutOfRangeException(nameof(count));
             if (count % Channels != 0) throw new ArgumentException("count must be a multiple of 2 (stereo)", nameof(count));
             EnsureLittleEndian();
-            string tmp = path + ".tmp";
-            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+            string tmp = path + TempSuffix;
+            try
             {
-                var bytes = new byte[1 << 16];
-                int floatsPerChunk = bytes.Length / sizeof(float);
-                for (int i = 0; i < count; i += floatsPerChunk)
+                using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
                 {
-                    int n = Math.Min(floatsPerChunk, count - i);
-                    Buffer.BlockCopy(samples, (offset + i) * sizeof(float), bytes, 0, n * sizeof(float));
-                    fs.Write(bytes, 0, n * sizeof(float));
+                    var bytes = new byte[1 << 16];
+                    int floatsPerChunk = bytes.Length / sizeof(float);
+                    for (int i = 0; i < count; i += floatsPerChunk)
+                    {
+                        int n = Math.Min(floatsPerChunk, count - i);
+                        Buffer.BlockCopy(samples, (offset + i) * sizeof(float), bytes, 0, n * sizeof(float));
+                        fs.Write(bytes, 0, n * sizeof(float));
+                    }
                 }
+                ReplaceWith(tmp, path);
             }
+            catch
+            {
+                DeleteQuietly(tmp);
+                throw;
+            }
+        }
+
+        /// <summary>Replaces <paramref name="path"/> with <paramref name="tmp"/> (delete + rename).</summary>
+        internal static void ReplaceWith(string tmp, string path)
+        {
             if (File.Exists(path)) File.Delete(path);
             File.Move(tmp, path);
+        }
+
+        /// <summary>Best-effort delete used by cleanup paths; never throws.</summary>
+        internal static void DeleteQuietly(string path)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(path) && File.Exists(path)) File.Delete(path);
+            }
+            catch (IOException)
+            {
+                // best effort: the original exception matters more
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // best effort
+            }
         }
 
         /// <summary>Reads a whole PCM file into memory.</summary>

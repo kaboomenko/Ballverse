@@ -79,6 +79,39 @@ namespace Ballverse.Media.Internal
             s_context.Post(RunPosted, action);
         }
 
+        /// <summary>
+        /// Tests only: treats the calling thread as the main thread with <paramref name="context"/> as its dispatcher until
+        /// the returned scope is disposed (restores the previous state). Lets tests pump posted callbacks themselves.
+        /// </summary>
+        internal static IDisposable OverrideForTests(SynchronizationContext context)
+        {
+            var scope = new Scope(s_context, s_threadId);
+            s_context = context;
+            s_threadId = Thread.CurrentThread.ManagedThreadId;
+            return scope;
+        }
+
+        sealed class Scope : IDisposable
+        {
+            readonly SynchronizationContext _context;
+            readonly int _threadId;
+            bool _disposed;
+
+            public Scope(SynchronizationContext context, int threadId)
+            {
+                _context = context;
+                _threadId = threadId;
+            }
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                s_context = _context;
+                s_threadId = _threadId;
+            }
+        }
+
         static void RunPosted(object state)
         {
             try

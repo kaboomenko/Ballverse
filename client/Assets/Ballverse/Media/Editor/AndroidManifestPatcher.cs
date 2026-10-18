@@ -17,6 +17,9 @@ namespace Ballverse.Media.Editor
     /// <item>the ModuleDependencies service that asks Google Play services to install the Photo Picker backport.</item>
     /// </list>
     /// The patch is idempotent (entries are matched by android:name).
+    /// It also appends R8/ProGuard keep rules for the plugin classes to unityLibrary's <c>proguard-unity.txt</c> (a
+    /// consumer rules file of the library): C# reaches <c>com.ballverse.media.*</c> only by name through JNI and
+    /// AndroidJavaProxy, so a minified release build would otherwise strip or rename them.
     /// </summary>
     public sealed class AndroidManifestPatcher : IPostGenerateGradleAndroidProject
     {
@@ -34,6 +37,29 @@ namespace Ballverse.Media.Editor
                 return;
             }
             Patch(manifest);
+            AddKeepRules(Path.Combine(path, "proguard-unity.txt"));
+        }
+
+        internal const string KeepRulesMarker = "# Ballverse.Media keep rules";
+
+        /// <summary>The keep rules appended to the library's consumer ProGuard file.</summary>
+        internal const string KeepRules =
+            KeepRulesMarker + "\n" +
+            "# Classes and members used by C# through JNI (AndroidJavaClass/AndroidJavaObject) and AndroidJavaProxy.\n" +
+            "-keep class com.ballverse.media.** { *; }\n" +
+            "-keep interface com.ballverse.media.** { *; }\n";
+
+        /// <summary>Appends <see cref="KeepRules"/> once (idempotent).</summary>
+        public static void AddKeepRules(string proguardFile)
+        {
+            if (!File.Exists(proguardFile))
+            {
+                Debug.LogWarning("[Media] " + proguardFile + " not found; if minification is enabled add: " + KeepRules);
+                return;
+            }
+            string text = File.ReadAllText(proguardFile);
+            if (text.Contains(KeepRulesMarker)) return;
+            File.AppendAllText(proguardFile, (text.Length > 0 && !text.EndsWith("\n") ? "\n" : string.Empty) + KeepRules);
         }
 
         /// <summary>Patches a manifest file in place.</summary>

@@ -290,15 +290,13 @@ static NSMutableSet* gLegacySaveTargets = nil;
 }
 @end
 
-static void BVSaveWithPhotoKit(int64_t requestId, NSURL* url, NSString* albumTitle, BOOL addToAlbum)
+// Add-only save (spec §3.8: NSPhotoLibraryAddUsageDescription only). Add-only access cannot look up or create albums, so
+// the video lands in the library (Recents) and addedToAlbum is NO on iOS (album pending an owner decision, see C#
+// GallerySaveResult.AddedToAlbum). A cancel that arrives before performChanges starts prevents the save; once the
+// system accepted the change it cannot be undone.
+static void BVSaveWithPhotoKit(int64_t requestId, NSURL* url, std::shared_ptr<std::atomic<bool>> cancelled)
 {
-    PHAssetCollection* existing = nil;
-    if (addToAlbum)
-    {
-        PHFetchOptions* options = [PHFetchOptions new];
-        options.predicate = [NSPredicate predicateWithFormat:@"localizedTitle = %@", albumTitle];
-        existing = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum subtype:PHAssetCollectionSubtypeAny options:options].firstObject;
-    }
+    if (cancelled->load()) { BVCancelled(requestId); return; }
     __block NSString* localId = @"";
     [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
         PHAssetCreationRequest* request = [PHAssetCreationRequest creationRequestForAsset];
@@ -307,17 +305,12 @@ static void BVSaveWithPhotoKit(int64_t requestId, NSURL* url, NSString* albumTit
         [request addResourceWithType:PHAssetResourceTypeVideo fileURL:url options:resourceOptions];
         PHObjectPlaceholder* placeholder = request.placeholderForCreatedAsset;
         if (placeholder.localIdentifier != nil) localId = placeholder.localIdentifier;
-        if (addToAlbum && placeholder != nil)
-        {
-            PHAssetCollectionChangeRequest* album = existing != nil
-                ? [PHAssetCollectionChangeRequest changeRequestForAssetCollection:existing]
-                : [PHAssetCollectionChangeRequest creationRequestForAssetCollectionWithTitle:albumTitle];
-            [album addAssets:@[ placeholder ]];
-        }
     }
         completionHandler:^(BOOL success, NSError* error) {
             if (success)
-                BVSucceed(requestId, @{ @"status" : @"saved", @"location" : localId, @"addedToAlbum" : @(addToAlbum), @"message" : @"" });
+                BVSucceed(requestId, @{ @"status" : @"saved", @"location" : localId, @"addedToAlbum" : @NO, @"message" : @"" });
+            else if (cancelled->load())
+                BVCancelled(requestId);
             else
                 BVSucceed(requestId, @{ @"status" : @"failed", @"location" : @"", @"addedToAlbum" : @NO, @"message" : error.localizedDescription ?: @"save failed" });
         }];
@@ -326,26 +319,28 @@ static void BVSaveWithPhotoKit(int64_t requestId, NSURL* url, NSString* albumTit
 extern "C" void BVMedia_SaveToGallery(int64_t requestId, const char* path, const char* album)
 {
     NSString* file = BVString(path);
-    NSString* albumTitle = BVString(album);
+    (void)album; // iOS release 1: add-only access, no album (see BVSaveWithPhotoKit)
     NSURL* url = [NSURL fileURLWithPath:file];
+    // Registered before anything asynchronous starts: C# issues BVMedia_Cancel only after this call returned.
+    auto cancelled = std::make_shared<std::atomic<bool>>(false);
+    BVRegisterCancel(requestId, ^{ cancelled->store(true); });
     if (@available(iOS 14, *))
     {
-        // Add-only access (NSPhotoLibraryAddUsageDescription). Albums need read access, so the video joins the album
-        // only if the user already granted full access to the app; otherwise it lands in Recents.
         [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelAddOnly handler:^(PHAuthorizationStatus status) {
+            if (cancelled->load()) { BVCancelled(requestId); return; }
             if (status != PHAuthorizationStatusAuthorized && status != PHAuthorizationStatusLimited)
             {
                 BVSucceed(requestId, @{ @"status" : @"permission_denied", @"location" : @"", @"addedToAlbum" : @NO, @"message" : @"photo library access denied" });
                 return;
             }
-            BOOL full = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite] == PHAuthorizationStatusAuthorized;
-            BVSaveWithPhotoKit(requestId, url, albumTitle, full && albumTitle.length > 0);
+            BVSaveWithPhotoKit(requestId, url, cancelled);
         }];
     }
     else
     {
         // iOS 13: UISaveVideoAtPathToSavedPhotosAlbum needs only the add-usage description.
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (cancelled->load()) { BVCancelled(requestId); return; }
             if (!UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(file))
             {
                 BVSucceed(requestId, @{ @"status" : @"failed", @"location" : @"", @"addedToAlbum" : @NO, @"message" : @"video not compatible with the photo library" });

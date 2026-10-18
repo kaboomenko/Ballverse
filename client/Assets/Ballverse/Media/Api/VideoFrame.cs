@@ -38,7 +38,10 @@ namespace Ballverse.Media
 
         public bool IsDisposed => Volatile.Read(ref _memory) == null;
 
-        /// <summary>Pixel bytes (RGBA32, length Width × Height × 4). Main thread only; valid until <see cref="Dispose"/>.</summary>
+        /// <summary>
+    /// Pixel bytes (RGBA32, length Width × Height × 4). Main thread only; valid until <see cref="Dispose"/>.
+    /// Read-only: do not write into it (the Android reader copies an already converted buffer for repeated source frames).
+    /// </summary>
         public NativeArray<byte> Data
         {
             get

@@ -38,6 +38,8 @@ namespace Ballverse.Media.Ios
         [DllImport(Lib)] internal static extern void BVMedia_Probe(long requestId, string path);
         [DllImport(Lib)] internal static extern void BVMedia_DecodeAudio(long requestId, string path, string outputPath, long startUs, long durationUs);
         [DllImport(Lib)] internal static extern void BVMedia_SaveToGallery(long requestId, string path, string album);
+        [DllImport(Lib)] internal static extern void BVMedia_ConcatSegments(long requestId, string segmentsNewlineSeparated, string pcmPath,
+            string outputPath, int fps, int audioBitrate, string title, string creationIso8601);
         [DllImport(Lib)] internal static extern void BVMedia_Share(string path, string caption);
         [DllImport(Lib)] internal static extern void BVMedia_GetSignals(out Signals signals);
         [DllImport(Lib)] internal static extern int BVMedia_CopyLastError(byte[] buffer, int capacity);
@@ -48,7 +50,7 @@ namespace Ballverse.Media.Ios
         [DllImport(Lib)] internal static extern void BVReader_Close(IntPtr reader);
 
         [DllImport(Lib)] internal static extern IntPtr BVWriter_Open(string path, int width, int height, int fps, int bitrate,
-            int keyframeIntervalSeconds, string audioPcmPath, int audioBitrate);
+            int keyframeIntervalSeconds, string audioPcmPath, int audioBitrate, string title, string creationIso8601);
         [DllImport(Lib)] internal static extern int BVWriter_Append(IntPtr writer, IntPtr rgba, int rowBytes, long ptsUs, int timeoutMs);
         [DllImport(Lib)] internal static extern int BVWriter_FramesInFlight(IntPtr writer);
         [DllImport(Lib)] internal static extern void BVWriter_Finish(IntPtr writer, long requestId);

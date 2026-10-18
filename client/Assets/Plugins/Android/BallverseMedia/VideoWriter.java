@@ -19,12 +19,10 @@ import android.util.Log;
 import android.view.Surface;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
-import java.nio.channels.FileChannel;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,19 +42,16 @@ import java.util.concurrent.TimeUnit;
  * case encoder timestamps are replaced by the submitted ones in output order (B-frames are disabled for that reason).
  * A slot is free again as soon as its pixels are uploaded, so at most 3 frames are in flight.
  *
- * Audio is encoded on the same thread, kept ~0.5 s ahead of the video so MediaMuxer can interleave; it is trimmed to
- * the video end (last pts + 1 / fps).
+ * Audio ({@link AacPcmEncoder}) is encoded on the same thread, kept ~0.5 s ahead of the video so MediaMuxer can
+ * interleave; it is trimmed to the video end (last pts + 1 / fps). A segment of the segmented export has no audio
+ * (empty audioPcmPath); {@link SegmentConcat} encodes the mix once when joining the segments.
  *
  * Threading: the public methods are called from the Unity main thread; everything else runs on the writer thread.
  */
 public final class VideoWriter {
     private static final String TAG = MediaBridge.TAG;
     private static final String MIME_AVC = MediaFormat.MIMETYPE_VIDEO_AVC;
-    private static final String MIME_AAC = MediaFormat.MIMETYPE_AUDIO_AAC;
     private static final int SLOT_COUNT = 3;
-    private static final int AUDIO_RATE = 48000;
-    private static final int AUDIO_CHANNELS = 2;
-    private static final int AUDIO_CHUNK_FRAMES = 1024;
     private static final long AUDIO_LEAD_US = 500000;
     private static final long DRAIN_TIMEOUT_US = 10000;
     private static final long STALL_LIMIT_NS = 10000000000L;
@@ -112,7 +107,7 @@ public final class VideoWriter {
 
     // Writer thread state
     private MediaCodec mVideo;
-    private MediaCodec mAudio;
+    private AacPcmEncoder mAudio;
     private MediaMuxer mMuxer;
     private Surface mInputSurface;
     private EglRenderer mEgl;
@@ -124,15 +119,7 @@ public final class VideoWriter {
     private final List<PendingSample> mPending = new ArrayList<>();
     private final ArrayDeque<Long> mPtsFifo = new ArrayDeque<>();
     private final MediaCodec.BufferInfo mVideoInfo = new MediaCodec.BufferInfo();
-    private final MediaCodec.BufferInfo mAudioInfo = new MediaCodec.BufferInfo();
     private boolean mHasAudio;
-    private FileInputStream mPcmStream;
-    private FileChannel mPcm;
-    private long mPcmFrames;
-    private long mAudioFramesQueued;
-    private boolean mAudioInputDone;
-    private boolean mAudioOutputDone;
-    private ByteBuffer mPcmBytes;
     private long mLastPts = -1;
     private int mFramesWritten;
     private int mFramesSubmitted;
@@ -166,20 +153,18 @@ public final class VideoWriter {
             File dir = out.getParentFile();
             if (dir != null && !dir.isDirectory() && !dir.mkdirs()) throw new MediaError(MediaError.IO, "cannot create " + dir);
             if (out.exists() && !out.delete()) throw new MediaError(MediaError.IO, "cannot replace " + out);
-            if (mAudioPath != null) {
-                File pcm = new File(mAudioPath);
-                mPcmFrames = pcm.length() / (4L * AUDIO_CHANNELS);
-                mHasAudio = mPcmFrames > 0;
-            }
+            mHasAudio = AacPcmEncoder.frameCount(mAudioPath) > 0;
             configureVideo();
-            if (mHasAudio) configureAudio();
             mMuxer = new MediaMuxer(mPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
             for (int i = 0; i < SLOT_COUNT; i++) {
                 mSlots[i] = ByteBuffer.allocateDirect(mWidth * mHeight * 4).order(ByteOrder.LITTLE_ENDIAN);
                 mFreeSlots.add(i);
             }
             mVideo.start();
-            if (mHasAudio) mAudio.start();
+            if (mHasAudio) {
+                mAudio = new AacPcmEncoder(mAudioPath, mAudioBitrate, new AudioSink());
+                mAudio.open();
+            }
 
             final CountDownLatch ready = new CountDownLatch(1);
             mThread = new Thread(new Runnable() {
@@ -349,7 +334,7 @@ public final class VideoWriter {
         mLastPts = ptsUs;
         mFramesSubmitted++;
         drainVideo(false);
-        pumpAudio(ptsUs + AUDIO_LEAD_US, false);
+        if (mAudio != null) mAudio.pump(ptsUs + AUDIO_LEAD_US, false);
     }
 
     private String finish() throws MediaError, IOException {
@@ -357,10 +342,7 @@ public final class VideoWriter {
         mVideo.signalEndOfInputStream();
         drainVideo(true);
         long endUs = mLastPts + (1000000L + mFps - 1) / mFps;
-        if (mHasAudio) {
-            pumpAudio(endUs, true);
-            drainAudio(true);
-        }
+        if (mAudio != null) mAudio.finish(endUs);
         if (!mMuxerStarted) throw new MediaError(MediaError.MUXER_FAILED, "muxer never started (no encoder output)");
         mMuxer.stop();
         releaseCodecs();
@@ -498,105 +480,23 @@ public final class VideoWriter {
 
     // ------------------------------------------------------------------ audio
 
-    private void configureAudio() throws MediaError, IOException {
-        MediaFormat f = MediaFormat.createAudioFormat(MIME_AAC, AUDIO_RATE, AUDIO_CHANNELS);
-        f.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
-        f.setInteger(MediaFormat.KEY_BIT_RATE, mAudioBitrate);
-        f.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, AUDIO_CHUNK_FRAMES * AUDIO_CHANNELS * 2 * 4);
-        mAudio = MediaCodec.createEncoderByType(MIME_AAC);
-        try {
-            mAudio.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        } catch (RuntimeException e) {
-            throw new MediaError(MediaError.ENCODER_FAILED, "AAC encoder rejected 48 kHz stereo", e);
+    /** Routes AAC output into the muxer's audio track. Writer thread. */
+    private final class AudioSink implements AacPcmEncoder.Sink {
+        @Override
+        public void onFormat(MediaFormat format) throws MediaError {
+            if (mAudioTrack >= 0) throw new MediaError(MediaError.MUXER_FAILED, "audio format changed twice");
+            mAudioTrack = mMuxer.addTrack(format);
+            maybeStartMuxer();
         }
-        mPcmStream = new FileInputStream(mAudioPath);
-        mPcm = mPcmStream.getChannel();
-        mPcmBytes = ByteBuffer.allocateDirect(AUDIO_CHUNK_FRAMES * AUDIO_CHANNELS * 4).order(ByteOrder.LITTLE_ENDIAN);
-    }
 
-    private long audioPtsUs(long frames) {
-        return frames * 1000000L / AUDIO_RATE;
-    }
-
-    /** Encodes PCM up to untilUs (finishing: then queues end-of-stream). */
-    private void pumpAudio(long untilUs, boolean finishing) throws MediaError, IOException {
-        if (!mHasAudio) return;
-        long limitFrames = finishing ? (untilUs * AUDIO_RATE + 999999) / 1000000L : Long.MAX_VALUE;
-        long stallStart = System.nanoTime();
-        while (!mAudioInputDone) {
-            if (mCancelled) throw new MediaError(MediaError.ENCODER_FAILED, "cancelled");
-            if (!finishing && audioPtsUs(mAudioFramesQueued) >= untilUs) return;
-            int in = mAudio.dequeueInputBuffer(finishing ? DRAIN_TIMEOUT_US : 0);
-            if (in < 0) {
-                drainAudio(false);
-                if (!finishing) return;
-                if (System.nanoTime() - stallStart > STALL_LIMIT_NS) throw new MediaError(MediaError.TIMEOUT, "audio encoder stalled");
-                continue;
-            }
-            stallStart = System.nanoTime();
-            ByteBuffer input = mAudio.getInputBuffer(in);
-            if (input == null) throw new MediaError(MediaError.ENCODER_FAILED, "no AAC input buffer");
-            input.clear();
-            input.order(ByteOrder.nativeOrder());
-            long n = Math.min(AUDIO_CHUNK_FRAMES, input.remaining() / (2 * AUDIO_CHANNELS));
-            n = Math.min(n, mPcmFrames - mAudioFramesQueued);
-            n = Math.min(n, limitFrames - mAudioFramesQueued);
-            if (n <= 0) {
-                mAudio.queueInputBuffer(in, 0, 0, audioPtsUs(mAudioFramesQueued), MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                mAudioInputDone = true;
-                break;
-            }
-            int samples = (int) n * AUDIO_CHANNELS;
-            mPcmBytes.clear();
-            mPcmBytes.limit(samples * 4);
-            long position = mAudioFramesQueued * AUDIO_CHANNELS * 4;
-            while (mPcmBytes.hasRemaining()) {
-                int read = mPcm.read(mPcmBytes, position + mPcmBytes.position());
-                if (read < 0) break;
-            }
-            mPcmBytes.flip();
-            int got = mPcmBytes.remaining() / 4;
-            for (int i = 0; i < got; i++) {
-                float v = mPcmBytes.getFloat();
-                int s = Math.round(v * 32767f);
-                input.putShort((short) (s > 32767 ? 32767 : (s < -32768 ? -32768 : s)));
-            }
-            int frames = got / AUDIO_CHANNELS;
-            mAudio.queueInputBuffer(in, 0, frames * AUDIO_CHANNELS * 2, audioPtsUs(mAudioFramesQueued), 0);
-            mAudioFramesQueued += frames;
-            if (frames == 0) mPcmFrames = mAudioFramesQueued; // file shrank: stop at the next iteration
-            drainAudio(false);
+        @Override
+        public void onSample(ByteBuffer data, MediaCodec.BufferInfo info) {
+            writeSample(mAudioTrack, data, info);
         }
-    }
 
-    private void drainAudio(boolean endOfStream) throws MediaError {
-        if (mAudioOutputDone) return;
-        long stallStart = System.nanoTime();
-        while (true) {
-            if (mCancelled) throw new MediaError(MediaError.ENCODER_FAILED, "cancelled");
-            int index = mAudio.dequeueOutputBuffer(mAudioInfo, endOfStream ? DRAIN_TIMEOUT_US : 0);
-            if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                if (!endOfStream) return;
-                if (System.nanoTime() - stallStart > STALL_LIMIT_NS) throw new MediaError(MediaError.TIMEOUT, "audio encoder did not finish");
-                continue;
-            }
-            if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                if (mAudioTrack >= 0) throw new MediaError(MediaError.MUXER_FAILED, "audio format changed twice");
-                mAudioTrack = mMuxer.addTrack(mAudio.getOutputFormat());
-                maybeStartMuxer();
-                continue;
-            }
-            if (index < 0) continue;
-            stallStart = System.nanoTime();
-            ByteBuffer data = mAudio.getOutputBuffer(index);
-            if ((mAudioInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) mAudioInfo.size = 0;
-            if (mAudioInfo.size > 0 && data != null) writeSample(mAudioTrack, data, mAudioInfo);
-            boolean eos = (mAudioInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
-            mAudio.releaseOutputBuffer(index, false);
-            if (eos) {
-                mAudioOutputDone = true;
-                return;
-            }
+        @Override
+        public boolean cancelled() {
+            return mCancelled;
         }
     }
 
@@ -647,11 +547,6 @@ public final class VideoWriter {
             mInputSurface = null;
         }
         if (mAudio != null) {
-            try {
-                mAudio.stop();
-            } catch (RuntimeException ignored) {
-                // not started or already failed
-            }
             mAudio.release();
             mAudio = null;
         }
@@ -662,15 +557,6 @@ public final class VideoWriter {
                 // release() of a started-but-not-stopped muxer may throw; the file is deleted anyway
             }
             mMuxer = null;
-        }
-        if (mPcmStream != null) {
-            try {
-                mPcmStream.close();
-            } catch (IOException ignored) {
-                // nothing to do
-            }
-            mPcmStream = null;
-            mPcm = null;
         }
         mPending.clear();
     }

@@ -25,6 +25,15 @@ namespace Ballverse.Media.Internal
 
         public int Capacity => _capacity;
 
+        /// <summary>True if <see cref="Acquire"/> would return a buffer without waiting (a free one, or capacity left).</summary>
+        public bool HasAvailable
+        {
+            get
+            {
+                lock (_lock) return !_disposed && (_free.Count > 0 || _created < _capacity);
+            }
+        }
+
         /// <summary>
         /// Takes a free buffer, creating one with <paramref name="factory"/> while under capacity; otherwise waits until a
         /// buffer is returned or <paramref name="shouldStop"/> becomes true (re-checked every 50 ms). Returns null if stopped.

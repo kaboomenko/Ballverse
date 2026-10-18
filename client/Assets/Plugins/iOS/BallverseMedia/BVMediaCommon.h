@@ -64,5 +64,8 @@ int BVRotationOfTransform(CGAffineTransform transform);
 NSString* BVTransferOfTrack(AVAssetTrack* track, int* bitDepth);
 // Loads asset keys synchronously (background threads only). nil on success, else an error code (+ message).
 NSString* BVLoadAssetKeys(AVAsset* asset, NSArray<NSString*>* keys, NSString** message);
+// Title / creation-date metadata items for AVAssetWriter.metadata (empty strings are skipped; never location).
+@class AVMetadataItem;
+NSArray<AVMetadataItem*>* BVMetadataItems(NSString* title, NSString* creationIso8601);
 // Output frame size rule shared with C# VideoReaderOptions.ComputeOutputSize.
 void BVComputeOutputSize(int displayWidth, int displayHeight, int maxWidth, int maxHeight, int* outWidth, int* outHeight);

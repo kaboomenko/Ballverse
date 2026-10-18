@@ -11,8 +11,9 @@ namespace Ballverse.Media.Editor
     /// <summary>
     /// Xcode project fix-ups for the MediaBridge iOS plugin (Assets/Plugins/iOS/BallverseMedia):
     /// links AVFoundation, CoreMedia, CoreVideo, Photos, Accelerate and (weakly, iOS 14+) PhotosUI into UnityFramework,
-    /// compiles the plugin's .mm files with ARC (-fobjc-arc), and adds the photo-library usage descriptions to
-    /// Info.plist when the project does not define them yet (texts are placeholders to localise before release).
+    /// compiles the plugin's .mm files with ARC (-fobjc-arc), and adds the add-only photo-library usage description to
+    /// Info.plist when the project does not define it yet (placeholder text to localise before release). The app never
+    /// requests full library access (spec §3.8: add-only), so NSPhotoLibraryUsageDescription is deliberately not added.
     /// </summary>
     public static class IosBuildPostprocessor
     {
@@ -61,8 +62,6 @@ namespace Ballverse.Media.Editor
             PlistElementDict root = plist.root;
             if (!root.values.ContainsKey("NSPhotoLibraryAddUsageDescription"))
                 root.SetString("NSPhotoLibraryAddUsageDescription", "Ballverse saves the videos you export to your photo library.");
-            if (!root.values.ContainsKey("NSPhotoLibraryUsageDescription"))
-                root.SetString("NSPhotoLibraryUsageDescription", "Ballverse adds the videos you export to its Ballverse album.");
             plist.WriteToFile(plistPath);
         }
     }

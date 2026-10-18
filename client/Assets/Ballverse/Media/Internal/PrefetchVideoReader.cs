@@ -362,20 +362,19 @@ namespace Ballverse.Media.Internal
                 }
             }
 
+            // Worker loop. A buffer is acquired BEFORE the next pts is chosen, so the smallest pending pts always gets the
+            // next free buffer (a read requested while the worker waited for a buffer is not overtaken by an older
+            // speculative prefetch). A finished speculative frame (no waiter) that would take the last buffer while a
+            // smaller pts is still pending is not stored: its pts goes back to the queue (it is decoded again when its
+            // turn comes), so the caller holding MaxFramesInFlight − 1 frames can always get the frame it asks for.
             void Loop()
             {
                 while (true)
                 {
-                    long pts;
                     lock (_lock)
                     {
                         while (!_stop && _pending.Count == 0) Monitor.Wait(_lock);
                         if (_stop) return;
-                        pts = _pending[0];
-                        _pending.RemoveAt(0);
-                        _inProgress = pts;
-                        _hasInProgress = true;
-                        _inProgressWanted = true;
                     }
 
                     IFrameMemory memory;
@@ -390,14 +389,24 @@ namespace Ballverse.Media.Internal
                     }
                     if (memory == null) return;
 
-                    bool wanted;
-                    lock (_lock) wanted = _inProgressWanted && !_stop;
-                    if (!wanted)
+                    long pts;
+                    lock (_lock)
                     {
-                        _pool.Return(memory);
-                        lock (_lock) _hasInProgress = false;
-                        continue;
+                        if (_stop || _pending.Count == 0)
+                        {
+                            pts = 0;
+                            memory = ReturnLocked(memory);
+                        }
+                        else
+                        {
+                            pts = _pending[0];
+                            _pending.RemoveAt(0);
+                            _inProgress = pts;
+                            _hasInProgress = true;
+                            _inProgressWanted = true;
+                        }
                     }
+                    if (memory == null) continue;
 
                     long actual;
                     try
@@ -423,6 +432,11 @@ namespace Ballverse.Media.Internal
                         if (keep)
                         {
                             if (_waiters.TryGetValue(pts, out waiter)) _waiters.Remove(pts);
+                            else if (WouldStarveLocked(pts))
+                            {
+                                keep = false;
+                                InsertPendingLocked(pts);
+                            }
                             else _ready[pts] = frame;
                         }
                         Monitor.PulseAll(_lock);
@@ -433,14 +447,33 @@ namespace Ballverse.Media.Internal
                     }
                     else if (waiter != null && !waiter.TrySetResult(frame))
                     {
+                        // The read was cancelled meanwhile: keep the frame as a ready one unless it would starve others.
                         lock (_lock)
                         {
                             if (_stop) keep = false;
+                            else if (WouldStarveLocked(pts))
+                            {
+                                keep = false;
+                                InsertPendingLocked(pts);
+                            }
                             else _ready[pts] = frame;
                         }
                         if (!keep) frame.Dispose();
                     }
                 }
+            }
+
+            // Returns the buffer to the pool (lock order State → FramePool is allowed) and yields null.
+            IFrameMemory ReturnLocked(IFrameMemory memory)
+            {
+                _pool.Return(memory);
+                return null;
+            }
+
+            // Storing a ready frame for pts would leave no buffer for a smaller pending pts.
+            bool WouldStarveLocked(long pts)
+            {
+                return _pending.Count > 0 && _pending[0] < pts && !_pool.HasAvailable;
             }
 
             void Fail(Exception e)

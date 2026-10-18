@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Runs the Media EditMode tests (../EditMode/*.cs, NUnit) under plain .NET without Unity: compiles the pure-C# parts of
+    Ballverse.Media (Api, Common, Internal, Fake) with small runtime stand-ins for the few Unity APIs they use
+    (UnityStubs.cs). The folder ends in "~" so Unity ignores it. Usage: ./run.sh  (needs the .NET 8 SDK).
+    Android/ and Ios/ (JNI / P/Invoke) are not compiled here; they are covered by the device checklist.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>Ballverse.Media.Tests</AssemblyName>
+    <RootNamespace>Ballverse.Media.Tests</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591;NUnit2005;NUnit2007</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="UnityStubs.cs" />
+    <Compile Include="../../Api/*.cs;../../Common/*.cs;../../Internal/*.cs;../../Fake/*.cs" />
+    <Compile Include="../EditMode/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../../../core-tests/Ballverse.Core/Ballverse.Core.csproj" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+</Project>
