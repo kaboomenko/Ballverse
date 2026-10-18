@@ -1,0 +1,43 @@
+[
+  {
+    "id": "ring_escape.classic",
+    "nameKey": "presets.ring_escape.classic",
+    "modeId": "ring_escape",
+    "values": {}
+  },
+  {
+    "id": "ring_escape.neon_chaos",
+    "nameKey": "presets.ring_escape.neon_chaos",
+    "modeId": "ring_escape",
+    "values": {
+      "timeScale": 1.5,
+      "ballCount": 4,
+      "theme": "Neon",
+      "restitution": 1.1,
+      "ballColors": ["#FF00AA", "#00FFEE", "#FFEE00", "#7CFF00"],
+      "trail": "rainbow",
+      "glow": 1.0,
+      "ringCount": 30,
+      "rotationLaw": "alternating"
+    }
+  },
+  {
+    "id": "ring_escape.meditation",
+    "nameKey": "presets.ring_escape.meditation",
+    "modeId": "ring_escape",
+    "values": {
+      "timeScale": 0.5,
+      "theme": "Pastel",
+      "soundPack": "Melody",
+      "melody": "canon_in_d",
+      "trail": "long",
+      "rotationSpeed": 20.0
+    }
+  },
+  {
+    "id": "ring_escape.hundred_rings",
+    "nameKey": "presets.ring_escape.hundred_rings",
+    "modeId": "ring_escape",
+    "values": { "ringCount": 100, "gapAngle": 45, "targetDuration": 60 }
+  }
+]
