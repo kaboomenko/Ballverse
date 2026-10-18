@@ -46,22 +46,6 @@ namespace Ballverse.UI.Tests
         }
     }
 
-    public class MagnetSnapTests
-    {
-        [Theory]
-        [InlineData(31, 33)]
-        [InlineData(35, 33)]
-        [InlineData(36, 36)]
-        [InlineData(49, 50)]
-        [InlineData(20, 30)]
-        [InlineData(90, 70)]
-        [InlineData(65, 67)]
-        public void Proportion(int v, int expected)
-        {
-            Assert.Equal(expected, MagnetSnap.SnapProportion(v));
-        }
-    }
-
     public class TimelineGeometryTests
     {
         const long S = TimelineGeometry.MicrosPerSecond;
@@ -120,7 +104,7 @@ namespace Ballverse.UI.Tests
         public void InsetsFromEngineSafeArea()
         {
             // 1170×2532 screen, notch 141 px on top, home indicator 102 px at the bottom; panel 390 units wide.
-            var i = SafeAreaInsets.FromScreen(1170, 2532, 0, 102, 1170, 2532 - 102 - 141, 390f / 1170f);
+            var i = PanelInsets.FromScreen(1170, 2532, 0, 102, 1170, 2532 - 102 - 141, 390f / 1170f);
             Assert.Equal(47f, i.Top, 2);
             Assert.Equal(34f, i.Bottom, 2);
             Assert.Equal(0f, i.Left, 2);
@@ -154,6 +138,9 @@ namespace Ballverse.UI.Tests
             Assert.Equal(GlassMode.Simplified, c.Mode);
             Assert.Equal(8, c.Downsample);
             Assert.Equal(0f, c.RefractionPx);
+            // Spec §4.5: tier C drops only refraction; the edge highlight stays.
+            Assert.True(c.Highlight > 0f);
+            Assert.Equal(a.Highlight, c.Highlight);
             var solid = GlassQualityPolicy.For(DeviceTier.A, true);
             Assert.Equal(GlassMode.Solid, solid.Mode);
             Assert.False(solid.UsesBackdrop);
@@ -209,7 +196,12 @@ namespace Ballverse.UI.Tests
             var r = ResolvedAppearance.Resolve(UiPreferences.Default, SystemAppearanceState.Unknown);
             Assert.Equal(ResolvedTheme.Dark, r.Theme);
             Assert.Equal("en", r.Language);
-            var light = ResolvedAppearance.Resolve(UiPreferences.Default, new SystemAppearanceState(false, true, true, 1.3f, "ru-RU"));
+            // Spec §4.4: dark by default even on a device in light mode; light only when the user picks it or "System".
+            var lightDevice = new SystemAppearanceState(false, true, true, 1.3f, "ru-RU");
+            Assert.Equal(ResolvedTheme.Dark, ResolvedAppearance.Resolve(UiPreferences.Default, lightDevice).Theme);
+            Assert.Equal(ThemePreference.Dark, default(ThemePreference));
+            var followSystem = new UiPreferences(ThemePreference.System, LanguagePreference.System, ReduceMotionPreference.System, false, false);
+            var light = ResolvedAppearance.Resolve(followSystem, lightDevice);
             Assert.Equal(ResolvedTheme.Light, light.Theme);
             Assert.True(light.ReduceMotion);
             Assert.True(light.ReduceTransparency);

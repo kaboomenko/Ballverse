@@ -1,4 +1,5 @@
 using System;
+using Ballverse.UI.Accessibility;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -14,7 +15,8 @@ namespace Ballverse.UI.Components
         /// <summary>Optional haptic tick for taps (wired by the app to the haptics service and setting).</summary>
         public static Action Haptic { get; set; }
 
-        public static Clickable On(VisualElement element, Action action)
+        /// <param name="pressedStyle">Adds the pressed (scale) visual; off for whole rows that are a larger hit area.</param>
+        public static Clickable On(VisualElement element, Action action, bool pressedStyle = true)
         {
             if (element == null) throw new ArgumentNullException(nameof(element));
             var c = new Clickable(() =>
@@ -24,7 +26,12 @@ namespace Ballverse.UI.Components
                 action?.Invoke();
             });
             element.AddManipulator(c);
-            element.AddToClassList("bv-tappable");
+            if (pressedStyle) element.AddToClassList("bv-tappable");
+            // Screen readers announce and activate it like a button (spec §4.8).
+            A11y.Button(element, () =>
+            {
+                if (element.enabledInHierarchy) action?.Invoke();
+            });
             return c;
         }
 
@@ -71,6 +78,8 @@ namespace Ballverse.UI.Components
             target.RegisterCallback<PointerCancelEvent>(OnCancel);
             target.RegisterCallback<PointerLeaveEvent>(OnLeave);
             target.AddToClassList("bv-tappable");
+            // Screen readers activate the tap action; the long-press action stays a touch gesture.
+            A11y.Button(target, () => _tap?.Invoke());
         }
 
         protected override void UnregisterCallbacksFromTarget()

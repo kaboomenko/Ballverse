@@ -11,7 +11,6 @@
         <ui:ScrollView name="scroll" class="bv-page__scroll">
             <ui:Label text="#gallery.subtitle" class="bv-page__subtitle" />
             <ui:VisualElement name="cards" class="bv-mode-list" />
-            <ui:Label text="#gallery.more_soon" class="bv-note bv-note--center" />
             <ui:VisualElement class="bv-tabbar-spacer" />
         </ui:ScrollView>
     </ui:VisualElement>

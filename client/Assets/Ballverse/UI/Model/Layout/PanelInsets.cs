@@ -2,15 +2,18 @@ using System;
 
 namespace Ballverse.UI.Layout
 {
-    /// <summary>Safe-area insets in panel units (top, right, bottom, left).</summary>
-    public readonly struct SafeAreaInsets : IEquatable<SafeAreaInsets>
+    /// <summary>
+    /// Safe-area insets in panel units (top, right, bottom, left). Named apart from <c>Ballverse.App.SafeAreaInsets</c>
+    /// (screen pixels) so a composition root importing both namespaces has no ambiguity.
+    /// </summary>
+    public readonly struct PanelInsets : IEquatable<PanelInsets>
     {
         public float Top { get; }
         public float Right { get; }
         public float Bottom { get; }
         public float Left { get; }
 
-        public SafeAreaInsets(float top, float right, float bottom, float left)
+        public PanelInsets(float top, float right, float bottom, float left)
         {
             Top = top;
             Right = right;
@@ -22,7 +25,7 @@ namespace Ballverse.UI.Layout
         /// Insets from the screen size and the safe rectangle in screen pixels (origin bottom-left, as reported by the
         /// engine), scaled to panel units by <paramref name="panelUnitsPerPixel"/>. Negative values are clamped to 0.
         /// </summary>
-        public static SafeAreaInsets FromScreen(float screenWidth, float screenHeight, float safeX, float safeY,
+        public static PanelInsets FromScreen(float screenWidth, float screenHeight, float safeX, float safeY,
             float safeWidth, float safeHeight, float panelUnitsPerPixel)
         {
             float left = Math.Max(0f, safeX);
@@ -30,10 +33,10 @@ namespace Ballverse.UI.Layout
             float right = Math.Max(0f, screenWidth - (safeX + safeWidth));
             float top = Math.Max(0f, screenHeight - (safeY + safeHeight));
             float s = panelUnitsPerPixel > 0 ? panelUnitsPerPixel : 1f;
-            return new SafeAreaInsets(top * s, right * s, bottom * s, left * s);
+            return new PanelInsets(top * s, right * s, bottom * s, left * s);
         }
 
-        public bool Equals(SafeAreaInsets o)
+        public bool Equals(PanelInsets o)
         {
             return Math.Abs(Top - o.Top) < 0.01f && Math.Abs(Right - o.Right) < 0.01f
                 && Math.Abs(Bottom - o.Bottom) < 0.01f && Math.Abs(Left - o.Left) < 0.01f;
@@ -41,7 +44,7 @@ namespace Ballverse.UI.Layout
 
         public override bool Equals(object obj)
         {
-            return obj is SafeAreaInsets s && Equals(s);
+            return obj is PanelInsets s && Equals(s);
         }
 
         public override int GetHashCode()

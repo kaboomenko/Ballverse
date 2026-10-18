@@ -137,6 +137,28 @@ namespace Ballverse.UI.Layout
             return new TrimRange(range.StartUs, end);
         }
 
+        /// <summary>
+        /// Keeps a V offset (Core <c>UserVideoTiming.OffsetUs</c>: V start − S start, negative = V earlier) so that V and S
+        /// still overlap by at least <see cref="MinClipUs"/> (or by the shorter track when it is shorter than that).
+        /// </summary>
+        public static long ClampVideoOffset(long offsetUs, long simLengthUs, long videoLengthUs)
+        {
+            long overlap = Math.Min(MinClipUs, Math.Max(0, Math.Min(simLengthUs, videoLengthUs)));
+            long min = -Math.Max(0, videoLengthUs - overlap);
+            long max = Math.Max(0, simLengthUs - overlap);
+            return Math.Max(min, Math.Min(max, offsetUs));
+        }
+
+        /// <summary>
+        /// Moves a span (text layer, spec §3.5) by <paramref name="deltaUs"/> keeping its length, inside [0, total].
+        /// </summary>
+        public static TrimRange ShiftSpan(TrimRange span, long deltaUs, long totalUs)
+        {
+            long length = Math.Max(0, Math.Min(span.LengthUs, totalUs));
+            long start = Math.Max(0, Math.Min(totalUs - length, span.StartUs + deltaUs));
+            return new TrimRange(start, start + length);
+        }
+
         /// <summary>One frame at <paramref name="fps"/> in microseconds (for the ±1 frame offset buttons).</summary>
         public static long FrameUs(int fps)
         {

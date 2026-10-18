@@ -3,12 +3,16 @@ using Ballverse.UI.Localization;
 
 namespace Ballverse.UI.Theming
 {
-    /// <summary>Interface theme choice (spec §4.3 Settings, §4.4: dark by default).</summary>
+    /// <summary>
+    /// Interface theme choice (spec §4.3 Settings, §4.4: dark by default; light is available and follows the system only
+    /// when "Системная" is chosen). <see cref="Dark"/> is the zero value so an unset or first-run preference is dark; the
+    /// app persists <see cref="Dark"/> as the first-run value.
+    /// </summary>
     public enum ThemePreference
     {
-        System = 0,
-        Dark = 1,
-        Light = 2,
+        Dark = 0,
+        Light = 1,
+        System = 2,
     }
 
     public enum ResolvedTheme
@@ -46,6 +50,20 @@ namespace Ballverse.UI.Theming
         }
 
         public static readonly SystemAppearanceState Unknown = new SystemAppearanceState(null, false, false, 1f, null);
+
+        /// <summary>
+        /// Fills what the native appearance plugin did not report with the engine's values: the device language
+        /// (Unity <c>Application.systemLanguage</c>, so a Russian device starts in Russian, spec §4.7) and, when there is
+        /// no plugin at all, the system font scale (Unity <c>AccessibilitySettings.fontScale</c>, spec §4.8).
+        /// </summary>
+        /// <param name="state">Native state, or null when no <c>ISystemAppearance</c> is bound.</param>
+        public static SystemAppearanceState WithFallbacks(SystemAppearanceState state, string deviceLanguageTag, float deviceFontScale)
+        {
+            float scale = float.IsNaN(deviceFontScale) || deviceFontScale <= 0f ? 1f : deviceFontScale;
+            if (state == null) return new SystemAppearanceState(null, false, false, scale, deviceLanguageTag);
+            if (!string.IsNullOrEmpty(state.LanguageTag)) return state;
+            return new SystemAppearanceState(state.PrefersDark, state.ReduceMotion, state.ReduceTransparency, state.TextScale, deviceLanguageTag);
+        }
     }
 
     /// <summary>User choices that change how the shell looks.</summary>
@@ -69,7 +87,8 @@ namespace Ballverse.UI.Theming
             HighContrast = highContrast;
         }
 
-        public static readonly UiPreferences Default = new UiPreferences(ThemePreference.System, LanguagePreference.System,
+        /// <summary>First-run preferences: dark theme (spec §4.4), device language, system reduce-motion.</summary>
+        public static readonly UiPreferences Default = new UiPreferences(ThemePreference.Dark, LanguagePreference.System,
             ReduceMotionPreference.System, false, false);
     }
 

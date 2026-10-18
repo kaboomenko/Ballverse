@@ -27,20 +27,23 @@ namespace Ballverse.UI.Screens
 
         public void Open()
         {
-            if (_sheet != null && _sheet.IsOpen) return;
+            if (_sheet != null && _sheet.IsActive) return;
+            Detach();
             _vm = _vmSource();
             if (_vm == null) return;
-            _sheet = new BottomSheet(_ctx, new SheetOptions
+            BottomSheet sheet = null;
+            sheet = new BottomSheet(_ctx, new SheetOptions
             {
                 TitleKey = "presets.title",
                 Detents = SheetDetents.HalfAndFull,
                 ScrimOpacity = 0.2f,
+                // May run after a newer sheet opened: only the current one detaches.
                 Closed = () =>
                 {
-                    if (_vm != null) _vm.Changed -= Rebuild;
-                    _sheet = null;
+                    if (_sheet == sheet) Detach();
                 },
             });
+            _sheet = sheet;
             _list = new VisualElement();
             _list.AddToClassList("bv-form");
             _sheet.Content.Add(_list);
@@ -51,7 +54,15 @@ namespace Ballverse.UI.Screens
 
         public void Close()
         {
-            _sheet?.Close();
+            var sheet = _sheet;
+            Detach();
+            sheet?.Close();
+        }
+
+        void Detach()
+        {
+            if (_vm != null) _vm.Changed -= Rebuild;
+            _sheet = null;
         }
 
         void Rebuild()
@@ -192,16 +203,21 @@ namespace Ballverse.UI.Screens
 
         public void Open()
         {
-            if (_sheet != null && _sheet.IsOpen) return;
+            if (_sheet != null && _sheet.IsActive) return;
             var vm = _vmSource();
             if (vm == null) return;
-            _sheet = new BottomSheet(_ctx, new SheetOptions
+            BottomSheet sheet = null;
+            sheet = new BottomSheet(_ctx, new SheetOptions
             {
                 TitleKey = "generate.title",
                 Detents = SheetDetents.FitContent,
                 ScrimOpacity = 0.25f,
-                Closed = () => _sheet = null,
+                Closed = () =>
+                {
+                    if (_sheet == sheet) _sheet = null;
+                },
             });
+            _sheet = sheet;
             string style = vm.SelectedStyleId;
             string duration = vm.SelectedDurationId;
             var form = new FormBuilder(_ctx, _sheet.Content);

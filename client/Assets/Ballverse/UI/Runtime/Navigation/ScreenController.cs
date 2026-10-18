@@ -23,7 +23,7 @@ namespace Ballverse.UI.Navigation
         internal void Create(UiContext ctx)
         {
             Ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
-            Root = UiAssets.Instantiate(Layout);
+            Root = ctx.InstantiateLayout(Layout);
             Root.AddToClassList("bv-screen");
             Root.AddToClassList("bv-screen--" + Id.ToString().ToLowerInvariant());
             Root.pickingMode = PickingMode.Position;

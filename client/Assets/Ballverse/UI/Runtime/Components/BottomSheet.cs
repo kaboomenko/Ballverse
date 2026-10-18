@@ -70,6 +70,10 @@ namespace Ballverse.UI.Components
         public ScrollView Scroll { get; }
         public VisualElement HeaderTrailing { get; }
         public bool IsOpen { get; private set; }
+        /// <summary>Close() was called and the sheet is animating out; <see cref="SheetOptions.Closed"/> follows.</summary>
+        public bool IsClosing => IsOpen && _closing;
+        /// <summary>Open and not on its way out: the sheet a screen should keep working with.</summary>
+        public bool IsActive => IsOpen && !_closing;
         public SheetOptions Options => _options;
         internal SheetHost Host { get; set; }
 
@@ -188,6 +192,17 @@ namespace Ballverse.UI.Components
                 Host?.OnSheetClosed(this);
                 _options.Closed?.Invoke();
             });
+        }
+
+        /// <summary>Removes the sheet at once, without animation (shell teardown); <see cref="SheetOptions.Closed"/> runs once.</summary>
+        internal void CloseImmediately()
+        {
+            if (!IsOpen) return;
+            _closing = true;
+            _tween?.Cancel();
+            IsOpen = false;
+            Host?.OnSheetClosed(this);
+            _options.Closed?.Invoke();
         }
 
         /// <summary>Switches between the 50% and 90% detents.</summary>
@@ -352,6 +367,15 @@ namespace Ballverse.UI.Components
         public void CloseAll()
         {
             for (int i = _stack.Count - 1; i >= 0; i--) _stack[i].Close();
+        }
+
+        /// <summary>Removes every sheet without animation (shell teardown).</summary>
+        public void DismissAllImmediately()
+        {
+            for (int i = _stack.Count - 1; i >= 0; i--)
+            {
+                if (i < _stack.Count) _stack[i].CloseImmediately();
+            }
         }
 
         internal void OnSheetClosed(BottomSheet sheet)

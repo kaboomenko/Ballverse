@@ -53,6 +53,18 @@
     --glass-highlight: rgba(255, 255, 255, 0.9);
 }
 
+/* Text on glass (spec §4.5: WCAG AA 4.5:1 in the worst case). Secondary colours are opaque on glass and the adaptive
+   tint is computed for the weakest of them (GlassTextPalette in Model/Glass; a test keeps these values in sync). */
+.bv-theme-dark .bv-glass {
+    --color-text-2: #DCE1ED;
+    --color-text-3: #C4CAD8;
+}
+
+.bv-theme-light .bv-glass {
+    --color-text-2: #3A3F48;
+    --color-text-3: #525965;
+}
+
 /* Contrast theme: stronger secondary text and separators, denser frosted glass. */
 .bv-theme-dark.bv-contrast {
     --color-text-2: rgba(255, 255, 255, 0.9);

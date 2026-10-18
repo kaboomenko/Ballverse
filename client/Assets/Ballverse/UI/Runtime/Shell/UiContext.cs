@@ -47,12 +47,23 @@ namespace Ballverse.UI
         }
 
         /// <summary>
-        /// Prepares a freshly instantiated subtree: localizes <c>#key</c> texts, wires icons, registers glass
-        /// surfaces and safe-area spacers.
+        /// Instantiates a UXML layout (<see cref="UiAssets.Instantiate"/>) and localizes its <c>#key</c> texts at once,
+        /// before any code puts dynamic or user content into it.
+        /// </summary>
+        public VisualElement InstantiateLayout(string name)
+        {
+            var root = UiAssets.Instantiate(name);
+            Binder.Bind(root);
+            return root;
+        }
+
+        /// <summary>
+        /// Prepares a subtree before it is shown: wires icons, registers glass surfaces and safe-area spacers. Texts are
+        /// not touched here (sheets and dialogs already hold user content when they are presented); code-built labels
+        /// use <see cref="KeyLabel"/> and layouts are localized by <see cref="InstantiateLayout"/>.
         /// </summary>
         public void Prepare(VisualElement root)
         {
-            Binder.Bind(root);
             Icons.AttachAll(root);
             Glass?.Scan(root);
             SafeArea?.Apply(root);

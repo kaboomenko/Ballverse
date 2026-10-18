@@ -10,7 +10,10 @@ namespace Ballverse.UI.Glass
         public Color Linear { get; }
         /// <summary>Minimum tint opacity (10–40% by theme).</summary>
         public float MinAlpha { get; }
-        /// <summary>Luminance of the text colour drawn on glass (linear).</summary>
+        /// <summary>
+        /// Luminance of the weakest text colour drawn on glass (linear; <see cref="GlassTextPalette"/>): the tint keeps
+        /// 4.5:1 for it, and so for every text colour on glass.
+        /// </summary>
         public float TextLuminance { get; }
 
         public GlassTint(Color linear, float minAlpha, float textLuminance)
@@ -20,10 +23,12 @@ namespace Ballverse.UI.Glass
             TextLuminance = textLuminance;
         }
 
-        /// <summary>Dark theme: near-black tint under white text.</summary>
-        public static GlassTint Dark => new GlassTint(new Color(0.006f, 0.008f, 0.014f, 1f), 0.30f, 1f);
-        /// <summary>Light theme: near-white tint under dark text (#14161A).</summary>
-        public static GlassTint Light => new GlassTint(new Color(0.93f, 0.94f, 0.96f, 1f), 0.40f, 0.0075f);
+        /// <summary>Dark theme: near-black tint under light text (target: the tertiary glass text colour).</summary>
+        public static GlassTint Dark => new GlassTint(new Color(0.006f, 0.008f, 0.014f, 1f), 0.30f,
+            (float)GlassTextPalette.WeakestLuminance(true));
+        /// <summary>Light theme: near-white tint under dark text (target: the tertiary glass text colour).</summary>
+        public static GlassTint Light => new GlassTint(new Color(0.93f, 0.94f, 0.96f, 1f), 0.40f,
+            (float)GlassTextPalette.WeakestLuminance(false));
     }
 
     /// <summary>One glass surface for the compose pass: panel-space rectangle and corner radius.</summary>

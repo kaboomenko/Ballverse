@@ -40,6 +40,33 @@ namespace Ballverse.UI.Fakes
         public bool ShowWatermarkUpsell => !HasNoWatermark && _exports > 2 && _exports % 3 == 0;
         public LocalizedText FailureMessage => default;
         public bool CanFallback => true;
+        public float InterruptedProgress { get; private set; }
+        /// <summary>Raised when an export finished (drives the fake quest celebration).</summary>
+        public event Action Completed;
+
+        /// <summary>Editor helper: pretend the app was killed during an export (shows the resume offer).</summary>
+        public void SimulateInterrupted(float progress)
+        {
+            InterruptedProgress = Mathf.Clamp01(progress);
+            Stage = ExportStage.ResumeOffer;
+            Notify();
+        }
+
+        public void ResumeInterrupted()
+        {
+            _progressTime = InterruptedProgress * 4f;
+            Progress = InterruptedProgress;
+            SavedToGallery = false;
+            Stage = ExportStage.Progress;
+            Notify();
+        }
+
+        public void DiscardInterrupted()
+        {
+            InterruptedProgress = 0f;
+            Stage = ExportStage.Idle;
+            Notify();
+        }
 
         public override void Tick(float dt)
         {
@@ -54,6 +81,7 @@ namespace Ballverse.UI.Fakes
                 _exports++;
                 SavedToGallery = true;
                 Stage = ExportStage.Done;
+                Completed?.Invoke();
             }
             Notify();
         }
@@ -235,23 +263,47 @@ namespace Ballverse.UI.Fakes
                 var list = new List<ShopProductData>();
                 if (AllPurchased) return list;
                 bool anyAd = Owns(RemoveExport) || Owns(RemoveInterstitial);
-                if (!anyAd)
-                {
-                    list.Add(new ShopProductData(NoAds, "shop.product.no_ads.title", "shop.product.no_ads.description",
-                        new[] { "shop.includes.no_export_ads", "shop.includes.no_interstitials", "shop.includes.no_watermark" },
-                        s_prices[NoAds], "$12.98", 31, State(NoAds), false, true, default));
-                }
-                if (!Owns(RemoveExport))
-                    list.Add(new ShopProductData(RemoveExport, "shop.product.remove_export.title", "shop.product.remove_export.description",
-                        new[] { "shop.includes.no_export_ads" }, s_prices[RemoveExport], null, 0, State(RemoveExport), false, false,
-                        Owns(RemoveInterstitial) ? LocalizedText.FromKey("shop.last_step_watermark") : default));
-                if (!Owns(RemoveInterstitial))
-                    list.Add(new ShopProductData(RemoveInterstitial, "shop.product.remove_interstitial.title",
-                        "shop.product.remove_interstitial.description", new[] { "shop.includes.no_interstitials" },
-                        s_prices[RemoveInterstitial], null, 0, State(RemoveInterstitial), false, false,
-                        Owns(RemoveExport) ? LocalizedText.FromKey("shop.last_step_watermark") : default));
+                if (!anyAd) list.Add(NoAdsCard());
+                if (!Owns(RemoveExport)) list.Add(RemoveExportCard());
+                if (!Owns(RemoveInterstitial)) list.Add(RemoveInterstitialCard());
                 return list;
             }
+        }
+
+        /// <summary>Spec §5.0.3: No Ads Bundle, or the one missing ad removal when the other is owned.</summary>
+        public IReadOnlyList<ShopProductData> WatermarkOffers
+        {
+            get
+            {
+                var list = new List<ShopProductData>();
+                if (AllPurchased) return list;
+                if (Owns(RemoveInterstitial)) list.Add(RemoveExportCard());
+                else if (Owns(RemoveExport)) list.Add(RemoveInterstitialCard());
+                else list.Add(NoAdsCard());
+                return list;
+            }
+        }
+
+        ShopProductData NoAdsCard()
+        {
+            return new ShopProductData(NoAds, "shop.product.no_ads.title", "shop.product.no_ads.description",
+                new[] { "shop.includes.no_export_ads", "shop.includes.no_interstitials", "shop.includes.no_watermark" },
+                s_prices[NoAds], "$12.98", 31, State(NoAds), false, true, default);
+        }
+
+        ShopProductData RemoveExportCard()
+        {
+            return new ShopProductData(RemoveExport, "shop.product.remove_export.title", "shop.product.remove_export.description",
+                new[] { "shop.includes.no_export_ads" }, s_prices[RemoveExport], null, 0, State(RemoveExport), false, false,
+                Owns(RemoveInterstitial) ? LocalizedText.FromKey("shop.last_step_watermark") : default);
+        }
+
+        ShopProductData RemoveInterstitialCard()
+        {
+            return new ShopProductData(RemoveInterstitial, "shop.product.remove_interstitial.title",
+                "shop.product.remove_interstitial.description", new[] { "shop.includes.no_interstitials" },
+                s_prices[RemoveInterstitial], null, 0, State(RemoveInterstitial), false, false,
+                Owns(RemoveExport) ? LocalizedText.FromKey("shop.last_step_watermark") : default);
         }
 
         ProductState State(string id)
@@ -318,6 +370,7 @@ namespace Ballverse.UI.Fakes
         public bool HasNoWatermark => _shop.AllPurchased;
         public bool WatermarkEnabled { get; private set; }
         public bool AutoSaveToGallery { get; private set; } = true;
+        public bool CopyCaptionOnShare { get; private set; } = true;
         public bool PrivacyOptionsAvailable => true;
         public LocalizedText TrackingStatus => LocalizedText.FromKey("settings.tracking.not_determined");
         public string AppVersion => Application.version;
@@ -337,6 +390,7 @@ namespace Ballverse.UI.Fakes
         public void SetBallPatterns(bool on) { BallPatterns = on; Notify(); }
         public void SetWatermarkEnabled(bool on) { WatermarkEnabled = on; Notify(); }
         public void SetAutoSaveToGallery(bool on) { AutoSaveToGallery = on; Notify(); }
+        public void SetCopyCaptionOnShare(bool on) { CopyCaptionOnShare = on; Notify(); }
         public void RestorePurchases() { _shop.RestorePurchases(); }
         public void OpenPrivacyOptions() { Notice?.Invoke(LocalizedText.FromKey("settings.privacy_options")); }
         public void RateApp() { }
@@ -347,6 +401,28 @@ namespace Ballverse.UI.Fakes
         {
             Storage = new StorageInfo(Storage.ProjectsBytes, Storage.ClipsBytes, Storage.VideosBytes, 0, Storage.WarnAboveBytes);
             Notice?.Invoke(LocalizedText.FromKey("storage.cache_cleared"));
+            Notify();
+        }
+    }
+
+    sealed class FakeQuestCelebration : FakeViewModelBase, IQuestCelebrationViewModel
+    {
+        bool _shown;
+
+        public QuestCelebrationData Pending { get; private set; }
+
+        /// <summary>First finished export completes the fake quest (run, generate, export).</summary>
+        public void Complete()
+        {
+            if (_shown || Pending != null) return;
+            Pending = new QuestCelebrationData("geometry_bounce", "mode.geometry_bounce.name");
+            Notify();
+        }
+
+        public void MarkShown()
+        {
+            _shown = true;
+            Pending = null;
             Notify();
         }
     }

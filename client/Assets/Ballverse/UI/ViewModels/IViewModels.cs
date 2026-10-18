@@ -28,6 +28,8 @@ namespace Ballverse.UI.ViewModels
         IAppSettingsViewModel Settings { get; }
         ITrackingConsentViewModel TrackingConsent { get; }
         ISystemAppearance SystemAppearance { get; }
+        /// <summary>First-video quest completion (may be null: no celebration).</summary>
+        IQuestCelebrationViewModel QuestCelebration { get; }
     }
 
     /// <summary>Device appearance and accessibility flags (native plugins; spec §4.5, §4.8).</summary>

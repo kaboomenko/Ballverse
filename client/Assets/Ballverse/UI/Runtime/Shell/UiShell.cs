@@ -1,6 +1,9 @@
 using System;
+using System.Globalization;
 using Ballverse.Core;
+using Ballverse.UI.Accessibility;
 using Ballverse.UI.Components;
+using Ballverse.UI.Gestures;
 using Ballverse.UI.Glass;
 using Ballverse.UI.Localization;
 using Ballverse.UI.Navigation;
@@ -44,7 +47,16 @@ namespace Ballverse.UI
         readonly IBallverseViewModels _vms;
         readonly UiContext _ctx;
         readonly ExportFlowController _exportFlow;
+        readonly QuestCelebrationController _questCelebration;
+        readonly ScreenReaderBridge _screenReader;
+        readonly EdgeSwipeBack _edgeSwipe = new EdgeSwipeBack();
         bool _disposed;
+
+        /// <summary>
+        /// iOS swipe from the left edge = back (spec §4.6). On by default on iOS only (Android has the system back
+        /// gesture, which arrives as the back button).
+        /// </summary>
+        public bool EdgeSwipeBackEnabled { get; set; } = Application.platform == RuntimePlatform.IPhonePlayer;
 
         public UiNavigator Navigator => _ctx.Navigator;
         public DialogHost Dialogs => _ctx.Dialogs;
@@ -60,17 +72,21 @@ namespace Ballverse.UI
             if (host == null) throw new ArgumentNullException(nameof(host));
             _vms = viewModels ?? throw new ArgumentNullException(nameof(viewModels));
 
+            // The shell container is a child of the document root, above app-root where the global sheets live, so
+            // UiAssets.Instantiate sizes it with inline styles (a USS class would not apply to it).
             var shell = UiAssets.Instantiate("AppShell");
             host.Add(shell);
             var appRoot = UiAssets.Q<VisualElement>(shell, "app-root");
             UiAssets.AddGlobalStyles(appRoot);
 
             var prefs = ReadPreferences();
-            var system = _vms.SystemAppearance?.Current ?? SystemAppearanceState.Unknown;
+            var system = SystemState();
             var appearance = ResolvedAppearance.Resolve(prefs, system);
             var localizer = new Localizer(tables ?? new ResourcesTableSource(), appearance.Language);
+            localizer.SetFormatCulture(DeviceFormatCulture());
 
             _ctx = new UiContext(localizer, _vms, appRoot);
+            _ctx.Binder.Bind(shell);
             _ctx.Glass = new GlassSurfaces(appRoot);
             _ctx.SafeArea = new SafeAreaController(appRoot);
             _ctx.Theme = new ThemeController(appRoot, _ctx.Glass);
@@ -83,11 +99,65 @@ namespace Ballverse.UI
             _ctx.Prepare(UiAssets.Q<VisualElement>(appRoot, "tabbar-host"));
 
             RegisterScreens(_ctx.Navigator);
-            _exportFlow = new ExportFlowController(_ctx);
+            _screenReader = new ScreenReaderBridge(_ctx, appRoot);
+            _ctx.Navigator.ScreenChanged += _ => _screenReader.MarkDirty();
+            _ctx.Sheets.Changed += _screenReader.MarkDirty;
+            _ctx.Dialogs.Changed += _screenReader.MarkDirty;
+            _ctx.Localizer.LanguageChanged += _screenReader.MarkDirty;
 
             if (_vms.Settings != null) _vms.Settings.Changed += OnAppearanceInputsChanged;
             if (_vms.SystemAppearance != null) _vms.SystemAppearance.Changed += OnAppearanceInputsChanged;
             _ctx.Navigator.Start();
+            _exportFlow = new ExportFlowController(_ctx);
+            _questCelebration = new QuestCelebrationController(_ctx, OpenMode);
+
+            appRoot.RegisterCallback<PointerDownEvent>(OnEdgeDown, TrickleDown.TrickleDown);
+            appRoot.RegisterCallback<PointerUpEvent>(OnEdgeUp, TrickleDown.TrickleDown);
+            appRoot.RegisterCallback<PointerCancelEvent>(e => _edgeSwipe.Cancel(e.pointerId), TrickleDown.TrickleDown);
+        }
+
+        void OnEdgeDown(PointerDownEvent e)
+        {
+            if (!EdgeSwipeBackEnabled) return;
+            var root = _ctx.AppRoot.worldBound;
+            _edgeSwipe.Down(e.pointerId, e.position.x - root.x, e.position.y - root.y, root.width);
+        }
+
+        void OnEdgeUp(PointerUpEvent e)
+        {
+            var root = _ctx.AppRoot.worldBound;
+            if (_edgeSwipe.Up(e.pointerId, e.position.x - root.x, e.position.y - root.y) && EdgeSwipeBackEnabled)
+                _ctx.Navigator.SwipeBack();
+        }
+
+        /// <summary>
+        /// What the device reports, with engine fallbacks when the native appearance plugin is missing or silent:
+        /// device language from <c>Application.systemLanguage</c>, font scale from Unity's accessibility settings.
+        /// </summary>
+        SystemAppearanceState SystemState()
+        {
+            return SystemAppearanceState.WithFallbacks(_vms.SystemAppearance?.Current, ResourcesTableSource.SystemLanguageTag(),
+                DeviceFontScale());
+        }
+
+        static float DeviceFontScale()
+        {
+#if BALLVERSE_ACCESSIBILITY
+            if (ScreenReaderBridge.PlatformSupported) return UnityEngine.Accessibility.AccessibilitySettings.fontScale;
+#endif
+            return 1f;
+        }
+
+        /// <summary>
+        /// Numbers and dates follow the device locale (spec §4.7), strings the interface language: the native BCP 47 tag
+        /// when the appearance plugin reports one, else the process culture, else the interface language's culture.
+        /// </summary>
+        CultureInfo DeviceFormatCulture()
+        {
+            var native = LanguageResolver.DeviceFormatCulture(_vms.SystemAppearance?.Current?.LanguageTag);
+            if (native != null) return native;
+            var current = CultureInfo.CurrentCulture;
+            return current != null && !string.IsNullOrEmpty(current.Name) ? current : null;
         }
 
         static void RegisterScreens(UiNavigator nav)
@@ -115,8 +185,10 @@ namespace Ballverse.UI
         void OnAppearanceInputsChanged()
         {
             if (_disposed) return;
-            var appearance = ResolvedAppearance.Resolve(ReadPreferences(), _vms.SystemAppearance?.Current ?? SystemAppearanceState.Unknown);
+            var system = SystemState();
+            var appearance = ResolvedAppearance.Resolve(ReadPreferences(), system);
             _ctx.Theme.Apply(appearance);
+            _ctx.Localizer.SetFormatCulture(DeviceFormatCulture());
             if (_ctx.Localizer.SetLanguage(appearance.Language)) _ctx.Binder.Refresh(_ctx.AppRoot);
         }
 
@@ -127,6 +199,8 @@ namespace Ballverse.UI
             if (BackButtonInput.WasPressedThisFrame()) _ctx.Navigator.Back();
             _ctx.SafeArea.Refresh();
             _ctx.Navigator.Tick(deltaTime);
+            _questCelebration.Tick();
+            _screenReader.Update(deltaTime);
         }
 
         /// <summary>Per-frame glass pass (from <see cref="BallverseUIRoot"/>.LateUpdate).</summary>
@@ -138,7 +212,10 @@ namespace Ballverse.UI
 
         public void OpenMode(string modeId)
         {
+            // From the export result (e.g. the quest celebration) the finished export is closed first.
+            if (_vms.Export != null && _vms.Export.Stage == ExportStage.Done) _vms.Export.NewVideo();
             _vms.Gallery?.OpenMode(modeId);
+            if (_ctx.Navigator.Current != ScreenId.Gallery) _ctx.Navigator.SelectTab(TabId.Modes);
             _ctx.Navigator.Push(ScreenId.Simulation);
         }
 
@@ -175,13 +252,23 @@ namespace Ballverse.UI
             _ctx.Theme.SetTier(tier);
         }
 
+        /// <summary>
+        /// Tears the shell down: dialogs and sheets are removed at once (their Closed callbacks run, so they unsubscribe
+        /// from view models), the visible screen is hidden (OnHide: view-model handlers and SetScreenActive(false)) and
+        /// every live screen is destroyed.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
             if (_vms.Settings != null) _vms.Settings.Changed -= OnAppearanceInputsChanged;
             if (_vms.SystemAppearance != null) _vms.SystemAppearance.Changed -= OnAppearanceInputsChanged;
+            _questCelebration.Dispose();
             _exportFlow.Dispose();
+            _ctx.Dialogs.CloseAll();
+            _ctx.Sheets.DismissAllImmediately();
+            _ctx.Navigator.Dispose();
+            _screenReader.Dispose();
             _ctx.Glass.Dispose();
         }
     }

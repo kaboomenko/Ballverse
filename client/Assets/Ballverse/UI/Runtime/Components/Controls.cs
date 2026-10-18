@@ -164,14 +164,18 @@ namespace Ballverse.UI.Components
             knob.AddToClassList("bv-switch__knob");
             knob.pickingMode = PickingMode.Ignore;
             Add(knob);
-            Tap.On(this, () =>
-            {
-                SetValueWithoutNotify(!_value);
-                ValueChanged?.Invoke(_value);
-            });
+            Tap.On(this, Toggle);
         }
 
         public bool Value => _value;
+
+        /// <summary>Flips the value and notifies (the whole settings row is a tap target, spec §4.4: 44 pt).</summary>
+        public void Toggle()
+        {
+            if (!enabledInHierarchy) return;
+            SetValueWithoutNotify(!_value);
+            ValueChanged?.Invoke(_value);
+        }
 
         public void SetValueWithoutNotify(bool value)
         {
@@ -219,6 +223,11 @@ namespace Ballverse.UI.Components
             _segments.Add(seg);
             Add(seg);
             return seg;
+        }
+
+        public void SetSegmentEnabled(int index, bool enabled)
+        {
+            if (index >= 0 && index < _segments.Count) _segments[index].SetEnabled(enabled);
         }
 
         public void SetLabel(int index, string text)

@@ -172,6 +172,8 @@ namespace Ballverse.UI.Screens
             _switch = new BvSwitch();
             _switch.ValueChanged += v => edit(_row.Id, ParamValue.Bool(v), true);
             Root.Add(_switch);
+            // The whole row is the 44 pt tap target (spec §4.4); the switch itself is smaller.
+            Tap.On(Root, _switch.Toggle, false);
             SetRow(row);
         }
 

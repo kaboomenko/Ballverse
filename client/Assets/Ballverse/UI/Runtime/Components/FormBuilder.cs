@@ -94,6 +94,8 @@ namespace Ballverse.UI.Components
             sw.SetValueWithoutNotify(value);
             sw.ValueChanged += v => changed?.Invoke(v);
             row.Add(sw);
+            // The whole row toggles: the switch alone (52×32) is below the 44 pt touch target (spec §4.4).
+            Tap.On(row, sw.Toggle, false);
             Container.Add(row);
             return sw;
         }
@@ -188,7 +190,12 @@ namespace Ballverse.UI.Components
             var field = new TextField { value = value ?? "", maxLength = maxLength, multiline = multiline, isDelayed = true };
             field.AddToClassList("bv-textfield");
             if (multiline) field.AddToClassList("bv-textfield--multiline");
-            field.RegisterValueChangedCallback(e => committed?.Invoke(e.newValue));
+            field.RegisterValueChangedCallback(e =>
+            {
+                // Change events bubble: only the field's own value counts, not its inner text element.
+                if (e.target != field) return;
+                committed?.Invoke(e.newValue);
+            });
             row.Add(field);
             Container.Add(row);
             return field;

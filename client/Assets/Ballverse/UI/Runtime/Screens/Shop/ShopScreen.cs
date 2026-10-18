@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Ballverse.UI.Components;
 using Ballverse.UI.Localization;
 using Ballverse.UI.Navigation;
@@ -63,17 +64,18 @@ namespace Ballverse.UI.Screens
             var restore = Q<VisualElement>("restore");
             restore.SetEnabled(!_vm.IsRestoring);
             restore.EnableInClassList("bv-btn--busy", _vm.IsRestoring);
-            ShopCards.Fill(Ctx, _products, _vm);
+            ShopCards.Fill(Ctx, _products, _vm, _vm.Products);
         }
     }
 
     /// <summary>Product cards shared by the shop tab and the offer sheet.</summary>
     public static class ShopCards
     {
-        public static void Fill(UiContext ctx, VisualElement container, IShopViewModel vm)
+        public static void Fill(UiContext ctx, VisualElement container, IShopViewModel vm, IReadOnlyList<ShopProductData> products)
         {
             container.Clear();
-            foreach (var p in vm.Products) container.Add(Build(ctx, vm, p));
+            if (products == null) return;
+            foreach (var p in products) container.Add(Build(ctx, vm, p));
         }
 
         public static VisualElement Build(UiContext ctx, IShopViewModel vm, ShopProductData p)
@@ -87,14 +89,6 @@ namespace Ballverse.UI.Screens
             var head = new VisualElement();
             head.AddToClassList("bv-product__head");
             head.Add(ctx.KeyLabel(p.TitleKey, "bv-product__title"));
-            if (p.SavingsPercent > 0)
-            {
-                var badge = new VisualElement();
-                badge.AddToClassList("bv-badge");
-                badge.AddToClassList("bv-badge--accent");
-                badge.Add(UiContext.TextLabel(ctx.Format("shop.savings", p.SavingsPercent), "bv-badge__label"));
-                head.Add(badge);
-            }
             card.Add(head);
             if (!string.IsNullOrEmpty(p.DescriptionKey)) card.Add(ctx.KeyLabel(p.DescriptionKey, "bv-product__description"));
             var includes = new VisualElement();
@@ -146,15 +140,20 @@ namespace Ballverse.UI.Screens
                     break;
             }
             card.Add(buy);
+            // Comparison with the separate purchases only ("вместо $12,98"): no sale badge, struck price or "discount"
+            // wording (spec §5.1, §5.0.3; EU Omnibus).
             if (!string.IsNullOrEmpty(p.CompareAtText) && p.State == ProductState.Available)
                 card.Add(UiContext.TextLabel(ctx.Format("shop.instead_of", p.CompareAtText), "bv-product__compare"));
+            if (p.SavingsPercent > 0 && p.State == ProductState.Available)
+                card.Add(UiContext.TextLabel(ctx.Format("shop.savings", p.SavingsPercent), "bv-product__compare"));
             return card;
         }
     }
 
     /// <summary>
-    /// Offer sheet opened from the locked watermark row or the upsell line (spec §3.10, §5.2): the current storefront
-    /// offers on solid cards. In release 1 the watermark goes with the No Ads Bundle (or both ad removals).
+    /// Offer sheet opened from the locked watermark row or the upsell line (spec §3.10, §5.0.3): only the offers that
+    /// remove the watermark (<see cref="IShopViewModel.WatermarkOffers"/>: the No Ads Bundle, or the missing ad removal),
+    /// on solid cards. It closes itself once the watermark can be removed.
     /// </summary>
     public static class ShopOfferSheet
     {
@@ -188,13 +187,14 @@ namespace Ballverse.UI.Screens
             sheet.Content.Add(restore);
             refresh = () =>
             {
-                ShopCards.Fill(ctx, list, vm);
-                if (vm.AllPurchased) sheet.Close();
+                var offers = vm.WatermarkOffers;
+                ShopCards.Fill(ctx, list, vm, offers);
+                if (offers == null || offers.Count == 0) sheet.Close();
             };
             vm.Changed += refresh;
             vm.Notice += notice;
             vm.SetScreenActive(true);
-            ShopCards.Fill(ctx, list, vm);
+            ShopCards.Fill(ctx, list, vm, vm.WatermarkOffers);
             return sheet.Show();
         }
     }

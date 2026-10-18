@@ -76,8 +76,9 @@
     flex-basis: 0;
 }
 
+/* Smaller label and padding; the hit area stays 44 pt (spec §4.4). */
 .bv-btn--small {
-    min-height: 36px;
+    min-height: var(--touch);
     padding-left: var(--space-3);
     padding-right: var(--space-3);
 }
@@ -102,9 +103,15 @@
     background-color: var(--color-control);
 }
 
+/* Small icon, full 44 pt hit area (spec §4.4). */
 .bv-icon-btn--small {
-    width: 36px;
-    height: 36px;
+    width: var(--touch);
+    height: var(--touch);
+}
+
+.bv-icon-btn--small .bv-icon {
+    width: var(--icon-s);
+    height: var(--icon-s);
 }
 
 .bv-icon-btn--on-media {
@@ -119,6 +126,9 @@
     color: var(--color-accent);
     font-size: var(--font-s);
     padding: var(--space-2);
+    min-height: var(--touch);
+    min-width: var(--touch);
+    -unity-text-align: middle-center;
 }
 
 /* ---------- Chips and segmented control ---------- */
@@ -139,12 +149,12 @@
 .bv-chip {
     flex-direction: row;
     align-items: center;
-    min-height: 36px;
+    min-height: var(--touch);
+    min-width: var(--touch);
+    justify-content: center;
     padding-left: var(--space-3);
     padding-right: var(--space-3);
     margin-right: var(--space-2);
-    margin-top: var(--space-1);
-    margin-bottom: var(--space-1);
     border-radius: var(--radius-pill);
     background-color: var(--color-control);
 }
@@ -178,7 +188,7 @@
 
 .bv-segmented {
     flex-direction: row;
-    padding: 3px;
+    padding: 2px;
     border-radius: var(--radius-pill);
     background-color: var(--color-control);
 }
@@ -187,7 +197,7 @@
     flex-grow: 1;
     flex-basis: 0;
     flex-direction: row;
-    min-height: 38px;
+    min-height: var(--touch);
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-pill);
@@ -492,9 +502,9 @@
 }
 
 .bv-swatch {
-    width: 36px;
-    height: 36px;
-    border-radius: 18px;
+    width: var(--touch);
+    height: var(--touch);
+    border-radius: 22px;
     margin-right: var(--space-2);
     margin-bottom: var(--space-2);
     border-width: 2px;
@@ -524,9 +534,9 @@
 }
 
 .bv-color-dot--removable {
-    width: 36px;
-    height: 36px;
-    border-radius: 18px;
+    width: var(--touch);
+    height: var(--touch);
+    border-radius: 22px;
     margin-left: 0;
     margin-right: var(--space-2);
     margin-bottom: var(--space-2);

@@ -409,7 +409,7 @@
 .bv-quest__header {
     flex-direction: row;
     align-items: center;
-    min-height: 28px;
+    min-height: var(--touch);
 }
 
 .bv-quest__title {

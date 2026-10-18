@@ -20,17 +20,21 @@ namespace Ballverse.UI.Screens
         readonly UiContext _ctx;
         readonly IExportViewModel _vm;
         ExportStage _shown = ExportStage.Idle;
-        BottomSheet _settingsSheet;
-        bool _closingSheet;
+        /// <summary>The settings sheet; a replaced sheet's late Closed callback cannot clear or close its successor.</summary>
+        readonly CurrentRef<BottomSheet> _settingsSheet = new CurrentRef<BottomSheet>();
         DialogHandle _gate;
         bool _gateWaiting;
         DialogHandle _failure;
+        DialogHandle _resume;
 
         public ExportFlowController(UiContext ctx)
         {
             _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
             _vm = ctx.ViewModels.Export;
-            if (_vm != null) _vm.Changed += OnChanged;
+            if (_vm == null) return;
+            _vm.Changed += OnChanged;
+            // The resume offer is a launch-time state: present it if the view model starts there.
+            if (_vm.Stage != ExportStage.Idle) OnChanged();
         }
 
         void OnChanged()
@@ -42,6 +46,7 @@ namespace Ballverse.UI.Screens
             if (stage != ExportStage.Settings) CloseSettings();
             if (stage != ExportStage.Gate && stage != ExportStage.WaitingForAd) CloseGate();
             if (stage != ExportStage.Failed) CloseFailure();
+            if (stage != ExportStage.ResumeOffer) CloseResume();
 
             switch (stage)
             {
@@ -63,6 +68,9 @@ namespace Ballverse.UI.Screens
                     if (_ctx.Navigator.Current == ScreenId.ExportProgress) _ctx.Navigator.Pop();
                     if (stageChanged || _failure == null) ShowFailure();
                     break;
+                case ExportStage.ResumeOffer:
+                    if (_resume == null || !_resume.IsOpen) ShowResume();
+                    break;
                 case ExportStage.Idle:
                     if (_ctx.Navigator.Current == ScreenId.ExportProgress || _ctx.Navigator.Current == ScreenId.ExportDone)
                         _ctx.Navigator.Pop();
@@ -72,26 +80,29 @@ namespace Ballverse.UI.Screens
 
         void ShowSettings()
         {
-            if (_settingsSheet == null || !_settingsSheet.IsOpen)
+            var current = _settingsSheet.Value;
+            if (current != null && current.IsActive)
             {
-                _settingsSheet = new BottomSheet(_ctx, new SheetOptions
+                BuildSettings(current.Content);
+                return;
+            }
+            _settingsSheet.Release(current);
+            BottomSheet sheet = null;
+            sheet = new BottomSheet(_ctx, new SheetOptions
+            {
+                TitleKey = "export.title",
+                Detents = SheetDetents.FitContent,
+                ScrimOpacity = 0.35f,
+                Closed = () =>
                 {
-                    TitleKey = "export.title",
-                    Detents = SheetDetents.FitContent,
-                    ScrimOpacity = 0.35f,
-                    Closed = () =>
-                    {
-                        _settingsSheet = null;
-                        if (!_closingSheet && _vm.Stage == ExportStage.Settings) _vm.Close();
-                    },
-                });
-                BuildSettings(_settingsSheet.Content);
-                _settingsSheet.Show();
-            }
-            else
-            {
-                BuildSettings(_settingsSheet.Content);
-            }
+                    // Only a sheet the user dismissed (swipe, scrim, back) is still current here; one closed by a
+                    // stage change was released before its close animation.
+                    if (_settingsSheet.Release(sheet) && _vm.Stage == ExportStage.Settings) _vm.Close();
+                },
+            });
+            _settingsSheet.Set(sheet);
+            BuildSettings(sheet.Content);
+            sheet.Show();
         }
 
         void BuildSettings(VisualElement content)
@@ -124,7 +135,7 @@ namespace Ballverse.UI.Screens
                 }, true);
             }
             form.Note(_ctx.Format("export.estimate", DisplayFormat.Bytes(_vm.EstimatedBytes, _ctx.Localizer),
-                DisplayFormat.Remaining(_vm.EstimatedMs, _ctx.Localizer)));
+                DisplayFormat.Duration(_vm.EstimatedMs, _ctx.Localizer)));
             if (!_vm.EnoughSpace)
             {
                 form.NoteKey("export.low_space", "bv-note bv-note--warning");
@@ -140,10 +151,10 @@ namespace Ballverse.UI.Screens
 
         void CloseSettings()
         {
-            if (_settingsSheet == null) return;
-            _closingSheet = true;
-            _settingsSheet.Close();
-            _closingSheet = false;
+            var sheet = _settingsSheet.Value;
+            if (sheet == null) return;
+            _settingsSheet.Release(sheet);
+            sheet.Close();
         }
 
         void ShowGate(bool waiting)
@@ -198,6 +209,30 @@ namespace Ballverse.UI.Screens
                 spec.Buttons.Add(DialogButton.Key("export.failed.fallback", DialogButtonStyle.Secondary, () => _vm.RetryFailed(true)));
             spec.Buttons.Add(DialogButton.Key("common.close", DialogButtonStyle.Plain, () => _vm.Close()));
             _failure = _ctx.Dialogs.Show(spec);
+        }
+
+        /// <summary>Spec §3.8 "Приложение выгружено системой": continue from the last finished segment, no new ad.</summary>
+        void ShowResume()
+        {
+            CloseResume();
+            int percent = (int)Math.Floor(Math.Max(0f, Math.Min(1f, _vm.InterruptedProgress)) * 100f);
+            var spec = new DialogSpec
+            {
+                Title = LocalizedText.FromKey("export.resume.title"),
+                Body = LocalizedText.FromKey("export.resume.body", percent),
+                Icon = IconKind.Film,
+                // An explicit choice: dismissing by back would silently lose the finished segments.
+                Cancellable = false,
+            };
+            spec.Buttons.Add(DialogButton.Key("export.resume.continue", DialogButtonStyle.Primary, () => _vm.ResumeInterrupted()));
+            spec.Buttons.Add(DialogButton.Key("export.resume.discard", DialogButtonStyle.Secondary, () => _vm.DiscardInterrupted()));
+            _resume = _ctx.Dialogs.Show(spec);
+        }
+
+        void CloseResume()
+        {
+            _resume?.Close();
+            _resume = null;
         }
 
         void CloseFailure()

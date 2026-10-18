@@ -7,6 +7,11 @@ namespace Ballverse.UI.Localization
     /// Localizes text authored in UXML. Convention: a text attribute holding <c>#key</c> is a localization key, e.g.
     /// <c>&lt;ui:Label text="#gallery.title" /&gt;</c> — layouts contain keys only, never user-visible literals.
     /// The key is remembered per element so a runtime language switch re-applies it.
+    /// <para>
+    /// <see cref="Bind"/> runs only on freshly instantiated UXML (<see cref="UiContext.InstantiateLayout"/>), never on
+    /// trees that already hold user content: hashtags such as "#satisfying" are normal user text (spec §3.11). It also
+    /// never descends into text fields, whose inner text element holds the user's input.
+    /// </para>
     /// </summary>
     public sealed class LocalizedTreeBinder
     {
@@ -32,7 +37,16 @@ namespace Ballverse.UI.Localization
         public void Bind(VisualElement root)
         {
             if (root == null) return;
-            root.Query<TextElement>().ForEach(Apply);
+            BindRecursive(root);
+        }
+
+        void BindRecursive(VisualElement element)
+        {
+            if (element is TextElement text) Apply(text);
+            // A text field's inner text element shows the user's input; it is never a key.
+            if (element is TextField) return;
+            var children = element.hierarchy;
+            for (int i = 0; i < children.childCount; i++) BindRecursive(children[i]);
         }
 
         /// <summary>Re-applies remembered keys under <paramref name="root"/> (after a language switch).</summary>

@@ -19,6 +19,11 @@
             "name": "com.unity.inputsystem",
             "expression": "1.0.0",
             "define": "BALLVERSE_INPUT_SYSTEM"
+        },
+        {
+            "name": "com.unity.modules.accessibility",
+            "expression": "1.0.0",
+            "define": "BALLVERSE_ACCESSIBILITY"
         }
     ],
     "noEngineReferences": false

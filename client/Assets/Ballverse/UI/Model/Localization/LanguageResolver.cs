@@ -43,6 +43,31 @@ namespace Ballverse.UI.Localization
             return English;
         }
 
+        /// <summary>
+        /// Culture for numbers and dates from the device locale (spec §4.7): a BCP 47 tag such as "en-GB" or "de-DE"
+        /// (a bare language such as "ru" maps to its default region). Returns null for an empty, invariant or unknown tag
+        /// (the caller then uses the interface language's culture).
+        /// </summary>
+        public static System.Globalization.CultureInfo DeviceFormatCulture(string deviceLocaleTag)
+        {
+            if (string.IsNullOrEmpty(deviceLocaleTag)) return null;
+            string tag = deviceLocaleTag.Replace('_', '-');
+            try
+            {
+                var culture = System.Globalization.CultureInfo.CreateSpecificCulture(tag);
+                if (culture == null || string.IsNullOrEmpty(culture.Name)) return null;
+                return culture;
+            }
+            catch (System.Globalization.CultureNotFoundException)
+            {
+                return null;
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+        }
+
         /// <summary>Culture used for numbers, dates and units of a shipped language.</summary>
         public static System.Globalization.CultureInfo CultureFor(string language)
         {

@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using Ballverse.Core;
 using Ballverse.Core.Params;
+using Ballverse.Core.Projects;
 using Ballverse.UI.Components;
 using Ballverse.UI.Format;
 using Ballverse.UI.Layout;
 using Ballverse.UI.Params;
+using Ballverse.UI.Studio;
 using Ballverse.UI.ViewModels;
 using UnityEngine.UIElements;
 
@@ -58,6 +60,23 @@ namespace Ballverse.UI.Screens
             return ParamValueFormatter.FormatWithUnit(v, 0.1, "s", Ctx.Localizer);
         }
 
+        protected static void Show(VisualElement element, bool visible)
+        {
+            if (element != null) element.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
+        /// <summary>"Фон полей (Fit)" row: blurred copy, colour, theme colour (spec §3.3).</summary>
+        protected SegmentedControl FitBackgroundRow(FormBuilder form, Action<int> changed)
+        {
+            return form.Segmented("studio.fit_bg",
+                new[] { Ctx.L("studio.fit_bg.blur"), Ctx.L("studio.fit_bg.color"), Ctx.L("studio.fit_bg.theme") }, 0, changed);
+        }
+
+        protected string Clock(long us)
+        {
+            return DisplayFormat.Clock(us, true);
+        }
+
         protected static int IndexOf<T>(IReadOnlyList<T> list, T value)
         {
             for (int i = 0; i < list.Count; i++)
@@ -74,7 +93,12 @@ namespace Ballverse.UI.Screens
         SliderRow _proportion;
         SliderRow _pipSize;
         SegmentedControl _pipShape;
+        SliderRow _pipBorder;
+        ColorSwatches _pipBorderColor;
+        BvSwitch _pipShadow;
+        Label _pipNote;
         SliderRow _divider;
+        ColorSwatches _dividerColor;
         BvSwitch _glassDivider;
         SliderRow _radius;
         SliderRow _padding;
@@ -91,14 +115,20 @@ namespace Ballverse.UI.Screens
             for (int i = 0; i < labels.Length; i++) labels[i] = Ctx.L("studio.layout." + s_layouts[i].ToString().ToLowerInvariant());
             _layout = Form.Segmented("studio.layout.type", labels, 0, i => t.SetLayout(s_layouts[i]));
             _swap = Form.Toggle("studio.layout.swap", false, v => t.SetSwapped(v));
-            _proportion = Form.Slider("studio.layout.proportion", MagnetSnap.ProportionMin, MagnetSnap.ProportionMax, 1, 50, Percent,
-                (v, final) => t.SetProportion((int)Math.Round(v)));
-            _proportion.Slider.Snap = v => MagnetSnap.SnapProportion((int)Math.Round(v));
+            // 1% steps; Core RatioMagnets turns 33 / 50 / 67 into exactly 1/3, 1/2, 2/3 and keeps every step reachable.
+            _proportion = Form.Slider("studio.layout.proportion", StudioValues.RatioMinPercent, StudioValues.RatioMaxPercent, 1, 50,
+                Percent, (v, final) => t.SetRatio(StudioValues.RatioFromPercent(v)));
             _pipSize = Form.Slider("studio.layout.pip_size", 20, 60, 1, 35, Percent, (v, final) => t.SetPipSize((int)Math.Round(v)));
             _pipShape = Form.Segmented("studio.layout.pip_shape",
                 new[] { Ctx.L("studio.layout.pip_rounded"), Ctx.L("studio.layout.pip_circle") }, 0,
-                i => t.SetPipShape(i == 0 ? PipShape.RoundedRect : PipShape.Circle));
+                i => t.SetPipShape(StudioValues.At(StudioValues.PipShapeOrder, i)));
+            _pipBorder = Form.Slider("studio.layout.pip_border", 0, ProjectLimits.MaxPipBorderPx, 1, 0, Px,
+                (v, final) => t.SetPipBorder((int)Math.Round(v)));
+            _pipBorderColor = Form.Colors("studio.layout.pip_border_color", t.PipBorderColor, c => t.SetPipBorderColor(c));
+            _pipShadow = Form.Toggle("studio.layout.pip_shadow", true, v => t.SetPipShadow(v));
+            _pipNote = Form.NoteKey("studio.layout.pip_drag_note");
             _divider = Form.Slider("studio.layout.divider", 0, 16, 1, 0, Px, (v, final) => t.SetDivider((int)Math.Round(v)));
+            _dividerColor = Form.Colors("studio.layout.divider_color", t.DividerColor, c => t.SetDividerColor(c));
             _glassDivider = Form.Toggle("studio.layout.glass_divider", false, v => t.SetGlassDivider(v));
             _radius = Form.Slider("studio.layout.corner_radius", 0, 48, 1, 0, Px, (v, final) => t.SetCornerRadius((int)Math.Round(v)));
             _padding = Form.Slider("studio.layout.padding", 0, 48, 1, 0, Px, (v, final) => t.SetPadding((int)Math.Round(v)));
@@ -112,17 +142,26 @@ namespace Ballverse.UI.Screens
             bool split = t.Layout == LayoutType.L1 || t.Layout == LayoutType.L2;
             bool pip = t.Layout == LayoutType.L3 || t.Layout == LayoutType.L5;
             _swap.SetValueWithoutNotify(t.Swapped);
-            _swap.parent.style.display = split || pip ? DisplayStyle.Flex : DisplayStyle.None;
-            _proportion.SetValueWithoutNotify(t.ProportionPercent);
-            _proportion.Root.style.display = split ? DisplayStyle.Flex : DisplayStyle.None;
+            Show(_swap.parent, split || pip);
+            _proportion.SetValueWithoutNotify(StudioValues.PercentFromRatio(t.Ratio));
+            Show(_proportion.Root, split);
             _pipSize.SetValueWithoutNotify(t.PipSizePercent);
-            _pipSize.Root.style.display = pip ? DisplayStyle.Flex : DisplayStyle.None;
-            _pipShape.SetSelectedWithoutNotify(t.PipShape == PipShape.Circle ? 1 : 0);
-            _pipShape.parent.style.display = pip ? DisplayStyle.Flex : DisplayStyle.None;
+            Show(_pipSize.Root, pip);
+            _pipShape.SetSelectedWithoutNotify(StudioValues.IndexIn(StudioValues.PipShapeOrder, t.PipShape));
+            Show(_pipShape.parent, pip);
+            _pipBorder.SetValueWithoutNotify(t.PipBorderPx);
+            Show(_pipBorder.Root, pip);
+            _pipBorderColor.SetSelectedWithoutNotify(t.PipBorderColor);
+            Show(_pipBorderColor.parent, pip && t.PipBorderPx > 0);
+            _pipShadow.SetValueWithoutNotify(t.PipShadow);
+            Show(_pipShadow.parent, pip);
+            Show(_pipNote, pip);
             _divider.SetValueWithoutNotify(t.DividerPx);
-            _divider.Root.style.display = split ? DisplayStyle.Flex : DisplayStyle.None;
+            Show(_divider.Root, split);
+            _dividerColor.SetSelectedWithoutNotify(t.DividerColor);
+            Show(_dividerColor.parent, split && t.DividerPx > 0 && !t.GlassDivider);
             _glassDivider.SetValueWithoutNotify(t.GlassDivider);
-            _glassDivider.parent.style.display = split ? DisplayStyle.Flex : DisplayStyle.None;
+            Show(_glassDivider.parent, split);
             _radius.SetValueWithoutNotify(t.CornerRadiusPx);
             _padding.SetValueWithoutNotify(t.PaddingPx);
             _zones.SetValueWithoutNotify(t.PlatformZones);
@@ -135,9 +174,12 @@ namespace Ballverse.UI.Screens
         Label _importLabel;
         BvSwitch _noVideo;
         SegmentedControl _fill;
+        SegmentedControl _fitBackground;
+        ColorSwatches _fitColor;
         BvSwitch _mirror;
         SliderRow _volume;
         BvSwitch _muted;
+        ChipRow _afterEnd;
         VisualElement _editRows;
 
         public VideoToolPanel(UiContext ctx, IStudioViewModel vm) : base(ctx, vm) { }
@@ -155,10 +197,18 @@ namespace Ballverse.UI.Screens
             var edit = new FormBuilder(Ctx, _editRows);
             _fill = edit.Segmented("studio.video.fill", new[] { Ctx.L("studio.video.fill_cover"), Ctx.L("studio.video.fill_fit") }, 0,
                 i => t.SetFill(i == 0 ? SlotFill.Cover : SlotFill.Fit));
+            _fitBackground = FitBackgroundRow(edit, i => t.SetFitBackground(StudioValues.At(StudioValues.FitBackgroundOrder, i)));
+            _fitColor = edit.Colors("studio.fit_bg.color_pick", t.FitBackgroundColor, c => t.SetFitBackgroundColor(c));
+            edit.NoteKey("studio.video.gesture_note");
             edit.Button("studio.video.rotate", IconKind.Rotate, () => t.Rotate90());
             _mirror = edit.Toggle("studio.video.mirror", false, v => t.SetMirrored(v));
             _volume = edit.Slider("studio.video.volume", 0, 200, 1, 100, Percent, (v, final) => t.SetVolume((int)Math.Round(v)));
             _muted = edit.Toggle("studio.video.mute", false, v => t.SetMuted(v));
+            var afterLabels = new string[StudioValues.VideoAfterEndOrder.Length];
+            for (int i = 0; i < afterLabels.Length; i++)
+                afterLabels[i] = Ctx.L("studio.video.after." + StudioValues.VideoAfterEndOrder[i].ToString().ToLowerInvariant());
+            _afterEnd = edit.Chips("studio.video.after_end", afterLabels, 0,
+                i => t.SetAfterEnd(StudioValues.At(StudioValues.VideoAfterEndOrder, i)));
             edit.Section("studio.video.nudge");
             edit.Button("studio.video.nudge_back", IconKind.Minus, () => Vm.NudgeVideo(-1));
             edit.Button("studio.video.nudge_forward", IconKind.Plus, () => Vm.NudgeVideo(1));
@@ -169,11 +219,16 @@ namespace Ballverse.UI.Screens
             var t = Vm.Video;
             Ctx.Binder.SetKey(_importLabel, t.HasVideo ? "studio.video.replace" : "studio.video.import");
             _noVideo.SetValueWithoutNotify(t.NoVideo);
-            _editRows.style.display = t.HasVideo && !t.NoVideo ? DisplayStyle.Flex : DisplayStyle.None;
+            Show(_editRows, t.HasVideo && !t.NoVideo);
             _fill.SetSelectedWithoutNotify(t.Fill == SlotFill.Fit ? 1 : 0);
+            _fitBackground.SetSelectedWithoutNotify(StudioValues.IndexIn(StudioValues.FitBackgroundOrder, t.FitBackground));
+            Show(_fitBackground.parent, t.Fill == SlotFill.Fit);
+            _fitColor.SetSelectedWithoutNotify(t.FitBackgroundColor);
+            Show(_fitColor.parent, t.Fill == SlotFill.Fit && t.FitBackground == FitBackgroundKind.Color);
             _mirror.SetValueWithoutNotify(t.Mirrored);
             _volume.SetValueWithoutNotify(t.VolumePercent);
             _muted.SetValueWithoutNotify(t.Muted);
+            _afterEnd.SetSelectedWithoutNotify(StudioValues.IndexIn(StudioValues.VideoAfterEndOrder, t.AfterEnd));
         }
     }
 
@@ -181,10 +236,16 @@ namespace Ballverse.UI.Screens
     {
         static readonly SimAfterEnd[] s_after = { SimAfterEnd.Freeze, SimAfterEnd.SlowMoReplay, SimAfterEnd.Loop, SimAfterEnd.ContinueSim };
         SliderRow _speed;
+        BvSwitch _slowMoOn;
         SliderRow _slowMo;
         SegmentedControl _slowFactor;
         ChipRow _after;
+        SegmentedControl _fill;
+        SegmentedControl _fitBackground;
+        ColorSwatches _fitColor;
         ChipRow _pack;
+        SegmentedControl _duration;
+        SliderRow _manualDuration;
         readonly Action _regenerate;
 
         public SimToolPanel(UiContext ctx, IStudioViewModel vm, Action regenerate) : base(ctx, vm)
@@ -202,10 +263,14 @@ namespace Ballverse.UI.Screens
                 {
                     if (final) t.SetSpeed((float)v);
                 });
-            _slowMo = Form.Slider("studio.sim.slowmo", 0, 3, 0.5, 0, v => v <= 0 ? Ctx.L("common.off") : Seconds(v),
+            // Spec §3.4: the finale slow-mo is off or 1–3 s (Core ClipTiming rejects anything in between).
+            _slowMoOn = Form.Toggle("studio.sim.slowmo", false,
+                on => t.SetSlowMo(StudioValues.SlowMoSeconds(on, _slowMo.Slider.Value), t.SlowMoFactor));
+            _slowMo = Form.Slider("studio.sim.slowmo_length", StudioValues.SlowMoMinSeconds, StudioValues.SlowMoMaxSeconds,
+                StudioValues.SlowMoStepSeconds, StudioValues.SlowMoMinSeconds, Seconds,
                 (v, final) =>
                 {
-                    if (final) t.SetSlowMo((float)v, t.SlowMoFactor);
+                    if (final) t.SetSlowMo(StudioValues.SlowMoSeconds(true, v), t.SlowMoFactor);
                 });
             _slowFactor = Form.Segmented("studio.sim.slowmo_factor",
                 new[] { DisplayFormat.Multiplier(0.25, Ctx.Localizer), DisplayFormat.Multiplier(0.5, Ctx.Localizer) }, 1,
@@ -213,9 +278,23 @@ namespace Ballverse.UI.Screens
             var afterLabels = new string[s_after.Length];
             for (int i = 0; i < s_after.Length; i++) afterLabels[i] = Ctx.L("studio.sim.after." + s_after[i].ToString().ToLowerInvariant());
             _after = Form.Chips("studio.sim.after_end", afterLabels, 0, i => t.SetAfterEnd(s_after[i]));
+            _fill = Form.Segmented("studio.sim.fill", new[] { Ctx.L("studio.video.fill_cover"), Ctx.L("studio.video.fill_fit") }, 0,
+                i => t.SetFill(i == 0 ? SlotFill.Cover : SlotFill.Fit));
+            _fitBackground = FitBackgroundRow(Form, i => t.SetFitBackground(StudioValues.At(StudioValues.FitBackgroundOrder, i)));
+            _fitColor = Form.Colors("studio.fit_bg.color_pick", t.FitBackgroundColor, c => t.SetFitBackgroundColor(c));
             var packs = new string[t.SoundPacks.Count];
             for (int i = 0; i < packs.Length; i++) packs[i] = Ctx.L("params.soundPack." + t.SoundPacks[i]);
             _pack = Form.Chips("studio.sim.sound_pack", packs, 0, i => t.SetSoundPack(Vm.Sim.SoundPacks[i]));
+
+            Form.Section("studio.reel.title");
+            _duration = Form.Segmented("studio.reel.duration",
+                new[] { Ctx.L("studio.reel.duration_auto"), Ctx.L("studio.reel.duration_video"), Ctx.L("studio.reel.duration_manual") }, 0,
+                i => Vm.SetDurationMode(StudioValues.At(StudioValues.DurationModeOrder, i)));
+            _manualDuration = Form.Slider("studio.reel.manual_length", 1, SimConstants.MaxDurationSeconds, 1, 15, Seconds,
+                (v, final) =>
+                {
+                    if (final) Vm.SetManualDuration((long)Math.Round(v) * TimelineGeometry.MicrosPerSecond);
+                });
             Form.Button("studio.sim.regenerate", IconKind.Dice, () =>
             {
                 t.Regenerate();
@@ -227,11 +306,24 @@ namespace Ballverse.UI.Screens
         {
             var t = Vm.Sim;
             _speed.SetValueWithoutNotify(t.Speed);
-            _slowMo.SetValueWithoutNotify(t.SlowMoSeconds);
+            bool slowMo = t.SlowMoSeconds > 0f;
+            _slowMoOn.SetValueWithoutNotify(slowMo);
+            if (slowMo) _slowMo.SetValueWithoutNotify(t.SlowMoSeconds);
+            Show(_slowMo.Root, slowMo);
             _slowFactor.SetSelectedWithoutNotify(t.SlowMoFactor <= 0.3f ? 0 : 1);
-            _slowFactor.parent.style.display = t.SlowMoSeconds > 0 ? DisplayStyle.Flex : DisplayStyle.None;
+            Show(_slowFactor.parent, slowMo);
             _after.SetSelectedWithoutNotify(Array.IndexOf(s_after, t.AfterEnd));
+            _fill.SetSelectedWithoutNotify(t.Fill == SlotFill.Fit ? 1 : 0);
+            _fitBackground.SetSelectedWithoutNotify(StudioValues.IndexIn(StudioValues.FitBackgroundOrder, t.FitBackground));
+            Show(_fitBackground.parent, t.Fill == SlotFill.Fit);
+            _fitColor.SetSelectedWithoutNotify(t.FitBackgroundColor);
+            Show(_fitColor.parent, t.Fill == SlotFill.Fit && t.FitBackground == FitBackgroundKind.Color);
             _pack.SetSelectedWithoutNotify(IndexOf(t.SoundPacks, t.SoundPack));
+            _duration.SetSelectedWithoutNotify(StudioValues.IndexIn(StudioValues.DurationModeOrder, Vm.DurationMode));
+            // "= V" needs a user video.
+            _duration.SetSegmentEnabled(1, Vm.Video.HasVideo && !Vm.Video.NoVideo);
+            _manualDuration.SetValueWithoutNotify(Math.Max(1, Vm.ManualDurationUs / TimelineGeometry.MicrosPerSecond));
+            Show(_manualDuration.Root, Vm.DurationMode == DurationMode.Manual);
         }
     }
 
@@ -239,12 +331,29 @@ namespace Ballverse.UI.Screens
     {
         int _builtLayers = -1;
         int _builtSelected = -2;
+        long _builtStart = -1;
+        long _builtEnd = -1;
 
         public TextToolPanel(UiContext ctx, IStudioViewModel vm) : base(ctx, vm) { }
 
         public override string TitleKey => "studio.tool.text";
 
-        public override bool NeedsRebuild => Vm.Text.Layers.Count != _builtLayers || Vm.Text.SelectedIndex != _builtSelected;
+        public override bool NeedsRebuild
+        {
+            get
+            {
+                var t = Vm.Text;
+                if (t.Layers.Count != _builtLayers || t.SelectedIndex != _builtSelected) return true;
+                // Timing changes come from the timeline drag; the timing line follows them.
+                var sel = Selected(t);
+                return sel != null && (sel.StartUs != _builtStart || sel.EndUs != _builtEnd);
+            }
+        }
+
+        static TextLayerData Selected(IStudioTextTool t)
+        {
+            return t.SelectedIndex >= 0 && t.SelectedIndex < t.Layers.Count ? t.Layers[t.SelectedIndex] : null;
+        }
 
         protected override void OnBuild()
         {
@@ -274,8 +383,10 @@ namespace Ballverse.UI.Screens
                 }
             }
 
-            if (t.SelectedIndex < 0 || t.SelectedIndex >= t.Layers.Count) return;
-            var sel = t.Layers[t.SelectedIndex];
+            var sel = Selected(t);
+            _builtStart = sel?.StartUs ?? -1;
+            _builtEnd = sel?.EndUs ?? -1;
+            if (sel == null) return;
             int s = sel.Index;
             Form.Section("studio.text.style");
             Form.Text("studio.text.content", sel.Text, 200, true, v => t.SetText(s, v));
@@ -289,10 +400,13 @@ namespace Ballverse.UI.Screens
             {
                 if (final) t.SetOutline(s, (int)Math.Round(v));
             });
+            Form.Toggle("studio.text.shadow", sel.Shadow, v => t.SetShadow(s, v));
+            // Segments map to Core enums by name (StudioValues), never by casting the index.
             Form.Segmented("studio.text.plate",
                 new[] { Ctx.L("studio.text.plate_none"), Ctx.L("studio.text.plate_solid"), Ctx.L("studio.text.plate_glass") },
-                (int)sel.Plate, i => t.SetPlate(s, (TextPlate)i));
-            Form.Segmented("studio.text.align", new string[3], (int)sel.Align, i => t.SetAlign(s, (TextAlign)i),
+                StudioValues.IndexIn(StudioValues.PlateOrder, sel.Plate), i => t.SetPlate(s, StudioValues.At(StudioValues.PlateOrder, i)));
+            Form.Segmented("studio.text.align", new string[3], StudioValues.IndexIn(StudioValues.AlignOrder, sel.Align),
+                i => t.SetAlign(s, StudioValues.At(StudioValues.AlignOrder, i)),
                 new[] { IconKind.AlignLeft, IconKind.AlignCenter, IconKind.AlignRight });
             if (t.Animations.Count > 0)
             {
@@ -300,6 +414,7 @@ namespace Ballverse.UI.Screens
                 for (int i = 0; i < anims.Length; i++) anims[i] = Ctx.L("studio.text.anim." + t.Animations[i]);
                 Form.Chips("studio.text.animation", anims, IndexOf(t.Animations, sel.AnimationId), i => t.SetAnimation(s, t.Animations[i]));
             }
+            Form.Note(Ctx.Format("studio.text.timing", Clock(sel.StartUs), Clock(sel.EndUs)));
             Form.NoteKey("studio.text.timing_note");
             Form.Button("studio.text.remove", IconKind.Trash, () => t.Remove(s), "destructive");
         }
@@ -322,6 +437,8 @@ namespace Ballverse.UI.Screens
         SliderRow _video;
         ChipRow _music;
         SliderRow _musicVolume;
+        SliderRow _musicStart;
+        long _musicStartRange = -1;
         SliderRow _fadeIn;
         SliderRow _fadeOut;
         BvSwitch _normalize;
@@ -351,6 +468,10 @@ namespace Ballverse.UI.Screens
             Form.Container.Add(_musicRows);
             var mf = new FormBuilder(Ctx, _musicRows);
             _musicVolume = mf.Slider("studio.sound.music_volume", 0, 200, 1, 100, Percent, (v, final) => t.SetMusicVolume((int)Math.Round(v)));
+            _musicStart = mf.Slider("studio.sound.music_start", 0, 1, 0.5, 0, Seconds, (v, final) =>
+            {
+                if (final) t.SetMusicStart((long)Math.Round(v * TimelineGeometry.MicrosPerSecond));
+            });
             _fadeIn = mf.Slider("studio.sound.fade_in", 0, 2, 0.1, 0, Seconds, (v, final) =>
             {
                 if (final) t.SetFades((float)v, t.FadeOutSeconds);
@@ -373,6 +494,14 @@ namespace Ballverse.UI.Screens
             _music.SetSelectedWithoutNotify(index < 0 ? 0 : index);
             _musicRows.style.display = t.MusicTrackId != null ? DisplayStyle.Flex : DisplayStyle.None;
             _musicVolume.SetValueWithoutNotify(t.MusicVolume);
+            if (t.MusicTrackLengthUs != _musicStartRange)
+            {
+                _musicStartRange = t.MusicTrackLengthUs;
+                double max = Math.Max(0, t.MusicTrackLengthUs - TimelineGeometry.MicrosPerSecond) / (double)TimelineGeometry.MicrosPerSecond;
+                _musicStart.Slider.Configure(0, Math.Max(0.5, Math.Floor(max * 2) / 2), 0.5, 0);
+            }
+            _musicStart.SetValueWithoutNotify(t.MusicStartUs / (double)TimelineGeometry.MicrosPerSecond);
+            Show(_musicStart.Root, t.MusicTrackLengthUs > TimelineGeometry.MicrosPerSecond);
             _fadeIn.SetValueWithoutNotify(t.FadeInSeconds);
             _fadeOut.SetValueWithoutNotify(t.FadeOutSeconds);
             _voice.SetValueWithoutNotify(t.VoicePriority);

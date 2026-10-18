@@ -21,6 +21,12 @@ namespace Ballverse.UI.Screens
         Label _throttled;
         VisualElement _fill;
         int _sleepTimeout;
+        int _shownPercent = -1;
+        long _shownRemainingSeconds = -1;
+        string _shownLanguage;
+        float _shownFill = -1f;
+        bool? _shownThrottled;
+        Texture _shownPreview;
 
         public override ScreenId Id => ScreenId.ExportProgress;
         protected override string Layout => "ExportProgress";
@@ -43,6 +49,10 @@ namespace Ballverse.UI.Screens
             _sleepTimeout = Screen.sleepTimeout;
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
             _vm.Changed += Refresh;
+            _shownPercent = -1;
+            _shownRemainingSeconds = -1;
+            _shownPreview = null;
+            _shownThrottled = null;
             Refresh();
         }
 
@@ -58,16 +68,47 @@ namespace Ballverse.UI.Screens
             Refresh();
         }
 
+        /// <summary>
+        /// Runs every frame while the encoder works: texts are formatted only when the whole percent or the remaining
+        /// second changes, so the screen does not allocate per frame.
+        /// </summary>
         void Refresh()
         {
             float p = Mathf.Clamp01(_vm.Progress);
-            _percent.text = Ctx.Format("export.progress.percent", Mathf.FloorToInt(p * 100f));
-            _fill.style.width = Length.Percent(p * 100f);
-            _remaining.text = DisplayFormat.Remaining(_vm.RemainingMs, Ctx.Localizer);
-            _throttled.style.display = _vm.Throttled ? DisplayStyle.Flex : DisplayStyle.None;
-            TextureSlot.Set(_preview, _vm.ProgressPreview);
-            TextureSlot.Set(_backdrop, _vm.ProgressPreview);
-            Ctx.Glass.SetSource(_vm.ProgressPreview, _backdrop);
+            int percent = Mathf.FloorToInt(p * 100f);
+            long remainingSeconds = (System.Math.Max(0, _vm.RemainingMs) + 999) / 1000;
+            string language = Ctx.Localizer.Language;
+            bool languageChanged = language != _shownLanguage;
+            _shownLanguage = language;
+            if (percent != _shownPercent || languageChanged)
+            {
+                _shownPercent = percent;
+                _percent.text = Ctx.Format("export.progress.percent", percent);
+            }
+            if (remainingSeconds != _shownRemainingSeconds || languageChanged)
+            {
+                _shownRemainingSeconds = remainingSeconds;
+                _remaining.text = DisplayFormat.Remaining(_vm.RemainingMs, Ctx.Localizer);
+            }
+            if (!Mathf.Approximately(p, _shownFill))
+            {
+                _shownFill = p;
+                _fill.style.width = Length.Percent(p * 100f);
+            }
+            bool throttled = _vm.Throttled;
+            if (_shownThrottled != throttled)
+            {
+                _shownThrottled = throttled;
+                _throttled.style.display = throttled ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+            var preview = _vm.ProgressPreview;
+            if (!ReferenceEquals(preview, _shownPreview))
+            {
+                _shownPreview = preview;
+                TextureSlot.Set(_preview, preview);
+                TextureSlot.Set(_backdrop, preview);
+            }
+            Ctx.Glass.SetSource(preview, _backdrop);
         }
     }
 

@@ -35,13 +35,29 @@ namespace Ballverse.UI
             return tree;
         }
 
-        /// <summary>Instantiates a layout as a full-size element (the template container fills its parent).</summary>
+        /// <summary>
+        /// Instantiates a layout as a full-size element: the template container fills its parent through inline styles,
+        /// so it also works where the shell's style sheets do not apply (the app-shell container itself sits above the
+        /// element that carries the global sheets).
+        /// </summary>
         public static VisualElement Instantiate(string name)
         {
             var container = LoadTree(name).Instantiate();
             container.AddToClassList("bv-fill");
+            FillParent(container);
             container.pickingMode = PickingMode.Ignore;
             return container;
+        }
+
+        /// <summary>Absolute position with zero insets as inline style (independent of any USS).</summary>
+        public static void FillParent(VisualElement element)
+        {
+            var s = element.style;
+            s.position = Position.Absolute;
+            s.left = 0;
+            s.top = 0;
+            s.right = 0;
+            s.bottom = 0;
         }
 
         public static StyleSheet LoadStyle(string name)

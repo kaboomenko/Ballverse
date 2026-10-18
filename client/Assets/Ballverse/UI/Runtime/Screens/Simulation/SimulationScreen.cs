@@ -1,5 +1,6 @@
 using Ballverse.UI.Components;
 using Ballverse.UI.Format;
+using Ballverse.UI.Gestures;
 using Ballverse.UI.Layout;
 using Ballverse.UI.Localization;
 using Ballverse.UI.Navigation;
@@ -331,7 +332,8 @@ namespace Ballverse.UI.Screens
             if (_vm.ActiveHint != HintStep.None) _vm.DismissHint();
             if (_vm.IsInteractive && _vm.Phase == SimPhaseView.Running && _vm.IsPlaying)
             {
-                // Interactive game: only touches outside the arena (bar strips) bring the bars back (spec §4.3).
+                // Interactive game: only touches outside the arena (bar strips) bring the bars back (spec §4.3); such
+                // touches never reach the game (ArenaAccepts).
                 float y = e.position.y;
                 bool inTopStrip = y <= _chromeTop.worldBound.yMax;
                 bool inBottomStrip = y >= _chromeBottom.worldBound.y;
@@ -351,9 +353,22 @@ namespace Ballverse.UI.Screens
             return new Vector2(lx * sx + ox, (1f - ly) * sy + oy);
         }
 
+        /// <summary>
+        /// Spec §2.6 / §4.3: no game input within 24 pt of the screen edges (system gestures) or in the bar strips (a tap
+        /// there only brings the hidden bars back).
+        /// </summary>
+        bool ArenaAccepts(Vector2 panelPosition)
+        {
+            var screen = Root.worldBound;
+            float top = _chromeTop.worldBound.yMax - screen.y;
+            float bottom = _chromeBottom.worldBound.y - screen.y;
+            return ArenaInputPolicy.Accepts(panelPosition.x - screen.x, panelPosition.y - screen.y, screen.width, screen.height, top, bottom);
+        }
+
         void OnArenaDown(PointerDownEvent e)
         {
             if (!_vm.IsInteractive || _arenaPointer >= 0) return;
+            if (!ArenaAccepts(e.position)) return;
             _arenaPointer = e.pointerId;
             _render.CapturePointer(_arenaPointer);
             _vm.OnArenaPointer(ArenaPointerPhase.Down, ArenaUv(e.position), e.pointerId);

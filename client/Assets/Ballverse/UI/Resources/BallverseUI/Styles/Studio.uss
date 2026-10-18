@@ -61,8 +61,8 @@
     margin-right: var(--space-1);
 }
 
+/* Sized by its content: ruler + visible track rows (44 pt each, spec §4.4); the preview takes the rest. */
 .bv-studio__timeline-host {
-    height: 176px;
     flex-shrink: 0;
     padding-left: var(--space-2);
     padding-right: var(--space-2);
@@ -141,7 +141,7 @@
 /* ---------- Timeline ---------- */
 
 .bv-timeline {
-    flex-grow: 1;
+    flex-shrink: 0;
 }
 
 .bv-timeline__ruler {
@@ -165,12 +165,12 @@
 }
 
 .bv-timeline__area {
-    flex-grow: 1;
+    flex-shrink: 0;
 }
 
 .bv-timeline__row {
     flex-direction: row;
-    height: 34px;
+    height: var(--touch);
     margin-bottom: var(--space-1);
     align-items: stretch;
 }
@@ -200,13 +200,13 @@
     overflow: hidden;
 }
 
+/* Segments do not clip: their edge handles reach 22 pt outside so the hit area is 44 pt wide (spec §4.4). */
 .bv-timeline__segment {
     position: absolute;
     top: 0;
     bottom: 0;
     border-radius: 8px;
     border-width: 2px;
-    overflow: hidden;
 }
 
 .bv-timeline__segment--sim {
@@ -230,6 +230,8 @@
     right: 0;
     bottom: 0;
     flex-direction: row;
+    border-radius: 6px;
+    overflow: hidden;
 }
 
 .bv-timeline__thumb {
@@ -238,37 +240,48 @@
     opacity: 0.75;
 }
 
+/* Edge handle: transparent 44 pt hit area centred on the edge, thin visible grip in the middle. */
 .bv-timeline__handle {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 18px;
+    width: var(--touch);
     align-items: center;
     justify-content: center;
-    background-color: var(--color-accent);
-}
-
-.bv-timeline__segment--video .bv-timeline__handle {
-    background-color: var(--color-accent-2);
 }
 
 .bv-timeline__handle--left {
-    left: 0;
+    left: -22px;
 }
 
 .bv-timeline__handle--right {
-    right: 0;
+    right: -22px;
 }
 
-.bv-timeline__handle--active {
-    background-color: var(--color-text);
+.bv-timeline__text .bv-timeline__handle {
+    top: -4px;
+    bottom: -4px;
 }
 
 .bv-timeline__grip {
-    width: 3px;
-    height: 14px;
-    border-radius: 2px;
-    background-color: rgba(255, 255, 255, 0.85);
+    width: 6px;
+    height: 24px;
+    border-radius: 3px;
+    background-color: var(--color-accent);
+}
+
+.bv-timeline__segment--video .bv-timeline__grip {
+    background-color: var(--color-accent-2);
+}
+
+.bv-timeline__text .bv-timeline__grip {
+    width: 4px;
+    height: 18px;
+    background-color: var(--color-text-2);
+}
+
+.bv-timeline__handle--active .bv-timeline__grip {
+    background-color: var(--color-text);
 }
 
 .bv-timeline__add {
@@ -297,15 +310,15 @@
     top: 4px;
     bottom: 4px;
     border-radius: 6px;
-    padding-left: var(--space-1);
-    padding-right: var(--space-1);
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
     justify-content: center;
     background-color: var(--color-surface-3);
-    overflow: hidden;
 }
 
 .bv-timeline__music {
     background-color: rgba(47, 210, 122, 0.3);
+    overflow: hidden;
 }
 
 .bv-timeline__text-label {

@@ -8,7 +8,7 @@ namespace Ballverse.UI.Glass
     {
         /// <summary>Tiers A/B: blurred backdrop at 1/4 resolution + refraction + edge highlight + adaptive tint.</summary>
         Full = 0,
-        /// <summary>Tier C: blur at 1/8 resolution, no refraction, no highlight.</summary>
+        /// <summary>Tier C: blur at 1/8 resolution without refraction (spec §4.5); the cheap edge highlight stays.</summary>
         Simplified = 1,
         /// <summary>"Reduce Transparency" (system on iOS, own switch on Android): solid matte surfaces at 92% opacity.</summary>
         Solid = 2,
@@ -50,6 +50,8 @@ namespace Ballverse.UI.Glass
         public const float DefaultBlurRadiusPx = 20f;
         public const float MaxRefractionPx = 12f;
         public const float DefaultRefractionPx = 8f;
+        /// <summary>Edge highlight intensity (all backdrop tiers; spec §4.5 drops only refraction on tier C).</summary>
+        public const float DefaultHighlight = 0.35f;
         /// <summary>Opacity of solid surfaces under "Reduce Transparency".</summary>
         public const float SolidOpacity = 0.92f;
 
@@ -66,8 +68,8 @@ namespace Ballverse.UI.Glass
             float offset;
             Solve(radius, downsample, simplified ? 2 : 3, out iterations, out offset);
             return simplified
-                ? new GlassQuality(GlassMode.Simplified, downsample, iterations, offset, 0f, 0f)
-                : new GlassQuality(GlassMode.Full, downsample, iterations, offset, refraction, 0.35f);
+                ? new GlassQuality(GlassMode.Simplified, downsample, iterations, offset, 0f, DefaultHighlight)
+                : new GlassQuality(GlassMode.Full, downsample, iterations, offset, refraction, DefaultHighlight);
         }
 
         /// <summary>

@@ -18,7 +18,7 @@ namespace Ballverse.UI.Screens
     {
         static readonly QualityPreference[] s_quality = { QualityPreference.Auto, QualityPreference.High, QualityPreference.Economy };
         static readonly LanguagePreference[] s_language = { LanguagePreference.System, LanguagePreference.English, LanguagePreference.Russian };
-        static readonly ThemePreference[] s_theme = { ThemePreference.System, ThemePreference.Dark, ThemePreference.Light };
+        static readonly ThemePreference[] s_theme = { ThemePreference.Dark, ThemePreference.Light, ThemePreference.System };
         static readonly ReduceMotionPreference[] s_motion = { ReduceMotionPreference.System, ReduceMotionPreference.On, ReduceMotionPreference.Off };
 
         IAppSettingsViewModel _vm;
@@ -34,6 +34,7 @@ namespace Ballverse.UI.Screens
         BvSwitch _contrast;
         BvSwitch _patterns;
         BvSwitch _autosave;
+        BvSwitch _copyCaption;
         VisualElement _watermarkHost;
         VisualElement _privacyHost;
         VisualElement _storageRow;
@@ -92,7 +93,7 @@ namespace Ballverse.UI.Screens
             _language = f.Segmented("settings.language",
                 new[] { Ctx.L("language.system"), Ctx.L("language.en"), Ctx.L("language.ru") }, 0, i => _vm.SetLanguage(s_language[i]));
             _theme = f.Segmented("settings.theme",
-                new[] { Ctx.L("settings.theme.system"), Ctx.L("settings.theme.dark"), Ctx.L("settings.theme.light") }, 0,
+                new[] { Ctx.L("settings.theme.dark"), Ctx.L("settings.theme.light"), Ctx.L("settings.theme.system") }, 0,
                 i => _vm.SetTheme(s_theme[i]));
 
             f.Section("settings.section.accessibility");
@@ -107,6 +108,7 @@ namespace Ballverse.UI.Screens
             _watermarkHost = new VisualElement();
             _content.Add(_watermarkHost);
             _autosave = f.Toggle("settings.autosave", true, v => _vm.SetAutoSaveToGallery(v));
+            _copyCaption = f.Toggle("settings.copy_caption", true, v => _vm.SetCopyCaptionOnShare(v), "settings.copy_caption_note");
             _storageRow = f.NavRow(IconKind.Storage, "settings.storage", "", () => Ctx.Navigator.Push(ScreenId.Storage));
 
             f.Section("settings.section.purchases");
@@ -135,6 +137,7 @@ namespace Ballverse.UI.Screens
             _contrast.SetValueWithoutNotify(_vm.HighContrast);
             _patterns.SetValueWithoutNotify(_vm.BallPatterns);
             _autosave.SetValueWithoutNotify(_vm.AutoSaveToGallery);
+            _copyCaption.SetValueWithoutNotify(_vm.CopyCaptionOnShare);
             _storageRow.Q<Label>("value").text = DisplayFormat.Bytes(_vm.Storage.TotalBytes, Ctx.Localizer);
             _aboutRow.Q<Label>("value").text = _vm.AppVersion ?? "";
 

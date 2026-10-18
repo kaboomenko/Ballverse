@@ -70,11 +70,11 @@ namespace Ballverse.UI.Theming
     public sealed class SafeAreaController
     {
         readonly VisualElement _root;
-        Layout.SafeAreaInsets _insets;
+        Layout.PanelInsets _insets;
         Rect _lastSafe;
         Vector2Int _lastScreen;
 
-        public Layout.SafeAreaInsets Insets => _insets;
+        public Layout.PanelInsets Insets => _insets;
         public event Action Changed;
 
         public SafeAreaController(VisualElement root)
@@ -93,7 +93,7 @@ namespace Ballverse.UI.Theming
             if (float.IsNaN(panelWidth) || panelWidth <= 0 || screen.x <= 0) return;
             _lastSafe = safe;
             _lastScreen = screen;
-            var insets = Layout.SafeAreaInsets.FromScreen(screen.x, screen.y, safe.x, safe.y, safe.width, safe.height,
+            var insets = Layout.PanelInsets.FromScreen(screen.x, screen.y, safe.x, safe.y, safe.width, safe.height,
                 panelWidth / screen.x);
             if (insets.Equals(_insets) && !force) return;
             _insets = insets;

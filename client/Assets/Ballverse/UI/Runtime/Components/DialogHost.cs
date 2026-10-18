@@ -92,6 +92,9 @@ namespace Ballverse.UI.Components
 
         public bool AnyOpen => _open.Count > 0;
 
+        /// <summary>Raised after a dialog was shown or removed.</summary>
+        public event Action Changed;
+
         public DialogHandle Show(DialogSpec spec)
         {
             if (spec == null) throw new ArgumentNullException(nameof(spec));
@@ -148,6 +151,7 @@ namespace Ballverse.UI.Components
             _open.Add(handle);
             root.style.opacity = 0f;
             Tween.Run(root, 0.18f, Ease.OutCubic, k => root.style.opacity = k);
+            Changed?.Invoke();
             return handle;
         }
 
@@ -185,6 +189,16 @@ namespace Ballverse.UI.Components
         {
             if (!_open.Remove(handle)) return;
             handle.Root?.RemoveFromHierarchy();
+            Changed?.Invoke();
+        }
+
+        /// <summary>Removes every dialog without callbacks (shell teardown).</summary>
+        public void CloseAll()
+        {
+            for (int i = _open.Count - 1; i >= 0; i--)
+            {
+                if (i < _open.Count) Remove(_open[i]);
+            }
         }
 
         static string ButtonClass(DialogButtonStyle style)

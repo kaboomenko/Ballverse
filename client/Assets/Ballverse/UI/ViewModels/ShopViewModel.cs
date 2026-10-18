@@ -30,7 +30,10 @@ namespace Ballverse.UI.ViewModels
         public string PriceText { get; }
         /// <summary>Sum of the separate purchases ("вместо …"), or null.</summary>
         public string CompareAtText { get; }
-        /// <summary>Savings vs separate purchases, 0 = none.</summary>
+        /// <summary>
+        /// Savings vs the separate purchases, 0 = none. Shown as a plain comparison next to "вместо …", never as a sale
+        /// badge (spec §5.1 / §5.0.3, EU Omnibus: no struck prices, no "скидка" / "акция").
+        /// </summary>
         public int SavingsPercent { get; }
         public ProductState State { get; }
         public bool PartiallyOwned { get; }
@@ -62,6 +65,12 @@ namespace Ballverse.UI.ViewModels
     {
         /// <summary>Visible offers in display order (smart storefront already applied).</summary>
         IReadOnlyList<ShopProductData> Products { get; }
+        /// <summary>
+        /// Offers that grant NO_WATERMARK, for the sheet opened from the watermark row / upsell line (spec §5.0.3): the
+        /// No Ads Bundle when no ad removal is owned, otherwise the one missing ad removal (owning both grants it in
+        /// release 1); empty once the watermark can be removed.
+        /// </summary>
+        IReadOnlyList<ShopProductData> WatermarkOffers { get; }
         bool StoreAvailable { get; }
         bool AllPurchased { get; }
         bool IsRestoring { get; }

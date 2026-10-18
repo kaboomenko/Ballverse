@@ -29,7 +29,22 @@ namespace Ballverse.UI.Localization
         public event Action LanguageChanged;
 
         public string Language { get; private set; }
+        /// <summary>Culture of the interface language (en-US / ru-RU).</summary>
         public CultureInfo Culture { get; private set; }
+        /// <summary>
+        /// Culture for numbers, dates and units (spec §4.7: "по локали устройства"): the device locale when the shell
+        /// sets one (<see cref="SetFormatCulture"/>), otherwise <see cref="Culture"/>. Strings still follow
+        /// <see cref="Language"/>.
+        /// </summary>
+        public CultureInfo FormatCulture => _formatCulture ?? Culture;
+
+        CultureInfo _formatCulture;
+
+        /// <summary>Device locale for numbers and dates (null = the interface language's culture).</summary>
+        public void SetFormatCulture(CultureInfo culture)
+        {
+            _formatCulture = culture;
+        }
         /// <summary>Keys that were requested but found in no table (sorted copy).</summary>
         public IReadOnlyList<string> MissingKeys
         {
@@ -131,7 +146,7 @@ namespace Ballverse.UI.Localization
         {
             try
             {
-                return string.Format(Culture, pattern, args);
+                return string.Format(FormatCulture, pattern, args);
             }
             catch (FormatException)
             {

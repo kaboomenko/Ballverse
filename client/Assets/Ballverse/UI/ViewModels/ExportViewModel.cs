@@ -22,6 +22,11 @@ namespace Ballverse.UI.ViewModels
         Progress = 5,
         Done = 6,
         Failed = 7,
+        /// <summary>
+        /// At launch: the last export was interrupted because the system unloaded the app (spec §3.8, RW4); offer
+        /// "Продолжить экспорт" from the last finished segment, without another ad.
+        /// </summary>
+        ResumeOffer = 8,
     }
 
     public enum SharePlatform
@@ -67,6 +72,10 @@ namespace Ballverse.UI.ViewModels
         /// <summary>"Убрать водяной знак" line under the preview (spec §5.2: not in the first 2 exports, ≤ 1 in 3).</summary>
         bool ShowWatermarkUpsell { get; }
 
+        // Resume offer
+        /// <summary>Share of the interrupted export already encoded (0–1), shown in the resume offer.</summary>
+        float InterruptedProgress { get; }
+
         // Failed
         LocalizedText FailureMessage { get; }
         /// <summary>Offer "Export 720p/30" after an encoder error.</summary>
@@ -90,6 +99,10 @@ namespace Ballverse.UI.ViewModels
         void RetryFailed(bool fallback720p30);
         /// <summary>Close the settings sheet / failure / done screen and return to the studio.</summary>
         void Close();
+        /// <summary>"Продолжить экспорт": continue the interrupted export from its last finished segment (no ad, RW4).</summary>
+        void ResumeInterrupted();
+        /// <summary>Drop the interrupted export (its finished segments are deleted).</summary>
+        void DiscardInterrupted();
         /// <summary>"Новый ролик": the UI goes to the gallery.</summary>
         void NewVideo();
         /// <summary>"В проекты": the UI goes to the projects tab.</summary>

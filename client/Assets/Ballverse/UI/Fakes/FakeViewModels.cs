@@ -27,6 +27,7 @@ namespace Ballverse.UI.Fakes
         readonly FakeSettings _settings;
         readonly FakeConsent _consent = new FakeConsent();
         readonly FakeSystemAppearance _system = new FakeSystemAppearance();
+        readonly FakeQuestCelebration _quest = new FakeQuestCelebration();
 
         public FakeViewModels()
         {
@@ -38,6 +39,7 @@ namespace Ballverse.UI.Fakes
             _export = new FakeExport(_shop);
             _projects = new FakeProjects();
             _gallery.ModeOpened += id => _simulation.Open(id);
+            _export.Completed += _quest.Complete;
         }
 
         public IGalleryViewModel Gallery => _gallery;
@@ -49,6 +51,13 @@ namespace Ballverse.UI.Fakes
         public IAppSettingsViewModel Settings => _settings;
         public ITrackingConsentViewModel TrackingConsent => _consent;
         public ISystemAppearance SystemAppearance => _system;
+        public IQuestCelebrationViewModel QuestCelebration => _quest;
+
+        /// <summary>Editor / test helper: the app "was killed" during an export, so the resume offer shows (spec §3.8).</summary>
+        public void SimulateInterruptedExport(float progress)
+        {
+            _export.SimulateInterrupted(progress);
+        }
 
         /// <summary>Lets fakes resolve display texts they generate (template texts) through the shell's tables.</summary>
         public void SetLocalizer(Func<string, string> localize)

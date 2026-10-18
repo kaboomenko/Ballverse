@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using Ballverse.UI.Components;
 using Ballverse.UI.Layout;
@@ -10,13 +9,17 @@ using UnityEngine.UIElements;
 namespace Ballverse.UI.Screens
 {
     /// <summary>
-    /// Studio timeline (spec §3.4, §4.3): ruler with scrubbing, tracks S (simulation clip), V (user video), text and
-    /// music; trim handles on S and V, V can be dragged to shift it against S. Edits are previewed while dragging and
-    /// committed on release through the events.
+    /// Studio timeline (spec §3.4–§3.6, §4.3): ruler with scrubbing, tracks S (simulation clip), V (user video), text and
+    /// music. S and V have trim handles; V is dragged to shift it against S (also before S: the offset may be negative);
+    /// text spans are dragged to change when they appear (body) and their start / end (handles); the music bar is dragged
+    /// to choose where the track starts. Edits are previewed while dragging and committed on release through the events.
+    /// Handles are 44 pt wide hit areas centred on the segment edges (spec §4.4) with a thin visible grip.
     /// </summary>
     public sealed class TimelineView : VisualElement
     {
-        const float HandleWidth = 18f;
+        /// <summary>Minimum drawn width of a segment so both grips stay visible.</summary>
+        const float MinSegmentWidth = 28f;
+        const float ShiftThreshold = 8f;
 
         readonly UiContext _ctx;
         readonly VisualElement _ruler;
@@ -32,14 +35,22 @@ namespace Ballverse.UI.Screens
         TrimRange _simPreview;
         TrimRange _videoPreview;
         long _videoStartPreview;
+        int _textEditIndex = -1;
+        TrimRange _textPreview;
+        long _musicStartPreview;
         bool _editing;
 
         /// <summary>(time, dragging): scrub request.</summary>
         public event Action<long, bool> Seek;
         public event Action<long, long> SimTrimCommitted;
         public event Action<long, long> VideoTrimCommitted;
-        public event Action<long> VideoStartCommitted;
+        /// <summary>New V offset (Core <c>UserVideoTiming.OffsetUs</c>, may be negative).</summary>
+        public event Action<long> VideoOffsetCommitted;
         public event Action<int> TextSelected;
+        /// <summary>(layer index, start, end) of a dragged text span.</summary>
+        public event Action<int, long, long> TextTimingCommitted;
+        /// <summary>New start of the music inside its track, µs.</summary>
+        public event Action<long> MusicStartCommitted;
         public event Action AddVideoRequested;
 
         public TimelineView(UiContext ctx)
@@ -104,6 +115,8 @@ namespace Ballverse.UI.Screens
             _simPreview = new TrimRange(_data.Sim.TrimStartUs, _data.Sim.TrimEndUs);
             _videoPreview = new TrimRange(_data.Video.TrimStartUs, _data.Video.TrimEndUs);
             _videoStartPreview = _data.Video.TimelineStartUs;
+            _musicStartPreview = _data.Music?.TrackStartUs ?? 0;
+            _textEditIndex = -1;
             BuildRuler();
             BuildMediaTrack(_simTrack, _data.Sim, true);
             BuildMediaTrack(_videoTrack, _data.Video, false);
@@ -168,18 +181,19 @@ namespace Ballverse.UI.Screens
                 thumbs.Add(th);
             }
             seg.Add(thumbs);
-            var left = Handle(seg, true);
-            var right = Handle(seg, false);
+            var left = Handle(true);
+            var right = Handle(false);
             seg.Add(left);
             seg.Add(right);
             track.Add(seg);
             PlaceSegment(seg, isSim);
-            new TrimDrag(this, left, isSim, true);
-            new TrimDrag(this, right, isSim, false);
-            if (!isSim) new ShiftDrag(this, seg);
+            var kind = isSim ? EditTarget.SimTrim : EditTarget.VideoTrim;
+            new EdgeDrag(this, left, kind, true);
+            new EdgeDrag(this, right, kind, false);
+            if (!isSim) new BodyDrag(this, seg, EditTarget.VideoShift, -1, null);
         }
 
-        static VisualElement Handle(VisualElement seg, bool left)
+        static VisualElement Handle(bool left)
         {
             var h = new VisualElement();
             h.AddToClassList("bv-timeline__handle");
@@ -193,6 +207,7 @@ namespace Ballverse.UI.Screens
 
         void PlaceSegment(VisualElement seg, bool isSim)
         {
+            if (seg == null) return;
             long start = isSim ? _data.Sim.TimelineStartUs : _videoStartPreview;
             var range = isSim ? _simPreview : _videoPreview;
             if (isSim && range.StartUs != _data.Sim.TrimStartUs)
@@ -200,8 +215,13 @@ namespace Ballverse.UI.Screens
                 // While the start handle moves, show the change at the left edge of the clip.
                 start += range.StartUs - _data.Sim.TrimStartUs;
             }
-            seg.style.left = _geo.ToX(start);
-            seg.style.width = Mathf.Max(HandleWidth * 2f, _geo.Width(range.LengthUs));
+            Place(seg, start, range.LengthUs);
+        }
+
+        void Place(VisualElement element, long startUs, long lengthUs)
+        {
+            element.style.left = _geo.ToX(startUs);
+            element.style.width = Mathf.Max(MinSegmentWidth, _geo.Width(lengthUs));
         }
 
         void BuildTextTrack()
@@ -211,11 +231,20 @@ namespace Ballverse.UI.Screens
             {
                 var pill = new VisualElement();
                 pill.AddToClassList("bv-timeline__text");
-                pill.style.left = _geo.ToX(item.StartUs);
-                pill.style.width = Mathf.Max(24f, _geo.Width(item.EndUs - item.StartUs));
-                pill.Add(UiContext.TextLabel(item.Text, "bv-timeline__text-label"));
+                pill.userData = item.LayerIndex;
+                Place(pill, item.StartUs, item.EndUs - item.StartUs);
+                var label = UiContext.TextLabel(item.Text, "bv-timeline__text-label");
+                label.pickingMode = PickingMode.Ignore;
+                pill.Add(label);
+                var left = Handle(true);
+                var right = Handle(false);
+                pill.Add(left);
+                pill.Add(right);
                 int index = item.LayerIndex;
-                Tap.On(pill, () => TextSelected?.Invoke(index));
+                // Tap selects the layer (opens the text tool), drag moves it in time, the edges change in / out.
+                new BodyDrag(this, pill, EditTarget.TextShift, index, () => TextSelected?.Invoke(index));
+                new EdgeDrag(this, left, EditTarget.TextTrim, true, index);
+                new EdgeDrag(this, right, EditTarget.TextTrim, false, index);
                 _textTrack.Add(pill);
             }
         }
@@ -228,9 +257,11 @@ namespace Ballverse.UI.Screens
             if (m == null) return;
             var bar = new VisualElement();
             bar.AddToClassList("bv-timeline__music");
-            bar.style.left = _geo.ToX(m.StartUs);
-            bar.style.width = Mathf.Max(24f, _geo.Width(m.EndUs - m.StartUs));
-            bar.Add(UiContext.TextLabel(_ctx.L(m.Name), "bv-timeline__text-label"));
+            Place(bar, m.StartUs, m.EndUs - m.StartUs);
+            var label = UiContext.TextLabel(_ctx.L(m.Name), "bv-timeline__text-label");
+            label.pickingMode = PickingMode.Ignore;
+            bar.Add(label);
+            if (m.TrackLengthUs > 0) new BodyDrag(this, bar, EditTarget.MusicShift, -1, null);
             _musicTrack.Add(bar);
         }
 
@@ -253,61 +284,145 @@ namespace Ballverse.UI.Screens
             Seek?.Invoke(t, dragging);
         }
 
+        internal enum EditTarget
+        {
+            SimTrim = 0,
+            VideoTrim = 1,
+            VideoShift = 2,
+            TextTrim = 3,
+            TextShift = 4,
+            MusicShift = 5,
+        }
+
         internal void BeginEdit()
         {
             _editing = true;
         }
 
-        internal void PreviewTrim(bool isSim, bool startHandle, long deltaUs)
+        TimelineTextItem TextItem(int layerIndex)
+        {
+            if (_data == null) return null;
+            foreach (var t in _data.Texts)
+                if (t.LayerIndex == layerIndex) return t;
+            return null;
+        }
+
+        VisualElement TextPill(int layerIndex)
+        {
+            VisualElement found = null;
+            _textTrack.Query<VisualElement>(className: "bv-timeline__text").ForEach(p =>
+            {
+                if (p.userData is int i && i == layerIndex) found = p;
+            });
+            return found;
+        }
+
+        internal void Preview(EditTarget target, bool startEdge, long deltaUs, int layerIndex)
         {
             if (_data == null) return;
-            if (isSim)
+            switch (target)
             {
-                var r = new TrimRange(_data.Sim.TrimStartUs, _data.Sim.TrimEndUs);
-                _simPreview = startHandle ? TimelineGeometry.DragStart(r, deltaUs, _data.Sim.SourceUs)
-                    : TimelineGeometry.DragEnd(r, deltaUs, _data.Sim.SourceUs);
-                PlaceSegment(_simTrack.Q<VisualElement>(className: "bv-timeline__segment"), true);
-            }
-            else
-            {
-                var r = new TrimRange(_data.Video.TrimStartUs, _data.Video.TrimEndUs);
-                _videoPreview = startHandle ? TimelineGeometry.DragStart(r, deltaUs, _data.Video.SourceUs)
-                    : TimelineGeometry.DragEnd(r, deltaUs, _data.Video.SourceUs);
-                if (startHandle) _videoStartPreview = Math.Max(0, _data.Video.TimelineStartUs + (_videoPreview.StartUs - r.StartUs));
-                PlaceSegment(_videoTrack.Q<VisualElement>(className: "bv-timeline__segment"), false);
+                case EditTarget.SimTrim:
+                {
+                    var r = new TrimRange(_data.Sim.TrimStartUs, _data.Sim.TrimEndUs);
+                    _simPreview = startEdge ? TimelineGeometry.DragStart(r, deltaUs, _data.Sim.SourceUs)
+                        : TimelineGeometry.DragEnd(r, deltaUs, _data.Sim.SourceUs);
+                    PlaceSegment(_simTrack.Q<VisualElement>(className: "bv-timeline__segment"), true);
+                    break;
+                }
+                case EditTarget.VideoTrim:
+                {
+                    var r = new TrimRange(_data.Video.TrimStartUs, _data.Video.TrimEndUs);
+                    _videoPreview = startEdge ? TimelineGeometry.DragStart(r, deltaUs, _data.Video.SourceUs)
+                        : TimelineGeometry.DragEnd(r, deltaUs, _data.Video.SourceUs);
+                    // Trimming the start keeps the remaining frames where they were on the timeline (no clamp at 0:
+                    // V may start before S).
+                    if (startEdge) _videoStartPreview = _data.Video.TimelineStartUs + (_videoPreview.StartUs - r.StartUs);
+                    PlaceSegment(_videoTrack.Q<VisualElement>(className: "bv-timeline__segment"), false);
+                    break;
+                }
+                case EditTarget.VideoShift:
+                {
+                    long offset = TimelineGeometry.ClampVideoOffset(_data.VideoOffsetUs + deltaUs, _data.Sim.LengthUs, _data.Video.LengthUs);
+                    _videoStartPreview = _data.Sim.TimelineStartUs + offset;
+                    PlaceSegment(_videoTrack.Q<VisualElement>(className: "bv-timeline__segment"), false);
+                    break;
+                }
+                case EditTarget.TextTrim:
+                case EditTarget.TextShift:
+                {
+                    var item = TextItem(layerIndex);
+                    if (item == null) return;
+                    long total = Math.Max(_data.DurationUs, item.EndUs);
+                    var span = new TrimRange(item.StartUs, item.EndUs);
+                    if (target == EditTarget.TextShift) _textPreview = TimelineGeometry.ShiftSpan(span, deltaUs, total);
+                    else _textPreview = startEdge ? TimelineGeometry.DragStart(span, deltaUs, total) : TimelineGeometry.DragEnd(span, deltaUs, total);
+                    _textEditIndex = layerIndex;
+                    var pill = TextPill(layerIndex);
+                    if (pill != null) Place(pill, _textPreview.StartUs, _textPreview.LengthUs);
+                    break;
+                }
+                case EditTarget.MusicShift:
+                {
+                    var m = _data.Music;
+                    if (m == null || m.TrackLengthUs <= 0) return;
+                    // Dragging the bar right reveals an earlier part of the song (the song slides under the reel).
+                    long maxStart = Math.Max(0, m.TrackLengthUs - TimelineGeometry.MinClipUs);
+                    _musicStartPreview = Math.Max(0, Math.Min(maxStart, m.TrackStartUs - deltaUs));
+                    var bar = _musicTrack.Q<VisualElement>(className: "bv-timeline__music");
+                    if (bar != null) bar.style.translate = new Translate(_geo.Width(m.TrackStartUs - _musicStartPreview), 0);
+                    break;
+                }
             }
         }
 
-        internal void CommitTrim(bool isSim, bool startHandle)
+        internal void Commit(EditTarget target, bool startEdge, int layerIndex)
         {
             _editing = false;
             if (_data == null) return;
-            if (isSim) SimTrimCommitted?.Invoke(_simPreview.StartUs, _simPreview.EndUs);
-            else
+            switch (target)
             {
-                VideoTrimCommitted?.Invoke(_videoPreview.StartUs, _videoPreview.EndUs);
-                if (startHandle && _videoStartPreview != _data.Video.TimelineStartUs) VideoStartCommitted?.Invoke(_videoStartPreview);
+                case EditTarget.SimTrim:
+                    SimTrimCommitted?.Invoke(_simPreview.StartUs, _simPreview.EndUs);
+                    break;
+                case EditTarget.VideoTrim:
+                    VideoTrimCommitted?.Invoke(_videoPreview.StartUs, _videoPreview.EndUs);
+                    if (startEdge && _videoStartPreview != _data.Video.TimelineStartUs)
+                        VideoOffsetCommitted?.Invoke(_videoStartPreview - _data.Sim.TimelineStartUs);
+                    break;
+                case EditTarget.VideoShift:
+                    if (_videoStartPreview != _data.Video.TimelineStartUs)
+                        VideoOffsetCommitted?.Invoke(_videoStartPreview - _data.Sim.TimelineStartUs);
+                    break;
+                case EditTarget.TextTrim:
+                case EditTarget.TextShift:
+                {
+                    var item = TextItem(layerIndex);
+                    if (item != null && _textEditIndex == layerIndex && (_textPreview.StartUs != item.StartUs || _textPreview.EndUs != item.EndUs))
+                        TextTimingCommitted?.Invoke(layerIndex, _textPreview.StartUs, _textPreview.EndUs);
+                    _textEditIndex = -1;
+                    break;
+                }
+                case EditTarget.MusicShift:
+                {
+                    var bar = _musicTrack.Q<VisualElement>(className: "bv-timeline__music");
+                    if (bar != null) bar.style.translate = new Translate(0, 0);
+                    if (_data.Music != null && _musicStartPreview != _data.Music.TrackStartUs) MusicStartCommitted?.Invoke(_musicStartPreview);
+                    break;
+                }
             }
+        }
+
+        /// <summary>A press that turned out to be a tap: nothing changed.</summary>
+        internal void EndEdit()
+        {
+            _editing = false;
         }
 
         internal void CancelEdit()
         {
             _editing = false;
             Relayout();
-        }
-
-        internal void PreviewShift(long deltaUs)
-        {
-            if (_data == null) return;
-            long max = Math.Max(0, _data.DurationUs - TimelineGeometry.MinClipUs);
-            _videoStartPreview = Math.Max(0, Math.Min(max, _data.Video.TimelineStartUs + deltaUs));
-            PlaceSegment(_videoTrack.Q<VisualElement>(className: "bv-timeline__segment"), false);
-        }
-
-        internal void CommitShift()
-        {
-            _editing = false;
-            if (_data != null && _videoStartPreview != _data.Video.TimelineStartUs) VideoStartCommitted?.Invoke(_videoStartPreview);
         }
 
         /// <summary>Pointer drag on the ruler → scrubbing.</summary>
@@ -350,22 +465,24 @@ namespace Ballverse.UI.Screens
             }
         }
 
-        /// <summary>Drag of a trim handle.</summary>
-        sealed class TrimDrag
+        /// <summary>Drag of an edge handle (trim of S / V, start / end of a text span).</summary>
+        sealed class EdgeDrag
         {
             readonly TimelineView _view;
             readonly VisualElement _handle;
-            readonly bool _isSim;
+            readonly EditTarget _target;
             readonly bool _start;
+            readonly int _layer;
             int _pointer = -1;
             float _x0;
 
-            public TrimDrag(TimelineView view, VisualElement handle, bool isSim, bool start)
+            public EdgeDrag(TimelineView view, VisualElement handle, EditTarget target, bool start, int layer = -1)
             {
                 _view = view;
                 _handle = handle;
-                _isSim = isSim;
+                _target = target;
                 _start = start;
+                _layer = layer;
                 handle.RegisterCallback<PointerDownEvent>(OnDown);
                 handle.RegisterCallback<PointerMoveEvent>(OnMove);
                 handle.RegisterCallback<PointerUpEvent>(OnUp);
@@ -386,14 +503,14 @@ namespace Ballverse.UI.Screens
             void OnMove(PointerMoveEvent e)
             {
                 if (e.pointerId != _pointer) return;
-                _view.PreviewTrim(_isSim, _start, _view.UsPerPixel(e.position.x - _x0));
+                _view.Preview(_target, _start, _view.UsPerPixel(e.position.x - _x0), _layer);
                 e.StopPropagation();
             }
 
             void OnUp(PointerUpEvent e)
             {
                 if (e.pointerId != _pointer) return;
-                _view.PreviewTrim(_isSim, _start, _view.UsPerPixel(e.position.x - _x0));
+                _view.Preview(_target, _start, _view.UsPerPixel(e.position.x - _x0), _layer);
                 Finish(true);
                 e.StopPropagation();
             }
@@ -405,53 +522,69 @@ namespace Ballverse.UI.Screens
                 _pointer = -1;
                 _handle.RemoveFromClassList("bv-timeline__handle--active");
                 if (_handle.HasPointerCapture(id)) _handle.ReleasePointer(id);
-                if (commit) _view.CommitTrim(_isSim, _start);
+                if (commit) _view.Commit(_target, _start, _layer);
                 else _view.CancelEdit();
             }
         }
 
-        /// <summary>Drag of the V segment body: shifts the video against the simulation.</summary>
-        sealed class ShiftDrag
+        /// <summary>
+        /// Drag of a whole span (V shift, text span shift, music start). Movement below <see cref="ShiftThreshold"/> is a
+        /// tap and runs <c>tap</c> instead.
+        /// </summary>
+        sealed class BodyDrag
         {
-            const float StartThreshold = 8f;
             readonly TimelineView _view;
-            readonly VisualElement _segment;
+            readonly VisualElement _element;
+            readonly EditTarget _target;
+            readonly int _layer;
+            readonly Action _tap;
             int _pointer = -1;
             float _x0;
             bool _moved;
 
-            public ShiftDrag(TimelineView view, VisualElement segment)
+            public BodyDrag(TimelineView view, VisualElement element, EditTarget target, int layer, Action tap)
             {
                 _view = view;
-                _segment = segment;
-                segment.RegisterCallback<PointerDownEvent>(e =>
+                _element = element;
+                _target = target;
+                _layer = layer;
+                _tap = tap;
+                element.RegisterCallback<PointerDownEvent>(e =>
                 {
                     if (_pointer >= 0) return;
                     _pointer = e.pointerId;
                     _x0 = e.position.x;
                     _moved = false;
-                    _segment.CapturePointer(_pointer);
+                    _element.CapturePointer(_pointer);
                     _view.BeginEdit();
+                    e.StopPropagation();
                 });
-                segment.RegisterCallback<PointerMoveEvent>(e =>
+                element.RegisterCallback<PointerMoveEvent>(e =>
                 {
                     if (e.pointerId != _pointer) return;
                     float dx = e.position.x - _x0;
-                    if (!_moved && Mathf.Abs(dx) < StartThreshold) return;
+                    if (!_moved && Mathf.Abs(dx) < ShiftThreshold) return;
                     _moved = true;
-                    _segment.AddToClassList("bv-timeline__segment--dragging");
-                    _view.PreviewShift(_view.UsPerPixel(dx));
+                    _element.AddToClassList("bv-timeline__segment--dragging");
+                    _view.Preview(_target, false, _view.UsPerPixel(dx), _layer);
                 });
-                segment.RegisterCallback<PointerUpEvent>(e =>
+                element.RegisterCallback<PointerUpEvent>(e =>
                 {
                     if (e.pointerId != _pointer) return;
+                    bool moved = _moved;
                     Release();
-                    _view.CommitShift();
+                    if (moved) _view.Commit(_target, false, _layer);
+                    else
+                    {
+                        _view.EndEdit();
+                        _tap?.Invoke();
+                    }
                 });
-                segment.RegisterCallback<PointerCancelEvent>(e =>
+                element.RegisterCallback<PointerCancelEvent>(e =>
                 {
+                    if (_pointer < 0) return;
                     Release();
-                    _view.CommitShift();
+                    _view.CancelEdit();
                 });
             }
 
@@ -459,8 +592,8 @@ namespace Ballverse.UI.Screens
             {
                 int id = _pointer;
                 _pointer = -1;
-                _segment.RemoveFromClassList("bv-timeline__segment--dragging");
-                if (id >= 0 && _segment.HasPointerCapture(id)) _segment.ReleasePointer(id);
+                _element.RemoveFromClassList("bv-timeline__segment--dragging");
+                if (id >= 0 && _element.HasPointerCapture(id)) _element.ReleasePointer(id);
             }
         }
     }

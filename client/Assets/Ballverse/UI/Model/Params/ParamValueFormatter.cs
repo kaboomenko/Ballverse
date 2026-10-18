@@ -49,14 +49,14 @@ namespace Ballverse.UI.Params
         public static string FormatWithUnit(double value, double step, string unit, Localizer localizer)
         {
             if (localizer == null) throw new ArgumentNullException(nameof(localizer));
-            string number = FormatNumber(value, step, localizer.Culture);
+            string number = FormatNumber(value, step, localizer.FormatCulture);
             string key = UnitKey(unit);
             if (key == null) return number;
             string pattern = localizer.GetOrDefault(key, null);
             if (pattern == null) return number + " " + unit;
             try
             {
-                return string.Format(localizer.Culture, pattern, number);
+                return string.Format(localizer.FormatCulture, pattern, number);
             }
             catch (FormatException)
             {

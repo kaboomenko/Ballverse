@@ -156,7 +156,11 @@ namespace Ballverse.UI.ViewModels
         void SelectPreviousRun(int index);
         void DismissHint();
         void SetQuestCollapsed(bool collapsed);
-        /// <summary>Touch on the arena of an interactive mode; <paramref name="uv"/> is 0–1 over the render target, origin bottom-left.</summary>
+        /// <summary>
+        /// Touch on the arena of an interactive mode; <paramref name="uv"/> is 0–1 over the render target, origin
+        /// bottom-left. The UI already drops presses that start within 24 pt of a screen edge (spec §2.6 dead zone for
+        /// system gestures) or in the bar strips (spec §4.3); moves and the release of an accepted press are always sent.
+        /// </summary>
         void OnArenaPointer(ArenaPointerPhase phase, Vector2 uv, int pointerId);
         /// <summary>The screen became visible / hidden (pause rendering and cancel generation when hidden, spec §2.4).</summary>
         void SetScreenActive(bool active);

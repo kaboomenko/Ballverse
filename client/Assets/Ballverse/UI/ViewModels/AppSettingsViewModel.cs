@@ -66,6 +66,11 @@ namespace Ballverse.UI.ViewModels
         bool HasNoWatermark { get; }
         bool WatermarkEnabled { get; }
         bool AutoSaveToGallery { get; }
+        /// <summary>
+        /// Copy the caption with hashtags ("#ballverse #satisfying" + the mode's tags) to the clipboard when a platform
+        /// button is tapped on the done screen (spec §3.11, switch in Settings).
+        /// </summary>
+        bool CopyCaptionOnShare { get; }
         /// <summary>UMP privacy options entry point is required in this region.</summary>
         bool PrivacyOptionsAvailable { get; }
         /// <summary>ATT status line (iOS); empty hides it.</summary>
@@ -88,6 +93,7 @@ namespace Ballverse.UI.ViewModels
         void SetBallPatterns(bool on);
         void SetWatermarkEnabled(bool on);
         void SetAutoSaveToGallery(bool on);
+        void SetCopyCaptionOnShare(bool on);
         void RestorePurchases();
         void OpenPrivacyOptions();
         void RateApp();

@@ -34,21 +34,28 @@ namespace Ballverse.UI.Screens
             _vmSource = vmSource;
         }
 
-        public bool IsOpen => _sheet != null && _sheet.IsOpen;
+        public bool IsOpen => _sheet != null && _sheet.IsActive;
 
         public void Open()
         {
             if (IsOpen) return;
+            Detach();
             _vm = _vmSource();
             if (_vm == null || _vm.Schema == null) return;
             _model = new ParamPanelModel(_vm.Schema, _vm.Values, _vm.Tier);
-            _sheet = new BottomSheet(_ctx, new SheetOptions
+            BottomSheet sheet = null;
+            sheet = new BottomSheet(_ctx, new SheetOptions
             {
                 TitleKey = "sim.settings.title",
                 Detents = SheetDetents.HalfAndFull,
                 ScrimOpacity = 0f,
-                Closed = OnClosed,
+                // May run after a newer sheet opened (close animation): only the current one detaches.
+                Closed = () =>
+                {
+                    if (_sheet == sheet) Detach();
+                },
             });
+            _sheet = sheet;
             _groupChips = new ChipRow();
             _groupChips.AddToClassList("bv-sheet__groups");
             _groupChips.SelectionChanged += i =>
@@ -88,10 +95,12 @@ namespace Ballverse.UI.Screens
 
         public void Close()
         {
-            _sheet?.Close();
+            var sheet = _sheet;
+            Detach();
+            sheet?.Close();
         }
 
-        void OnClosed()
+        void Detach()
         {
             if (_vm != null) _vm.Changed -= OnVmChanged;
             _editors.Clear();

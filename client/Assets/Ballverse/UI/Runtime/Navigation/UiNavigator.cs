@@ -88,6 +88,28 @@ namespace Ballverse.UI.Navigation
             return outcome;
         }
 
+        /// <summary>
+        /// iOS edge swipe (spec §4.6): the same as system back, but only where there is something to go back to — on a
+        /// tab root without an open sheet or dialog it does nothing (it never asks to leave the app).
+        /// </summary>
+        public bool SwipeBack()
+        {
+            bool overlay = (_ctx.Dialogs != null && _ctx.Dialogs.AnyOpen) || (_ctx.Sheets != null && _ctx.Sheets.AnyOpen);
+            if (!overlay && !_stack.CanPop) return false;
+            Back();
+            return true;
+        }
+
+        /// <summary>Hides the visible screen (its OnHide unbinds view models) and destroys every live screen.</summary>
+        public void Dispose()
+        {
+            var current = _current;
+            _current = null;
+            current?.Hide();
+            foreach (var c in new List<ScreenController>(_live.Values)) c.Destroy();
+            _live.Clear();
+        }
+
         /// <summary>Per-frame tick of the visible screen.</summary>
         public void Tick(float dt)
         {

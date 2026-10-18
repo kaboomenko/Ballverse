@@ -17,7 +17,9 @@ namespace Ballverse.UI
 
         UIDocument _document;
         PanelSettings _panelSettings;
+#if ENABLE_LEGACY_INPUT_MANAGER
         Vector2 _tilt;
+#endif
 
         public UiShell Shell { get; private set; }
         public UIDocument Document => _document;
