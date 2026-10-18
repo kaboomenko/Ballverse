@@ -8,7 +8,10 @@ namespace Ballverse.Core.Projects
         NotFound = 1,
         /// <summary>The project was written by a newer app (schemaVersion above current); it is not opened and must not be overwritten.</summary>
         TooNew = 2,
-        /// <summary>Both files are missing or unusable (unreadable, malformed, unmigratable or with unrepairable errors).</summary>
+        /// <summary>
+        /// Both files are missing or unusable (malformed, unmigratable or with unrepairable errors). I/O read errors are
+        /// <see cref="Unavailable"/> instead.
+        /// </summary>
         Corrupt = 3,
         /// <summary>
         /// A file could not be read because of an I/O error (<see cref="System.IO.IOException"/>,

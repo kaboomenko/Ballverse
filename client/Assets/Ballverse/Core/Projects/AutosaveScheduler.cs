@@ -30,8 +30,9 @@ namespace Ballverse.Core.Projects
         bool _hasPending;      // changes not covered by the running save (or by any save when none runs)
         long _firstPendingMs;  // time of the first of those changes
 
-        /// <param name="debounceMs">Delay after the last change before saving (default 1 s).</param>
-        /// <param name="maxWaitMs">Longest wait from the first unsaved change (default 5 s); 0 disables the bound.</param>
+        /// <param name="debounceMs">Delay after the last change before saving (default 1 s). Due times saturate, so
+        /// <see cref="long.MaxValue"/> means "only when the app is backgrounded".</param>
+        /// <param name="maxWaitMs">Longest wait from the first unsaved change (default 5 s); 0 or <see cref="long.MaxValue"/> disables the bound.</param>
         public AutosaveScheduler(long debounceMs = DefaultDebounceMs, long maxWaitMs = DefaultMaxWaitMs)
         {
             if (debounceMs < 0) throw new ArgumentOutOfRangeException(nameof(debounceMs));
@@ -63,8 +64,9 @@ namespace Ballverse.Core.Projects
                 _firstPendingMs = nowMs;
             }
             _changeSeq++;
-            _dueAtMs = nowMs + _debounceMs;
-            if (_maxWaitMs > 0 && _firstPendingMs + _maxWaitMs < _dueAtMs) _dueAtMs = Math.Max(nowMs, _firstPendingMs + _maxWaitMs);
+            _dueAtMs = AddSaturating(nowMs, _debounceMs);
+            long maxDue = AddSaturating(_firstPendingMs, _maxWaitMs);
+            if (_maxWaitMs > 0 && maxDue < _dueAtMs) _dueAtMs = Math.Max(nowMs, maxDue);
         }
 
         /// <summary>True when dirty, no save is running and the debounce window (or the maximum wait) has elapsed.</summary>
@@ -114,7 +116,14 @@ namespace Ballverse.Core.Projects
                 _hasPending = true;
                 _firstPendingMs = nowMs;
             }
-            if (_dueAtMs < nowMs + _debounceMs) _dueAtMs = nowMs + _debounceMs;
+            long retryAt = AddSaturating(nowMs, _debounceMs);
+            if (_dueAtMs < retryAt) _dueAtMs = retryAt;
+        }
+
+        /// <summary><c>a + b</c> for <c>b ≥ 0</c>, saturating at <see cref="long.MaxValue"/> (huge intervals mean "never").</summary>
+        static long AddSaturating(long a, long b)
+        {
+            return a > long.MaxValue - b ? long.MaxValue : a + b;
         }
     }
 }

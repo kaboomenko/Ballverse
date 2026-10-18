@@ -252,5 +252,42 @@ namespace Ballverse.Core.Tests.Projects
             Assert.Equal(21000, s.NextSaveAtMs);
             Assert.Throws<ArgumentOutOfRangeException>(() => new AutosaveScheduler(1000, -1));
         }
+
+        [Fact]
+        public void HugeMaxWaitMeansNoBound()
+        {
+            var s = new AutosaveScheduler(1000, long.MaxValue);
+            s.MarkChanged(10_000);
+            Assert.False(s.ShouldSave(10_000));
+            Assert.Equal(11_000, s.NextSaveAtMs);
+            s.MarkChanged(10_900);
+            Assert.False(s.ShouldSave(11_500));
+            Assert.True(s.ShouldSave(11_900));
+        }
+
+        [Fact]
+        public void HugeDebounceSavesOnlyOnBackgroundOrMaxWait()
+        {
+            var s = new AutosaveScheduler(long.MaxValue, 0);
+            s.MarkChanged(10_000);
+            Assert.False(s.ShouldSave(10_000));
+            Assert.Equal(long.MaxValue, s.NextSaveAtMs);
+            Assert.False(s.ShouldSave(long.MaxValue - 1));
+            Assert.True(s.OnAppBackgrounded(20_000));
+            Assert.True(s.ShouldSave(20_000));
+
+            var bounded = new AutosaveScheduler(long.MaxValue, 5000);
+            bounded.MarkChanged(10_000);
+            Assert.False(bounded.ShouldSave(14_999));
+            Assert.True(bounded.ShouldSave(15_000));
+
+            var failing = new AutosaveScheduler(long.MaxValue, long.MaxValue);
+            failing.MarkChanged(1);
+            Assert.True(failing.OnAppBackgrounded(2));
+            long token = failing.BeginSave();
+            failing.FailSave(token, 3);
+            Assert.False(failing.ShouldSave(4));
+            Assert.Equal(long.MaxValue, failing.NextSaveAtMs);
+        }
     }
 }

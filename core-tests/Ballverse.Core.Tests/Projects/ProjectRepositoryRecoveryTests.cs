@@ -258,6 +258,50 @@ namespace Ballverse.Core.Tests.Projects
         }
 
         [Fact]
+        public void StorageUsageFollowsDocumentReplayPath()
+        {
+            var (store, repo) = NewRepo();
+            var d = Doc("p1");
+            d.Clip.Replay = "replays/run1.bvr";
+            repo.Save(d);
+            store.WriteAllBytes("projects/p1/replays/run1.bvr", new byte[500]);
+            store.WriteAllBytes("projects/p1/clip.bvr", new byte[7]); // not the project's replay any more
+            var u = repo.GetStorageUsage("p1");
+            Assert.Equal(500, u[StorageCategory.Replay]);
+            Assert.Equal(7, u[StorageCategory.Other]);
+        }
+
+        [Fact]
+        public void StorageUsageOfUnloadableProjectUsesDefaultReplay()
+        {
+            var (store, repo) = NewRepo();
+            store.WriteAllText("projects/x/project.json", "{");
+            store.WriteAllBytes("projects/x/clip.bvr", new byte[11]);
+            Assert.Equal(11, repo.GetStorageUsage("x")[StorageCategory.Replay]);
+        }
+
+        [Theory]
+        [InlineData("clip.bvr")]
+        [InlineData("media/user.mp4")]
+        public void DuplicateCopiesMediaEvenWhenAnExportRecordNamesIt(string exportFile)
+        {
+            var (store, repo) = NewRepo();
+            var d = Doc("p1");
+            d.Exports.Add(new ExportRecord { At = Now, Res = 1080, Fps = 60, Ms = 1000, File = exportFile });
+            repo.Save(d);
+            store.WriteAllBytes("projects/p1/clip.bvr", new byte[] { 1, 2, 3 });
+            store.WriteAllBytes("projects/p1/media/user.mp4", new byte[100]);
+            store.WriteAllBytes("projects/p1/exports/out_1.mp4", new byte[9]);
+            var copy = repo.Duplicate("p1", "p2", Later);
+            Assert.Equal("clip.bvr", copy.Clip.Replay);
+            Assert.Equal("media/user.mp4", copy.UserVideo.File);
+            Assert.True(store.FileExists("projects/p2/clip.bvr"));
+            Assert.True(store.FileExists("projects/p2/media/user.mp4"));
+            Assert.Equal(new byte[] { 1, 2, 3 }, store.ReadAllBytes("projects/p2/clip.bvr"));
+            Assert.Equal(LoadStatus.Ok, repo.Load("p2").Status);
+        }
+
+        [Fact]
         public void StorageUsageOfBrokenOrMissingProject()
         {
             var (store, repo) = NewRepo();

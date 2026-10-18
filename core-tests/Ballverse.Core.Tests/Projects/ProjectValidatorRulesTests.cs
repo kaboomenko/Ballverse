@@ -38,9 +38,9 @@ namespace Ballverse.Core.Tests.Projects
         }
 
         [Theory]
-        [InlineData(1.000001, 999999L, true)]   // 60 ticks at a hair above 1x
+        [InlineData(1.01, 990100L, true)]   // 60 ticks at one hundredth above 1x
         [InlineData(1.0, 1000000L, false)]
-        [InlineData(0.999999, 1000001L, false)]
+        [InlineData(0.99, 1010102L, false)]
         public void AutoReelBoundaryAtOneSecond(double speed, long expectedBeforeUs, bool repaired)
         {
             var d = Golden();

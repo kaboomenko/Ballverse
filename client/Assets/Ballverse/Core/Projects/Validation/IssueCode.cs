@@ -25,7 +25,7 @@ namespace Ballverse.Core.Projects
         DurationTooLong,
         /// <summary>Range start not before its end; repaired.</summary>
         InvalidRange,
-        /// <summary>Repository: the file could not be read, parsed or migrated.</summary>
+        /// <summary>Repository: the file could not be parsed or migrated (I/O read errors are <see cref="Unavailable"/>).</summary>
         Corrupt,
         /// <summary>Repository: the file was written by a newer schema version.</summary>
         TooNew,

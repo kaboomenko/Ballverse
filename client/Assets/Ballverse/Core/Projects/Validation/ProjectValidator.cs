@@ -199,7 +199,7 @@ namespace Ballverse.Core.Projects
                 clip.TrimInTick = (int)tin;
                 clip.TrimOutTick = (int)tout;
 
-                clip.Speed = ClampD(clip.Speed, ProjectLimits.MinSpeed, ProjectLimits.MaxSpeed, 1.0, "clip.speed");
+                clip.Speed = Hundredths(ClampD(clip.Speed, ProjectLimits.MinSpeed, ProjectLimits.MaxSpeed, 1.0, "clip.speed"), "clip.speed");
                 if (clip.FinaleSlowMo == null)
                 {
                     Warn("clip.finaleSlowMo", IssueCode.Missing, "Finale slow-mo missing; off.");
@@ -212,7 +212,10 @@ namespace Ballverse.Core.Projects
                     Warn("clip.finaleSlowMo.seconds", IssueCode.OutOfRange, "Active slow-mo shorter than 1 s raised to 1 s.");
                     clip.FinaleSlowMo.Seconds = ProjectLimits.MinActiveSlowMoSeconds;
                 }
-                clip.FinaleSlowMo.Factor = ClampD(clip.FinaleSlowMo.Factor, ProjectLimits.MinSlowMoFactor, ProjectLimits.MaxSlowMoFactor, 0.5, "clip.finaleSlowMo.factor");
+                clip.FinaleSlowMo.Seconds = WholeTicks(clip.FinaleSlowMo.Seconds, "clip.finaleSlowMo.seconds");
+                clip.FinaleSlowMo.Factor = Hundredths(
+                    ClampD(clip.FinaleSlowMo.Factor, ProjectLimits.MinSlowMoFactor, ProjectLimits.MaxSlowMoFactor, 0.5, "clip.finaleSlowMo.factor"),
+                    "clip.finaleSlowMo.factor");
                 clip.Fill = EnumValue(clip.Fill, SlotFill.Cover, "clip.fill");
                 clip.Pan = Vector2(clip.Pan, ProjectLimits.MinPan, ProjectLimits.MaxPan, 0.0, "clip.pan");
                 clip.Zoom = ClampD(clip.Zoom, ProjectLimits.MinZoom, ProjectLimits.MaxZoom, 1.0, "clip.zoom");
@@ -420,6 +423,13 @@ namespace Ballverse.Core.Projects
                     o.Aspect = ProjectLimits.Aspect916;
                 }
                 o.DurationMode = EnumValue(o.DurationMode, DurationMode.Auto, "output.durationMode");
+                if (o.Cover == null)
+                {
+                    Warn("output.cover", IssueCode.Missing, "Cover missing; default used.");
+                    o.Cover = new CoverSettings();
+                }
+                // Content cap: 180 s, or 179.9 s when the 0.1 s cover lead-in is prepended (spec §3.4).
+                long maxContent = ProjectTiming.MaxContentUs(doc);
                 if (o.DurationMode == DurationMode.MatchVideo && doc.UserVideo == null)
                 {
                     Warn("output.durationMode", IssueCode.InvalidValue, "Duration '= video' without a user video; auto used.");
@@ -432,7 +442,8 @@ namespace Ballverse.Core.Projects
                 }
                 if (o.ManualDurationUs != null)
                 {
-                    o.ManualDurationUs = ClampL(o.ManualDurationUs.Value, ProjectLimits.MinDurationUs, ProjectLimits.MaxDurationUs, "output.manualDurationUs");
+                    long max = o.DurationMode == DurationMode.Manual ? maxContent : ProjectLimits.MaxDurationUs;
+                    o.ManualDurationUs = ClampL(o.ManualDurationUs.Value, ProjectLimits.MinDurationUs, max, "output.manualDurationUs");
                 }
                 if (o.Resolution != null && !Enum.IsDefined(typeof(ExportResolution), o.Resolution.Value))
                 {
@@ -445,16 +456,22 @@ namespace Ballverse.Core.Projects
                     o.Fps = null;
                 }
 
-                // Total duration cap (spec §3.4). Manual is clamped above, '= V' by the fragment cap; Auto shortens the clip trim.
-                if (o.DurationMode == DurationMode.Auto && doc.Clip != null && ProjectTiming.ClipOutputUs(doc.Clip) > ProjectLimits.MaxDurationUs)
+                // Total duration cap (spec §3.4). Manual is clamped above; Auto shortens the clip trim, '= V' the video trim
+                // (the 180 s fragment cap already holds; this covers the cover lead-in).
+                if (o.DurationMode == DurationMode.Auto && doc.Clip != null && ProjectTiming.ClipOutputUs(doc.Clip) > maxContent)
                 {
                     Warn("clip.trimOutTick", IssueCode.DurationTooLong, "Reel longer than 180 s; clip trim shortened.");
-                    doc.Clip.TrimOutTick = MaxTrimOutWithinCap(doc.Clip);
+                    doc.Clip.TrimOutTick = MaxTrimOutWithinCap(doc.Clip, maxContent);
+                }
+                else if (o.DurationMode == DurationMode.MatchVideo && doc.UserVideo != null && ProjectTiming.VideoLengthUs(doc.UserVideo) > maxContent)
+                {
+                    Warn("userVideo.trimOutUs", IssueCode.DurationTooLong, "Reel longer than 180 s; video trim shortened.");
+                    doc.UserVideo.TrimOutUs = doc.UserVideo.TrimInUs + maxContent;
                 }
 
                 // Minimum duration (spec §3.8 "1-180 с"). Manual is clamped above; Auto and '= V' lengthen the trim, moving its
                 // start earlier first (that part of the source surely exists) and only then extending its end.
-                if (ProjectTiming.ReelDurationUs(doc) < ProjectLimits.MinDurationUs)
+                if (ProjectTiming.ContentDurationUs(doc) < ProjectLimits.MinDurationUs)
                 {
                     if (o.DurationMode == DurationMode.Auto && doc.Clip != null)
                     {
@@ -470,12 +487,8 @@ namespace Ballverse.Core.Projects
                     }
                 }
 
-                if (o.Cover == null)
-                {
-                    Warn("output.cover", IssueCode.Missing, "Cover missing; default used.");
-                    o.Cover = new CoverSettings();
-                }
-                o.Cover.AtUs = ClampL(o.Cover.AtUs, 0, Math.Max(0, ProjectTiming.ReelDurationUs(doc) - 1), "output.cover.atUs");
+                // The cover frame is chosen on the content timeline (the lead-in only repeats it).
+                o.Cover.AtUs = ClampL(o.Cover.AtUs, 0, Math.Max(0, ProjectTiming.ContentDurationUs(doc) - 1), "output.cover.atUs");
             }
 
             /// <summary>Shortest clip length (ticks) whose output lasts at least 1 s; then fits it into [0, MaxDurationTicks].</summary>
@@ -494,7 +507,7 @@ namespace Ballverse.Core.Projects
                 if (clip.TrimOutTick - clip.TrimInTick < lo) clip.TrimOutTick = Math.Min(SimConstants.MaxDurationTicks, clip.TrimInTick + lo);
             }
 
-            static int MaxTrimOutWithinCap(ClipSettings clip)
+            static int MaxTrimOutWithinCap(ClipSettings clip, long maxContentUs)
             {
                 var slow = clip.FinaleSlowMo;
                 int lo = clip.TrimInTick + 1, hi = clip.TrimOutTick;
@@ -502,7 +515,7 @@ namespace Ballverse.Core.Projects
                 while (lo < hi)
                 {
                     int mid = lo + (hi - lo + 1) / 2;
-                    if (ProjectTiming.ClipOutputUs(clip.TrimInTick, mid, clip.Speed, slow.Seconds, slow.Factor) <= ProjectLimits.MaxDurationUs) lo = mid;
+                    if (ProjectTiming.ClipOutputUs(clip.TrimInTick, mid, clip.Speed, slow.Seconds, slow.Factor) <= maxContentUs) lo = mid;
                     else hi = mid - 1;
                 }
                 return lo;
@@ -625,6 +638,24 @@ namespace Ballverse.Core.Projects
                     return value < min ? min : max;
                 }
                 return value;
+            }
+
+            /// <summary>Rounds a ratio to hundredths as the timeline applies it (<see cref="ProjectTiming.PercentFromRatio"/>).</summary>
+            double Hundredths(double value, string path)
+            {
+                double rounded = ProjectTiming.PercentFromRatio(value) / 100.0;
+                if (rounded == value) return value;
+                Warn(path, IssueCode.OutOfRange, "Rounded to hundredths.");
+                return rounded;
+            }
+
+            /// <summary>Rounds seconds to whole 1/60 s ticks as the timeline applies them (<see cref="ProjectTiming.TicksFromSeconds"/>).</summary>
+            double WholeTicks(double seconds, string path)
+            {
+                double rounded = ProjectTiming.TicksFromSeconds(seconds) / (double)SimConstants.TickRate;
+                if (rounded == seconds) return seconds;
+                Warn(path, IssueCode.OutOfRange, "Rounded to whole ticks (1/60 s).");
+                return rounded;
             }
 
             int ClampI(int value, int min, int max, string path)

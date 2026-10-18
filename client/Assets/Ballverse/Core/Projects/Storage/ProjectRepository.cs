@@ -268,6 +268,9 @@ namespace Ballverse.Core.Projects
             {
                 if (e.File != null) skip.Add(e.File);
             }
+            // Files the copy still references are always copied, even if a (hand-edited) history entry names them.
+            if (doc.Clip?.Replay != null) skip.Remove(doc.Clip.Replay);
+            if (doc.UserVideo?.File != null) skip.Remove(doc.UserVideo.File);
             try
             {
                 _store.CreateDirectory(newDir);
@@ -295,14 +298,15 @@ namespace Ballverse.Core.Projects
 
         /// <summary>
         /// Bytes used by the folder of project <paramref name="id"/>, by category (spec §3.9 "Хранилище": projects, clips, user
-        /// videos, thumbnail cache). Categories follow the §7.4 layout and, when the project loads, its <c>userVideo.file</c>
-        /// and <c>exports[].file</c> references.
+        /// videos, thumbnail cache). Categories follow the §7.4 layout and, when the project loads, its <c>clip.replay</c>,
+        /// <c>userVideo.file</c> and <c>exports[].file</c> references (the default <c>clip.bvr</c> otherwise).
         /// </summary>
         public ProjectStorageUsage GetStorageUsage(string id)
         {
             string dir = ProjectDir(id);
             var r = Load(id);
             string userVideo = r.Success && r.Document.UserVideo != null ? r.Document.UserVideo.File : null;
+            string replay = r.Success && r.Document.Clip?.Replay != null ? r.Document.Clip.Replay : ProjectPaths.ClipReplayFile;
             var exports = new HashSet<string>(StringComparer.Ordinal); // membership only
             if (r.Success)
             {
@@ -312,7 +316,7 @@ namespace Ballverse.Core.Projects
                 }
             }
             var usage = new long[(int)StorageCategory.Other + 1];
-            AddUsage(dir, "", userVideo, exports, usage);
+            AddUsage(dir, "", replay, userVideo, exports, usage);
             return new ProjectStorageUsage(usage);
         }
 
@@ -403,25 +407,25 @@ namespace Ballverse.Core.Projects
             }
         }
 
-        void AddUsage(string dir, string relPrefix, string userVideo, HashSet<string> exports, long[] usage)
+        void AddUsage(string dir, string relPrefix, string replay, string userVideo, HashSet<string> exports, long[] usage)
         {
             foreach (var file in _store.ListFiles(dir))
             {
-                usage[(int)Categorize(relPrefix + file, userVideo, exports)] += _store.GetFileSize(dir + "/" + file);
+                usage[(int)Categorize(relPrefix + file, replay, userVideo, exports)] += _store.GetFileSize(dir + "/" + file);
             }
             foreach (var sub in _store.ListDirectories(dir))
             {
-                AddUsage(dir + "/" + sub, relPrefix + sub + "/", userVideo, exports, usage);
+                AddUsage(dir + "/" + sub, relPrefix + sub + "/", replay, userVideo, exports, usage);
             }
         }
 
-        static StorageCategory Categorize(string rel, string userVideo, HashSet<string> exports)
+        static StorageCategory Categorize(string rel, string replay, string userVideo, HashSet<string> exports)
         {
             if (rel == ProjectPaths.ProjectFile || rel == ProjectPaths.BackupFile || rel == ProjectPaths.TempFile || rel == ProjectPaths.BackupTempFile)
             {
                 return StorageCategory.ProjectFile;
             }
-            if (rel == ProjectPaths.ClipReplayFile) return StorageCategory.Replay;
+            if (rel == replay) return StorageCategory.Replay;
             if (rel == ProjectPaths.ClipRenderFile) return StorageCategory.RenderCache;
             if (rel == userVideo || rel.StartsWith(ProjectPaths.MediaDir + "/", StringComparison.Ordinal)) return StorageCategory.Media;
             if (rel.StartsWith(ProjectPaths.ThumbsDir + "/", StringComparison.Ordinal)) return StorageCategory.Thumbs;
@@ -437,7 +441,7 @@ namespace Ballverse.Core.Projects
             }
             catch (Exception e) when (!(e is OutOfMemoryException))
             {
-                // Best effort: a leftover folder without project.json is skipped by List.
+                // Best effort: a leftover folder without project.json is reported by List as Orphan and removed by CleanupOrphans.
             }
         }
 
