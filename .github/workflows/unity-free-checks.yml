@@ -1,4 +1,4 @@
-name: Media checks
+name: Unity-free checks
 
 # MediaBridge checks that run without Unity: the Android Java plugin compiled against the Android API 34 framework
 # classes (android-all from Maven Central) with -Xlint -Werror plus JVM unit checks, and the Ballverse.Media
@@ -8,9 +8,10 @@ on:
     paths:
       - "client/Assets/Plugins/Android/**"
       - "client/Assets/Ballverse/Media/**"
+      - "client/Assets/Ballverse/UI/**"
       - "client/Assets/Ballverse/Core/**"
       - "core-tests/MediaJavaCheck/**"
-      - ".github/workflows/media-checks.yml"
+      - ".github/workflows/unity-free-checks.yml"
   pull_request:
     paths:
       - "client/Assets/Plugins/Android/**"
@@ -54,3 +55,13 @@ jobs:
           dotnet-version: "8.0.x"
       - name: Ballverse.Media tests under .NET 8
         run: bash "client/Assets/Ballverse/Media/Tests/DotNet~/run.sh"
+
+  ui-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Ballverse.UI model tests under .NET 8
+        run: dotnet test "client/Assets/Ballverse/UI/Tests~/Ballverse.UI.Model.Tests/Ballverse.UI.Model.Tests.csproj" -c Release
