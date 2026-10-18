@@ -20,7 +20,7 @@ Mode / simulation code emits the events; it never spawns particles itself.
 public struct RenderEvent
 {
     public int Tick;             // simulation tick of the event (effects start here)
-    public RenderEventType Type; // Hit, Break, Spawn, Eliminate, Finish, Splat, Escape, Pierce
+    public RenderEventType Type; // Hit 0, Break 1, Eliminate 2, Finish 3, Spawn 4 (= ReplayEventType numbers), Splat 16, Escape 17, Pierce 18
     public int Id;               // unique among the events of the same tick; seeds the effect
     public float X, Y;           // world metres, render-stream space
     public float NormalX, NormalY; // unit direction (Hit: contact normal towards the ball), 0 = none
@@ -52,10 +52,19 @@ Use `RenderEvent.Create(...)` (all optional fields set to "none"), `RenderEvent.
 5. **Bodies referenced by id** (`BodyId`, `TargetBodyId`) are looked up in the frame being drawn; if the body no longer exists (a ring
    broke in the same tick) the body-attached part is skipped. A `Break` therefore carries the broken body's geometry
    (`ShapeId`, `X/Y`, `Angle`, `Scale`) itself.
-6. **Storage.** The live run keeps the log in memory. For saved clips the log is either written next to the stream
-   (`RenderEventLog.WriteTo`, format `BVE1`, 68 bytes per event, XXH64 trailer) or rebuilt by re-simulating the replay, exactly like
-   the render stream (§7.4: the `.bvr` replay stays the source of truth). A typical clip has a few thousand events (≈ 200 KB/min).
+6. **Storage.** The live run keeps the log in memory. A saved clip stores it as `clip.bve` (`RenderEventLog.ClipFileName`) next to
+   `clip.bvs`: format `BVE1`, 68 bytes per event, XXH64 trailer (`RenderEventLog.WriteTo` / `ReadFrom`). It is part of the derived
+   visual cache together with the `.bvs` and follows the same rules: written whenever the `.bvs` is written (same recording pass),
+   deleted and rebuilt together with it (re-simulating the `.bvr`, which stays the source of truth, §7.4). So preview and export read
+   only `clip.bvs` + `clip.bve` and never recompute physics, as §7.4 promises. The `.bvr` EVNT records cannot replace it: they hold
+   only (Δtick, type, bodyId, impulse, extra), while effects need position, normal, local angle, size and the broken shape. A typical
+   clip has a few thousand events (≈ 200 KB/min). *Open with the projects / render-stream owners:* add `clip.bve` to
+   `ProjectPaths` and the §7.4 project layout and retention text (or move this layer into a `.bvs` v2 block); the format does not change
+   either way.
 7. **Window.** The renderer needs the events of the last `VfxSystem.MaxEffectTicks` (180) ticks: `log.GetWindow(tick, 180)`.
+8. **Kinds shared with the replay.** `Hit`, `Break`, `Eliminate`, `Finish` and `Spawn` have the same numbers as `ReplayEventType`;
+   render-only kinds start at 16. `RenderEventTypes.TryGetReplayType` is the explicit mapping (Escape → Finish, Pierce → Break,
+   Splat → none: its sound comes from the accompanying Hit). Modes that emit both streams emit them from the same `SimEvent`.
 
 ## 3. How effects are derived
 
@@ -63,8 +72,8 @@ Use `RenderEvent.Create(...)` (all optional fields set to "none"), `RenderEvent.
 |---|---|---|---|
 | `Hit` | `sparks`: 4–12 streaks along `Normal` ±70°; `confetti`: 6–14 theme-colour rects; `shards`: 4–9 triangles; plus a ripple ring when `Intensity` > 0.25; `off`: nothing | ball `BodyId` squashes along the normal (0.14 s); target `TargetBodyId` flashes: ring arc ±12° around `LocalAngle`, or polyline / polygon edge `Feature` (0.25 s, M02 "грань вспыхивает") | ≤ 0.5 s (confetti 1.3 s) |
 | `Break` | `shards`: 12–24 arc shards spread over the solid arcs of the broken ring (M01 1.2 s; in the Helix view horizontal 3D shards, 1 s) or 10–16 triangles for other shapes; `flash`: a big glow; `dissolve`: 24–40 rising dots; `burst`: 20–32 radial streaks. 2D view adds a light wave along the ring | — | ≤ 1.4 s |
-| `Spawn` | expanding bubble ring + 6 dots | — | 0.4 s |
-| `Eliminate` | 16-dot puff | — | 0.7 s |
+| `Spawn` | expanding bubble ring + 6 dots | ball `BodyId` pulses (radius up to +22 %, 0.3 s): birth pop, and the M02 growth pulse when the mode emits `Spawn` for a ball that grew (`Size` = new radius) | 0.4 s |
+| `Eliminate` | 16-dot puff; with a `Normal` (exit direction) also a streak band behind the ball along it plus 8 fast sparks (M02 «полоса-шлейф при вылете через проём») | — | 0.7 s |
 | `Finish` | 70 confetti from `X/Y` upwards + shockwave of radius `Size` (default 3 m) | — | 2.6 s |
 | `Escape` | 50 confetti + 6 m shockwave (M01 escape) | — | 2.6 s |
 | `Splat` | — | colour blot of radius `Size` on `TargetBodyId` at `LocalAngle` (Helix: on the platform top, rotating with it); 2D: disc at `X/Y` | 3 s |
@@ -79,20 +88,33 @@ profile shows a subset of the same particles. Motion is closed form: linear drag
 
 | Mode | Simulation fact (`Core.Sim.SimEvent` / rules) | Render event |
 |---|---|---|
-| M01 Ring Escape | `Hit` ball → ring | `RenderEvent.Hit(tick, id, Point, Normal, ballColor, impulse/loud, ballId, ballRadius, ringBodyId, Feature, LocalAngle)` |
+| M01 Ring Escape | rings (stream) | «Сжатие»: every ring carries `RenderBodyFlags.FadeOutsideSafeZone`; «Отдаление камеры»: the ball and the next 4 rings carry `RenderBodyFlags.CameraTarget` and the camera is `AutoZoom` + `AutoZoomCentered` |
+| | `Hit` ball → ring | `RenderEvent.Hit(tick, id, Point, Normal, ballColor, impulse/loud, ballId, ballRadius, ringBodyId, Feature, LocalAngle)` |
 | | ring passed and destroyed | `RenderEvent.Break(tick, id, ringBodyId, ringShapeId, ringX, ringY, ringAngle, ringScale, ringColor, 1)` |
 | | escape from the last ring | `Escape` at the ball, `ColorIndex` = ball colour |
 | | `BallHit` | `Hit` with `TargetBodyId = -1` (no flash) |
 | M02 Geometry Bounce | `Hit` ball → wall segment | `Hit` with `TargetBodyId` = wall body, `Feature` = segment index (face flash) |
 | | ball born ("Размножение") | `Spawn` at the new ball, `Size` = its radius, `BodyId` = its id |
-| | ball leaves through an opening | `Eliminate` at the exit point |
+| | ball grows (growth variant) | `Spawn` at the ball, `BodyId` = its id, `Size` = its new radius (growth pulse) |
+| | ball leaves through an opening | `Eliminate` at the exit point, `Normal` = exit direction (outwards), `Size` = ball radius |
 | | finale | `Finish` |
 | M05 Helix Drop | bounce on platform k | `Hit` (`BodyId` = ball, `Normal` = (0, 1)) + `Splat` (`TargetBodyId` = platform body, `LocalAngle` = contact azimuth in the platform frame = `SimEvent.LocalAngle`, `Size` ≈ 0.6 × ball radius) |
 | | platform passed / broken | `Break` with the platform ring's shape and transform |
 | | fireball smash | `Pierce` at the contact + `Break` |
 | | finish platform | `Finish` |
 
-## 5. Helix Drop stream conventions (the renderer's view contract)
+## 5. Body flag conventions and the Helix Drop stream (the renderer's view contract)
+
+`BodyFlags` bits 5–7 are free in the render stream; the renderer gives two of them a meaning (`RenderBodyFlags`):
+
+- `CameraTarget` (bit 5): when any visible body of a frame has it, `AutoZoom` fits only those bodies; otherwise it fits every visible
+  body (balls and shapes, by their bounding circle), as §2.1 «плавно вписывает все активные тела» says.
+- `FadeOutsideSafeZone` (bit 6): in the 2D view the body's alpha falls from 1 to 0.2 as its bounding circle reaches 0 → 4 m beyond
+  the circle inscribed in the safe zone (radius 4 m around the arena centre) — M01 «Кольца за краем безопасной зоны рисуются с
+  затуханием» (`SafeZoneFade`).
+- Bit 7 stays free for modes.
+
+Helix Drop:
 
 - Every platform is one `ShapeKind.Ring` body: body `Y` = height of the platform's **top** face, body `X` = tower axis (0), body angle
   = platform rotation θ_k, ring radius = (R_in + R_out) / 2, thickness = R_out − R_in, gaps = the openings (local angles, CCW, the same
@@ -102,4 +124,8 @@ profile shows a subset of the same particles. Motion is closed form: linear drag
   on the front half of its path circle.
 - Passed platforms that stay (destroyPassed = off) carry `BodyFlags.Dead` (drawn muted).
 - The fireball ball carries `BodyFlags.Highlight` (glow and accent trail).
-- Mode id `helix_drop` selects the view (`ModeViews.ForMode`); camera: vertical follow, ball at 38 % from the top, only downwards.
+- Mode M05 (`helix_drop`) selects the view (`ModeViews.ForMode`, via `ModeCatalog`); camera: vertical follow, the **drawn** ball at
+  38 % from the top (the anchor includes the projection's front-of-path drop), only downwards. Set `HelixViewSettings.PlatformSpacing`
+  from the mode's `platformSpacing` so the default camera shows 12 platforms (view height = 12 × spacing × cos tilt); 0 keeps 16 m.
+- During a transit (ball top above the bottom face of platform k) the ball is drawn over platform k; a platform goes over the ball
+  only when its whole slab (`PlatformThickness`, default 0.15 m) is above the ball's top.

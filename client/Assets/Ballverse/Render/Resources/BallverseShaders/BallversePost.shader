@@ -5,7 +5,8 @@
 // Pass 0 Prefilter : 4-tap box downsample of _BvSource + soft threshold (_BvBloomParams.x threshold, .y knee)
 // Pass 1 Downsample: 4-tap box downsample of _BvSource
 // Pass 2 Upsample  : 9-tap tent of _BvSource added onto the target (Blend One One)
-// Pass 3 Composite : _BvScene + _BvBloom * _BvBloomParams.z, vignette _BvBloomParams.w -> target
+// Pass 3 Composite : _BvScene + _BvBloom * _BvBloomParams.z, theme colour grade (_BvGrade: x saturation, y contrast
+//                    around linear mid-grey 0.18; _BvGradeTint.rgb multiplicative tint), vignette _BvBloomParams.w -> target
 Shader "Hidden/Ballverse/Post"
 {
     HLSLINCLUDE
@@ -20,6 +21,8 @@ Shader "Hidden/Ballverse/Post"
     TEXTURE2D(_BvBloom);
     SAMPLER(sampler_BvBloom);
     float4 _BvBloomParams;
+    float4 _BvGrade;
+    float4 _BvGradeTint;
 
     struct Varyings
     {
@@ -137,6 +140,11 @@ Shader "Hidden/Ballverse/Post"
             {
                 float3 col = SAMPLE_TEXTURE2D(_BvScene, sampler_BvScene, i.uv).rgb;
                 col += SAMPLE_TEXTURE2D(_BvBloom, sampler_BvBloom, i.uv).rgb * _BvBloomParams.z;
+                // Theme colour grade (spec §7.7 «цветокоррекция по теме»); identity for (1, 1) and a white tint.
+                float luma = dot(col, float3(0.2126, 0.7152, 0.0722));
+                col = max(lerp(luma.xxx, col, _BvGrade.x), 0.0);
+                col = max((col - 0.18) * _BvGrade.y + 0.18, 0.0);
+                col *= _BvGradeTint.rgb;
                 float2 d = (i.uv - 0.5) * 1.41421356;
                 col *= 1.0 - _BvBloomParams.w * smoothstep(0.35, 1.0, dot(d, d));
                 return half4(saturate(col), 1.0);

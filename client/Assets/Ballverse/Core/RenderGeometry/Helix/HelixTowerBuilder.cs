@@ -23,10 +23,13 @@ namespace Ballverse.Core.RenderGeometry
     /// <para>
     /// Painter's order (front/back): platforms from the lowest to the highest; for each platform its back half (top face),
     /// then the column segment standing on it, then its front half (outer rim, visible gap walls, top face), then its
-    /// splats. Platforms at or below <c>ballHeight</c> go to the <c>under</c> batch, higher ones to <c>over</c>; the renderer
-    /// draws under → ball → over, so the ball is hidden by an overhanging higher platform and covers the one it bounces on.
-    /// Equal heights draw in ascending body id (a deadly-sector ring at the same height as its platform draws on top when it
-    /// has the higher id).
+    /// splats. A platform goes to the <c>over</c> batch only when its whole slab is above the ball — its bottom face
+    /// (top − <see cref="HelixViewSettings.PlatformThickness"/>) is higher than the ball's top (<c>ballTop</c>) — and to the
+    /// <c>under</c> batch otherwise. The renderer draws under → ball → over, so the ball is hidden by an overhanging higher
+    /// platform, covers the one it bounces on, and stays drawn over platform k for the whole transit through its slab
+    /// (M05 card: «рендер на время транзита рисует шар поверх платформы k»; the transit lasts while
+    /// <c>y + r ≥ y_k − T</c>). Equal heights draw in ascending body id (a deadly-sector ring at the same height as its
+    /// platform draws on top when it has the higher id).
     /// </para>
     /// Allocation-free once the scratch arrays reached the platform count.
     /// </summary>
@@ -45,7 +48,7 @@ namespace Ballverse.Core.RenderGeometry
         public int OverCount { get; private set; }
 
         public void Build(RenderFrame frame, RenderQuantization quantization, IReadOnlyList<ShapeDefinition> shapes, uint[] palette,
-            RenderTheme theme, HelixViewSettings view, in HelixProjection projection, in TessellationSettings tess, float ballHeight,
+            RenderTheme theme, HelixViewSettings view, in HelixProjection projection, in TessellationSettings tess, float ballTop,
             ReadOnlySpan<HelixSplat> splats, GeometryBatch under, GeometryBatch over)
         {
             if (frame == null) throw new ArgumentNullException(nameof(frame));
@@ -102,7 +105,8 @@ namespace Ballverse.Core.RenderGeometry
             {
                 BodyState b = bodies[_order[p]];
                 float h = _height[p];
-                bool isOver = !float.IsNaN(ballHeight) && h > ballHeight;
+                // Over the ball only once the transit through this slab has ended (slab bottom above the ball's top).
+                bool isOver = !float.IsNaN(ballTop) && h - t > ballTop;
                 if (isOver) OverCount++;
                 GeometryBatch batch = isOver ? over : under;
                 ShapeDefinition shape = shapes[b.ShapeId];

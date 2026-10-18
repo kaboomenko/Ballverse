@@ -11,9 +11,10 @@ namespace Ballverse.Core.RenderGeometry
     /// <para>Draw order: background → <see cref="Under"/> → <see cref="Trails"/> → <see cref="Balls"/> → <see cref="Over"/> →
     /// <see cref="Particles"/> → <see cref="Labels"/>. In the 2D view all shapes and overlays are in <see cref="Under"/>; the
     /// Helix view puts platforms above the ball into <see cref="Over"/>.</para>
-    /// <para>History: trails and camera smoothing depend on recent ticks. Call <see cref="Sync"/> before
-    /// <see cref="Compose"/>; it replays only the ticks it has not seen (sequential playback reads nothing extra) and after a
-    /// seek refills the needed window from the frame source, so a frame looks the same however it was reached.</para>
+    /// <para>History: trails and camera smoothing depend on recent ticks. Call <see cref="Sync"/> (caller-owned frame, e.g.
+    /// a live run) or <see cref="SyncAndRead"/> (frame read from the source, e.g. a stream reader: forward reads only) before
+    /// <see cref="Compose"/>; they replay only the ticks not seen yet (sequential playback reads nothing extra) and after a
+    /// seek refill the needed window from the frame source, so a frame looks the same however it was reached.</para>
     /// Allocation-free per frame once buffers reached their peak sizes.
     /// </summary>
     public sealed class RenderComposer
@@ -113,34 +114,68 @@ namespace Ballverse.Core.RenderGeometry
         /// Brings trails and camera history to <paramref name="tick"/>, whose frame is <paramref name="frame"/>. Missing
         /// ticks are read from <paramref name="source"/> (may be null: then only the given frame is recorded and a gap
         /// restarts trails). Allocation-free.
+        /// <para>When <paramref name="frame"/> itself comes from the same stream reader as <paramref name="source"/>, use
+        /// <see cref="SyncAndRead"/> instead: reading tick t first and then the skipped ticks t − k … t − 1 makes the reader
+        /// rewind and re-decode its block on every output frame.</para>
         /// </summary>
         public void Sync(int tick, RenderFrame frame, IRenderFrameSource source, ComposeSettings settings)
         {
             if (_quantization == null) throw new InvalidOperationException("SetStream must be called first");
             if (frame == null) throw new ArgumentNullException(nameof(frame));
             if (tick < 0) throw new ArgumentOutOfRangeException(nameof(tick));
-            int window = HistoryTicks(settings);
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
             if (tick == _lastSyncedTick) return;
-            int from;
-            if (_lastSyncedTick >= 0 && tick > _lastSyncedTick && tick - _lastSyncedTick <= window + 1)
-            {
-                from = _lastSyncedTick + 1;
-            }
-            else
-            {
-                _trails.Reset();
-                _camera.Reset();
-                from = Math.Max(0, tick - window);
-            }
-            if (source != null)
-            {
-                for (int t = from; t < tick; t++)
-                {
-                    if (source.TryReadFrame(t, _scratchFrame)) Record(t, _scratchFrame);
-                }
-            }
+            int from = BeginSync(tick, settings);
+            ReplayHistory(from, tick, source);
             Record(tick, frame);
             _lastSyncedTick = tick;
+        }
+
+        /// <summary>
+        /// Reads the frame of <paramref name="tick"/> from <paramref name="source"/> into <paramref name="frame"/> and brings
+        /// trails and camera history to it. Every tick is read in increasing order — the history ticks first, the shown tick
+        /// last — so a <see cref="RenderStreamFrameSource"/> only ever decodes forwards and the work per output frame is linear
+        /// in the ticks it advances (the studio player and the export loop at any ticks-per-frame ratio). Returns false, with
+        /// <paramref name="frame"/> unchanged, when the source cannot supply <paramref name="tick"/>. Allocation-free.
+        /// </summary>
+        public bool SyncAndRead(int tick, IRenderFrameSource source, RenderFrame frame, ComposeSettings settings)
+        {
+            if (_quantization == null) throw new InvalidOperationException("SetStream must be called first");
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            if (frame == null) throw new ArgumentNullException(nameof(frame));
+            if (tick < 0) throw new ArgumentOutOfRangeException(nameof(tick));
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
+            if (tick == _lastSyncedTick) return source.TryReadFrame(tick, frame);
+            int from = BeginSync(tick, settings);
+            ReplayHistory(from, tick, source);
+            if (from < tick) _lastSyncedTick = tick - 1;
+            if (!source.TryReadFrame(tick, frame)) return false;
+            Record(tick, frame);
+            _lastSyncedTick = tick;
+            return true;
+        }
+
+        /// <summary>First tick to replay before <paramref name="tick"/>; resets the history when it cannot continue.</summary>
+        int BeginSync(int tick, ComposeSettings settings)
+        {
+            int window = HistoryTicks(settings);
+            if (_lastSyncedTick >= 0 && tick > _lastSyncedTick && tick - _lastSyncedTick <= window + 1)
+            {
+                return _lastSyncedTick + 1;
+            }
+            _trails.Reset();
+            _camera.Reset();
+            _lastSyncedTick = -1;
+            return Math.Max(0, tick - window);
+        }
+
+        void ReplayHistory(int from, int tick, IRenderFrameSource source)
+        {
+            if (source == null) return;
+            for (int t = from; t < tick; t++)
+            {
+                if (source.TryReadFrame(t, _scratchFrame)) Record(t, _scratchFrame);
+            }
         }
 
         void Record(int tick, RenderFrame frame)
@@ -177,9 +212,19 @@ namespace Ballverse.Core.RenderGeometry
             _cache.BeginFrame();
 
             bool helix = settings.View == ModeView.Helix;
+            if (helix && settings.Camera == null) _helixCamera.ViewHeight = settings.Helix.ViewHeight;
             CameraSettings cam = settings.Camera ?? (helix ? _helixCamera : _fixedCamera);
             int w = settings.CanvasWidth, h = settings.CanvasHeight;
             ViewRect view = _camera.Evaluate(tick, cam, w, h, out float focusY);
+            float towerAxis = helix ? TowerAxisX(frame) : 0f;
+            if (helix && cam.Mode == CameraMode.Follow)
+            {
+                // The follow anchor (38 % from the top, M05) applies to the ball as drawn: the projection puts the ball on the
+                // front of its path circle, below the focus height, so shift the view by that drop.
+                var focus = new HelixProjection(towerAxis, focusY, settings.Helix.TiltRadians, settings.Helix.CameraDistance, settings.Helix.BallPathRadius);
+                focus.ProjectBody(towerAxis, focusY, out _, out float drawnY, out _);
+                view.CenterY -= focusY - drawnY;
+            }
             if (VfxSystem.TryGetShake(events, tick, settings.ReduceMotion, out float shakeX, out float shakeY))
             {
                 view.CenterX += shakeX;
@@ -208,7 +253,7 @@ namespace Ballverse.Core.RenderGeometry
 
             if (helix)
             {
-                var proj = new HelixProjection(TowerAxisX(frame), focusY, settings.Helix.TiltRadians, settings.Helix.CameraDistance, settings.Helix.BallPathRadius);
+                var proj = new HelixProjection(towerAxis, focusY, settings.Helix.TiltRadians, settings.Helix.CameraDistance, settings.Helix.BallPathRadius);
                 ComposeHelix(tick, frame, events, settings, theme, tess, proj);
                 ComposeBallsAndLabels(frame, events, tick, settings, theme, ref proj);
                 TrailBuildSettings trail = TrailBuildSettings.Create(look.Trail, quality.TrailFraction, theme.TrailEmission, _palette[PaletteSlots.Accent]);
@@ -267,8 +312,14 @@ namespace Ballverse.Core.RenderGeometry
                 float angle = RenderQuantization.DequantizeAngle(b.Angle);
                 float emission = theme.ShapeEmission * ((b.Flags & BodyFlags.Highlight) != 0 ? 1.6f : 1f);
                 if ((b.Flags & BodyFlags.Dead) != 0) emission = 1f;
-                Under.AppendTransformed(g, _quantization.DequantizePosition(b.X), _quantization.DequantizePosition(b.Y),
-                    MathF.Cos(angle), MathF.Sin(angle), drawScale, ShapeColor(b), emission);
+                float x = _quantization.DequantizePosition(b.X), y = _quantization.DequantizePosition(b.Y);
+                uint color = ShapeColor(b);
+                if ((b.Flags & RenderBodyFlags.FadeOutsideSafeZone) != 0)
+                {
+                    float extent = ShapeTessellator.BoundingRadius(_shapes[b.ShapeId], _quantization, _quantization.DequantizeScale(b.Scale));
+                    color = ColorMath.WithAlpha(color, ColorMath.A(color) / 255f * SafeZoneFade.Alpha(x, y, extent));
+                }
+                Under.AppendTransformed(g, x, y, MathF.Cos(angle), MathF.Sin(angle), drawScale, color, emission);
             }
         }
 
@@ -366,8 +417,9 @@ namespace Ballverse.Core.RenderGeometry
         void ComposeHelix(int tick, RenderFrame frame, ReadOnlySpan<RenderEvent> events, ComposeSettings settings, RenderTheme theme,
             in TessellationSettings tess, in HelixProjection proj)
         {
-            // Ball height decides which platforms are drawn over the ball.
-            float ballHeight = float.NaN;
+            // The ball's top decides which platforms are drawn over the ball (a platform the ball is passing through stays
+            // under it for the whole transit, M05).
+            float ballTop = float.NaN;
             bool highlighted = false;
             ReadOnlySpan<BodyState> bodies = frame.Bodies;
             for (int i = 0; i < bodies.Length; i++)
@@ -375,9 +427,9 @@ namespace Ballverse.Core.RenderGeometry
                 BodyState b = bodies[i];
                 if ((b.Flags & BodyFlags.Visible) == 0 || !IsCircle(b)) continue;
                 bool hl = (b.Flags & BodyFlags.Highlight) != 0;
-                if (float.IsNaN(ballHeight) || (hl && !highlighted))
+                if (float.IsNaN(ballTop) || (hl && !highlighted))
                 {
-                    ballHeight = _quantization.DequantizePosition(b.Y);
+                    ballTop = _quantization.DequantizePosition(b.Y) + Math.Max(0f, _quantization.DequantizeScale(b.Scale));
                     highlighted = hl;
                 }
             }
@@ -401,7 +453,7 @@ namespace Ballverse.Core.RenderGeometry
                 };
             }
 
-            _helix.Build(frame, _quantization, _shapes, _palette, theme, settings.Helix, proj, tess, ballHeight,
+            _helix.Build(frame, _quantization, _shapes, _palette, theme, settings.Helix, proj, tess, ballTop,
                 new ReadOnlySpan<HelixSplat>(_splats, 0, splatCount), Under, Over);
 
             // Other non-circle bodies: flat at the ball path depth.
@@ -445,7 +497,7 @@ namespace Ballverse.Core.RenderGeometry
                 float radius = _quantization.DequantizeScale(b.Scale);
                 if (!(radius > 0f)) continue;
                 proj.ProjectBody(_quantization.DequantizePosition(b.X), _quantization.DequantizePosition(b.Y), out float x, out float y, out float scale);
-                radius *= scale;
+                radius *= scale * VfxSystem.GetPulse(events, tick, b.Id);
                 float rx = radius, ry = radius, squashAngle = 0f;
                 if (VfxSystem.TryGetSquash(events, tick, b.Id, out float amount, out float nx, out float ny))
                 {

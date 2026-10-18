@@ -39,6 +39,7 @@ namespace Ballverse.Render
         readonly BatchMeshUploader[] _trails = new BatchMeshUploader[FrameSets];
         readonly BatchMeshUploader[] _over = new BatchMeshUploader[FrameSets];
         readonly LabelRenderer[] _labels = new LabelRenderer[FrameSets];
+        readonly RenderFrame _sourceFrame = new RenderFrame();
         HudEntry[] _hud = new HudEntry[16];
         int _hudCount;
         int _frameSet;
@@ -74,12 +75,35 @@ namespace Ballverse.Render
 
         /// <summary>
         /// Renders <paramref name="frame"/> (the frame of <c>context.Tick</c>) into <paramref name="target"/> with
-        /// <c>context.Quality</c>. Real-time profiles render the scene at their render scale and upscale.
+        /// <c>context.Quality</c>. Real-time profiles render the scene at their render scale and upscale. Use this when the
+        /// caller owns the frame (a live run). When the frame comes from a stream reader, use
+        /// <see cref="Render(RenderContext, RenderTexture)"/> so the reader is only read forwards.
         /// </summary>
         public void Render(RenderFrame frame, RenderContext context, RenderTexture target)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(BallverseRenderer));
             if (frame == null) throw new ArgumentNullException(nameof(frame));
+            RenderCore(frame, context, target);
+        }
+
+        /// <summary>
+        /// Reads the frame of <c>context.Tick</c> from <c>context.FrameSource</c> and renders it (studio player, export).
+        /// The history ticks and the shown tick are read in increasing order (<see cref="RenderComposer.SyncAndRead"/>), so a
+        /// <see cref="RenderStreamFrameSource"/> never rewinds, whatever the ticks-per-output-frame ratio. Returns false
+        /// (nothing drawn) when the source cannot supply the tick. The frame read is available as <see cref="LastFrame"/>.
+        /// </summary>
+        public bool Render(RenderContext context, RenderTexture target)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+            if (context.FrameSource == null) throw new ArgumentException("RenderContext.FrameSource is required", nameof(context));
+            return RenderCore(null, context, target);
+        }
+
+        /// <summary>The frame read by the last <see cref="Render(RenderContext, RenderTexture)"/> (reused buffer).</summary>
+        public RenderFrame LastFrame => _sourceFrame;
+
+        bool RenderCore(RenderFrame frame, RenderContext context, RenderTexture target)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(BallverseRenderer));
             if (context == null) throw new ArgumentNullException(nameof(context));
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (context.Shapes == null) throw new ArgumentException("RenderContext.Shapes is required", nameof(context));
@@ -91,7 +115,6 @@ namespace Ballverse.Render
             }
 
             BindStream(context);
-            CopyHud(frame, context);
 
             QualityProfile quality = context.Quality ?? QualityProfile.A;
             int width = target.width;
@@ -106,7 +129,16 @@ namespace Ballverse.Render
             _compose.CanvasHeight = height;
 
             int tick = Math.Max(0, context.Tick);
-            _composer.Sync(tick, frame, context.FrameSource, _compose);
+            if (frame == null)
+            {
+                if (!_composer.SyncAndRead(tick, context.FrameSource, _sourceFrame, _compose)) return false;
+                frame = _sourceFrame;
+            }
+            else
+            {
+                _composer.Sync(tick, frame, context.FrameSource, _compose);
+            }
+            CopyHud(frame, context);
             ReadOnlySpan<RenderEvent> events = context.Events != null
                 ? context.Events.GetWindow(tick, VfxSystem.MaxEffectTicks)
                 : ReadOnlySpan<RenderEvent>.Empty;
@@ -125,6 +157,7 @@ namespace Ballverse.Render
 
             RecordCommands(context, theme, quality, target, under, trails, over, bloom);
             Graphics.ExecuteCommandBuffer(_cmd);
+            return true;
         }
 
         /// <summary>
@@ -133,12 +166,34 @@ namespace Ballverse.Render
         /// </summary>
         public void RenderOffline(RenderFrame frame, RenderContext context, RenderTexture target)
         {
+            if (frame == null) throw new ArgumentNullException(nameof(frame));
             if (context == null) throw new ArgumentNullException(nameof(context));
             QualityProfile saved = context.Quality;
             context.Quality = QualityProfile.Export;
             try
             {
-                Render(frame, context, target);
+                RenderCore(frame, context, target);
+            }
+            finally
+            {
+                context.Quality = saved;
+            }
+        }
+
+        /// <summary>
+        /// Offline export render of the frame of <c>context.Tick</c> read from <c>context.FrameSource</c> (the export loop:
+        /// forward reads only, see <see cref="Render(RenderContext, RenderTexture)"/>). Returns false when the source cannot
+        /// supply the tick.
+        /// </summary>
+        public bool RenderOffline(RenderContext context, RenderTexture target)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+            if (context.FrameSource == null) throw new ArgumentException("RenderContext.FrameSource is required", nameof(context));
+            QualityProfile saved = context.Quality;
+            context.Quality = QualityProfile.Export;
+            try
+            {
+                return RenderCore(null, context, target);
             }
             finally
             {
@@ -226,6 +281,8 @@ namespace Ballverse.Render
                 cmd.SetGlobalTexture(ShaderIds.Scene, scene);
                 cmd.SetGlobalTexture(ShaderIds.Bloom, bloomTex);
                 cmd.SetGlobalVector(ShaderIds.BloomParams, new Vector4(_composer.BloomThreshold, 0.5f, intensity, _composer.Background.Vignette));
+                cmd.SetGlobalVector(ShaderIds.Grade, new Vector4(theme.Saturation, theme.Contrast, 0f, 0f));
+                cmd.SetGlobalVector(ShaderIds.GradeTint, ColorConvert.ToWorking(theme.Tint));
                 cmd.SetRenderTarget(target, RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store);
                 cmd.DrawProcedural(Matrix4x4.identity, post, 3, MeshTopology.Triangles, 3);
             }

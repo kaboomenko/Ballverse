@@ -106,7 +106,7 @@ namespace Ballverse.Core.Tests.RenderGeometry
             var builder = new HelixTowerBuilder();
             var proj = new HelixProjection(0f, -3.3f, Tilt, 14f, 1.5f);
             builder.Build(frame, Q, shapes, palette, RenderThemeCatalog.Default, new HelixViewSettings(), proj, TessellationSettings.Create(120f),
-                -3.3f, ReadOnlySpan<HelixSplat>.Empty, under, over);
+                -3.3f + 0.25f, ReadOnlySpan<HelixSplat>.Empty, under, over);   // ball top
             Assert.Equal(6, builder.PlatformCount);
             Assert.Equal(2, builder.OverCount);   // platforms at 0 and −1.8
             Assert.True(under.IndexCount > 0);

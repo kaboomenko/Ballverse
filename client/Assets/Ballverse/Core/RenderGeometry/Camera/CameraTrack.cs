@@ -10,7 +10,10 @@ namespace Ballverse.Core.RenderGeometry
         Fixed = 0,
         /// <summary>Follows the leader ball (M05 Helix Drop: vertically only, never upwards).</summary>
         Follow = 1,
-        /// <summary>Smoothly fits all visible balls (M01 "camera zoom-out" progression).</summary>
+        /// <summary>
+        /// Smoothly fits all visible bodies (spec §2.1), or only the bodies flagged <see cref="RenderBodyFlags.CameraTarget"/>
+        /// when a frame has any (M01 «Отдаление камеры»: the mode flags the ball and the next 4 rings).
+        /// </summary>
         AutoZoom = 2,
     }
 
@@ -26,7 +29,7 @@ namespace Ballverse.Core.RenderGeometry
         public bool FollowOnlyDown { get; set; }
         /// <summary>Exponential smoothing time constant, seconds (0 = none).</summary>
         public float SmoothingSeconds { get; set; } = 0.15f;
-        /// <summary>AutoZoom: margin around the fitted balls, metres.</summary>
+        /// <summary>AutoZoom: margin around the fitted bodies, metres.</summary>
         public float AutoZoomMargin { get; set; } = 1.5f;
         /// <summary>AutoZoom: keep the arena centre at the view centre and fit symmetrically (concentric rings).</summary>
         public bool AutoZoomCentered { get; set; }
@@ -68,7 +71,7 @@ namespace Ballverse.Core.RenderGeometry
 
     /// <summary>
     /// Deterministic camera (spec §2.1 camera modes, §7.4 "превью = экспорт"). Per tick it records the follow target and
-    /// the bounds of the visible balls; <see cref="Evaluate"/> recomputes the smoothed camera of a tick from the recorded
+    /// the AutoZoom bounds (see <see cref="Record"/>); <see cref="Evaluate"/> recomputes the smoothed camera of a tick from the recorded
     /// window only — never from the previous rendered frame — so live preview, scrubbing to any tick and export give the
     /// same view. Smoothing is an exponential filter over the last ≈ 6 time constants (residual &lt; 0.3 %); "only down" is
     /// the minimum of the filtered height over the last 2 s (longer than a bounce). Allocation-free.
@@ -109,7 +112,10 @@ namespace Ballverse.Core.RenderGeometry
 
         /// <summary>
         /// Records the camera inputs of <paramref name="tick"/>: the target is the highlighted visible circle with the lowest
-        /// id, else the visible circle with the lowest id (frames are id-sorted); bounds cover all visible circles.
+        /// id, else the visible circle with the lowest id (frames are id-sorted). The AutoZoom bounds cover the extents
+        /// (bounding circle: <see cref="ShapeTessellator.BoundingRadius"/> at the body scale, rotation-invariant) of the
+        /// visible bodies flagged <see cref="RenderBodyFlags.CameraTarget"/> when the frame has any, otherwise of every
+        /// visible body — balls and shapes alike («плавно вписывает все активные тела», §2.1). Allocation-free.
         /// </summary>
         public void Record(int tick, RenderFrame frame, RenderQuantization quantization, System.Collections.Generic.IReadOnlyList<ShapeDefinition> shapes)
         {
@@ -121,23 +127,32 @@ namespace Ballverse.Core.RenderGeometry
             s.HasTarget = false;
             s.HasBounds = false;
             bool highlighted = false;
+            bool targetsOnly = false;
             ReadOnlySpan<BodyState> bodies = frame.Bodies;
             for (int i = 0; i < bodies.Length; i++)
             {
                 BodyState b = bodies[i];
                 if ((b.Flags & BodyFlags.Visible) == 0) continue;
+                if ((b.Flags & RenderBodyFlags.CameraTarget) != 0) targetsOnly = true;
                 if (!IsCircle(b, shapes)) continue;
-                float x = quantization.DequantizePosition(b.X);
-                float y = quantization.DequantizePosition(b.Y);
-                float r = quantization.DequantizeScale(b.Scale);
                 bool hl = (b.Flags & BodyFlags.Highlight) != 0;
                 if (!s.HasTarget || (hl && !highlighted))
                 {
                     s.HasTarget = true;
-                    s.TargetX = x;
-                    s.TargetY = y;
+                    s.TargetX = quantization.DequantizePosition(b.X);
+                    s.TargetY = quantization.DequantizePosition(b.Y);
                     highlighted = hl;
                 }
+            }
+            for (int i = 0; i < bodies.Length; i++)
+            {
+                BodyState b = bodies[i];
+                if ((b.Flags & BodyFlags.Visible) == 0) continue;
+                if (targetsOnly && (b.Flags & RenderBodyFlags.CameraTarget) == 0) continue;
+                float r = Extent(b, quantization, shapes);
+                if (!(r >= 0f)) continue;
+                float x = quantization.DequantizePosition(b.X);
+                float y = quantization.DequantizePosition(b.Y);
                 if (!s.HasBounds)
                 {
                     s.HasBounds = true;
@@ -154,6 +169,15 @@ namespace Ballverse.Core.RenderGeometry
                     s.MaxY = Math.Max(s.MaxY, y + r);
                 }
             }
+        }
+
+        /// <summary>Bounding radius of a body around its position, metres; negative when the shape id is unknown.</summary>
+        static float Extent(in BodyState b, RenderQuantization q, System.Collections.Generic.IReadOnlyList<ShapeDefinition> shapes)
+        {
+            float scale = q.DequantizeScale(b.Scale);
+            if (shapes == null) return scale;
+            if ((uint)b.ShapeId >= (uint)shapes.Count) return -1f;
+            return ShapeTessellator.BoundingRadius(shapes[b.ShapeId], q, scale);
         }
 
         static bool IsCircle(in BodyState b, System.Collections.Generic.IReadOnlyList<ShapeDefinition> shapes)

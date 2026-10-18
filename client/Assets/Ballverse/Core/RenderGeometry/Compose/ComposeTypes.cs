@@ -12,14 +12,23 @@ namespace Ballverse.Core.RenderGeometry
         Helix = 1,
     }
 
-    /// <summary>Mode id → view (release 1: only <c>helix_drop</c> has its own view).</summary>
+    /// <summary>
+    /// Mode → view (release 1: only M05 Helix Drop has its own view). Resolved through <see cref="ModeCatalog"/> by mode
+    /// code, so the view follows the catalog's id for M05; the release-1 id <c>helix_drop</c> is also accepted directly
+    /// (branches whose catalog still carries the retired id resolve it too).
+    /// </summary>
     public static class ModeViews
     {
+        /// <summary>Release-1 id of M05 Helix Drop.</summary>
         public const string HelixDropId = "helix_drop";
+
+        public static ModeView ForCode(ModeCode code) => code == ModeCode.M05 ? ModeView.Helix : ModeView.Standard2D;
 
         public static ModeView ForMode(string modeId)
         {
-            return string.Equals(modeId, HelixDropId, StringComparison.Ordinal) ? ModeView.Helix : ModeView.Standard2D;
+            if (string.IsNullOrEmpty(modeId)) return ModeView.Standard2D;
+            if (string.Equals(modeId, HelixDropId, StringComparison.Ordinal)) return ModeView.Helix;
+            return ModeCatalog.TryGetById(modeId, out ModeInfo info) ? ForCode(info.Code) : ModeView.Standard2D;
         }
     }
 

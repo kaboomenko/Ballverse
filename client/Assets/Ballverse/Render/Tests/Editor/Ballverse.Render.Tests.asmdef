@@ -4,6 +4,7 @@
     "references": [
         "Ballverse.Core",
         "Ballverse.Render",
+        "Ballverse.Render.Editor",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

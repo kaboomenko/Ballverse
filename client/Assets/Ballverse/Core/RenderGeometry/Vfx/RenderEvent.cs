@@ -1,10 +1,13 @@
 using System;
+using Ballverse.Core.Replay;
 
 namespace Ballverse.Core.RenderGeometry
 {
     /// <summary>
     /// Kinds of render events (see RenderEventContract.md). Values are persisted in <see cref="RenderEventLog"/> files and
-    /// must stay stable; new kinds get new values.
+    /// must stay stable; new kinds get new values. The kinds that also exist as simulation events use the numbers of
+    /// <see cref="ReplayEventType"/> (Hit 0, Break 1, Eliminate 2, Finish 3, Spawn 4); render-only kinds start at 16 so the
+    /// two enums can never be confused. <see cref="RenderEventTypes.ToReplayType"/> is the explicit mapping.
     /// </summary>
     public enum RenderEventType : byte
     {
@@ -12,18 +15,69 @@ namespace Ballverse.Core.RenderGeometry
         Hit = 0,
         /// <summary>A body breaks (ring, platform): shards along the broken shape (<c>breakFx</c>) and a light wave.</summary>
         Break = 1,
-        /// <summary>A ball is born (M02 multiply): bubble pop.</summary>
-        Spawn = 2,
-        /// <summary>A participant is eliminated / leaves through an opening: puff.</summary>
-        Eliminate = 3,
+        /// <summary>A participant is eliminated / leaves through an opening: streak along the exit direction and a puff.</summary>
+        Eliminate = 2,
         /// <summary>Finale burst at the winner / finish (<c>finaleStyle</c> confetti): confetti and a shockwave.</summary>
-        Finish = 4,
-        /// <summary>Colour blot left on the target body at the contact (M05), fades in 3 s.</summary>
-        Splat = 5,
+        Finish = 3,
+        /// <summary>A ball is born (M02 multiply) or grows (M02 growth variant): bubble pop / growth pulse.</summary>
+        Spawn = 4,
+        /// <summary>Colour blot left on the target body at the contact (M05), fades in 3 s. Render-only.</summary>
+        Splat = 16,
         /// <summary>The ball escaped the last ring (M01): big shockwave and confetti.</summary>
-        Escape = 6,
+        Escape = 17,
         /// <summary>Fireball smash (M05 pierce): fiery burst and a short camera shake.</summary>
-        Pierce = 7,
+        Pierce = 18,
+    }
+
+    /// <summary>Helpers for <see cref="RenderEventType"/>: validity and the mapping to the replay's simulation event kinds.</summary>
+    public static class RenderEventTypes
+    {
+        /// <summary>True for the values defined by <see cref="RenderEventType"/> (allocation-free).</summary>
+        public static bool IsDefined(RenderEventType type)
+        {
+            switch (type)
+            {
+                case RenderEventType.Hit:
+                case RenderEventType.Break:
+                case RenderEventType.Eliminate:
+                case RenderEventType.Finish:
+                case RenderEventType.Spawn:
+                case RenderEventType.Splat:
+                case RenderEventType.Escape:
+                case RenderEventType.Pierce:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// The simulation event kind (<c>.bvr</c> EVNT record, sound and haptics) a render event corresponds to: shared kinds
+        /// map to themselves, <see cref="RenderEventType.Escape"/> is the run's <see cref="ReplayEventType.Finish"/>,
+        /// <see cref="RenderEventType.Pierce"/> breaks platforms (<see cref="ReplayEventType.Break"/>). Returns false for
+        /// <see cref="RenderEventType.Splat"/>, which is purely visual (its contact is the accompanying Hit).
+        /// </summary>
+        public static bool TryGetReplayType(RenderEventType type, out ReplayEventType replayType)
+        {
+            switch (type)
+            {
+                case RenderEventType.Hit: replayType = ReplayEventType.Hit; return true;
+                case RenderEventType.Break: replayType = ReplayEventType.Break; return true;
+                case RenderEventType.Eliminate: replayType = ReplayEventType.Eliminate; return true;
+                case RenderEventType.Finish: replayType = ReplayEventType.Finish; return true;
+                case RenderEventType.Spawn: replayType = ReplayEventType.Spawn; return true;
+                case RenderEventType.Escape: replayType = ReplayEventType.Finish; return true;
+                case RenderEventType.Pierce: replayType = ReplayEventType.Break; return true;
+                default: replayType = default; return false;
+            }
+        }
+
+        /// <summary><see cref="TryGetReplayType"/> that throws for kinds without a simulation counterpart.</summary>
+        public static ReplayEventType ToReplayType(RenderEventType type)
+        {
+            if (TryGetReplayType(type, out ReplayEventType r)) return r;
+            throw new ArgumentException("Render event kind " + type + " has no simulation event counterpart", nameof(type));
+        }
     }
 
     /// <summary>

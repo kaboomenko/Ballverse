@@ -38,6 +38,9 @@ namespace Ballverse.Core.RenderGeometry
             public float? Vignette { get; set; }
             public float? HelixBackShade { get; set; }
             public string FontKey { get; set; }
+            public float? Saturation { get; set; }
+            public float? Contrast { get; set; }
+            public string Tint { get; set; }
         }
 
         public static RenderTheme Parse(string json)
@@ -69,7 +72,8 @@ namespace Ballverse.Core.RenderGeometry
                     Color(dto.GridColor, "gridColor", d.GridColor), Color(dto.StarColor, "starColor", d.StarColor),
                     dto.BallFinish ?? BallFinish.None, dto.BloomIntensity ?? d.BloomIntensity, dto.BloomThreshold ?? d.BloomThreshold,
                     dto.BallEmission ?? 1f, dto.ShapeEmission ?? 1f, dto.TrailEmission ?? 1f, dto.PixelGrid ?? 0,
-                    dto.Vignette ?? 0f, dto.HelixBackShade ?? d.HelixBackShade, dto.FontKey);
+                    dto.Vignette ?? 0f, dto.HelixBackShade ?? d.HelixBackShade, dto.FontKey,
+                    dto.Saturation ?? 1f, dto.Contrast ?? 1f, Color(dto.Tint, "tint", ColorMath.White));
             }
             catch (ArgumentException e)
             {
@@ -108,6 +112,9 @@ namespace Ballverse.Core.RenderGeometry
                 Vignette = theme.Vignette,
                 HelixBackShade = theme.HelixBackShade,
                 FontKey = theme.FontKey,
+                Saturation = theme.Saturation,
+                Contrast = theme.Contrast,
+                Tint = ColorMath.ToHex(theme.Tint),
             };
             return CoreJson.Serialize(dto, indented);
         }

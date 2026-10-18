@@ -1,30 +1,25 @@
 using System;
 using Ballverse.Core;
 using Ballverse.Core.RenderGeometry;
-using Ballverse.Core.RenderStream;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.UIElements;
 using QualityLevel = Ballverse.Core.RenderGeometry.QualityLevel;
 
 namespace Ballverse.Render
 {
-    /// <summary>Supplies the frame to show this display frame (a live run, the studio player…).</summary>
-    public interface IBallverseFrameProvider
-    {
-        /// <summary>The frame to draw and its tick; false when there is nothing to draw yet.</summary>
-        bool TryGetFrame(out RenderFrame frame, out int tick);
-    }
-
     /// <summary>
-    /// Real-time presentation of a simulation on screen: renders the provider's frame every <c>LateUpdate</c> into a
-    /// render texture shown by a <see cref="RawImage"/> (the studio's simulation slot or a full-screen overlay), with the
-    /// quality profile chosen by device tier and lowered dynamically when the FPS drops (spec §7.7). Export does not use
-    /// this component: it drives <see cref="BallverseRenderer.RenderOffline"/> directly.
+    /// MonoBehaviour driver of a <see cref="BallversePresenter"/>: renders the provider's frame every <c>LateUpdate</c>
+    /// at the size of the slot it is shown in. The slot is, in priority order: an explicit <see cref="PixelSizeOverride"/>;
+    /// a UI Toolkit <see cref="Element"/> (the release-1 UI shell — the UI shows <see cref="Target"/> itself, e.g. with its
+    /// <c>TextureSlot</c>, and listens to <see cref="TargetChanged"/>); or an optional uGUI <see cref="RawImage"/>, whose
+    /// texture this component assigns. All rendering logic lives in the presenter, so a screen can also own a presenter
+    /// directly without this component. Export does not use it.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class BallverseView : MonoBehaviour
     {
-        [SerializeField, Tooltip("Where the simulation is shown. Its RectTransform size (in screen pixels) sets the render size.")]
+        [SerializeField, Tooltip("Optional uGUI slot. Its RectTransform size (in screen pixels) sets the render size and it shows the texture.")]
         RawImage display = null;
         [SerializeField, Tooltip("Starting real-time profile when no tier is supplied.")]
         QualityLevel startQuality = QualityLevel.A;
@@ -33,89 +28,119 @@ namespace Ballverse.Render
         [SerializeField] BallverseSkinAtlas skins = null;
         [SerializeField] BallverseFontSet fonts = null;
 
-        BallverseRenderer _renderer;
-        RenderTexture _target;
-        QualityGovernor _governor;
+        BallversePresenter _presenter;
+
+        /// <summary>The underlying presenter (renderer, target, governor); created on first use.</summary>
+        public BallversePresenter Presenter
+        {
+            get
+            {
+                if (_presenter == null)
+                {
+                    _presenter = new BallversePresenter(null, startQuality);
+                    _presenter.TargetChanged += OnTargetChanged;
+                    _presenter.QualityChanged += OnQualityChanged;
+                }
+                return _presenter;
+            }
+        }
 
         /// <summary>The render context (stream tables, look, events…). Fill it before frames are provided.</summary>
-        public RenderContext Context { get; } = new RenderContext();
+        public RenderContext Context => Presenter.Context;
 
-        public IBallverseFrameProvider Provider { get; set; }
+        public IBallverseFrameProvider Provider
+        {
+            get => Presenter.Provider;
+            set => Presenter.Provider = value;
+        }
 
-        public BallverseRenderer Renderer => _renderer;
+        public BallverseRenderer Renderer => Presenter.Renderer;
 
         /// <summary>The texture the simulation is rendered into (null before the first frame).</summary>
-        public RenderTexture Target => _target;
+        public RenderTexture Target => _presenter?.Target;
 
         /// <summary>The active real-time quality level.</summary>
-        public QualityLevel Quality => _governor != null ? _governor.Level : startQuality;
+        public QualityLevel Quality => _presenter != null ? _presenter.Quality : startQuality;
+
+        /// <summary>UI Toolkit slot whose laid-out size sets the render size (not serialized; assign from the UI code).</summary>
+        public VisualElement Element { get; set; }
+
+        /// <summary>Panel points → pixels for <see cref="Element"/>; 0 = derive from the screen.</summary>
+        public float ElementPixelsPerPoint { get; set; }
+
+        /// <summary>Explicit render size in pixels (e.g. from a view model); (0, 0) = use the slot.</summary>
+        public Vector2Int PixelSizeOverride { get; set; }
 
         /// <summary>Raised when the dynamic fallback lowered the quality (for analytics / diagnostics).</summary>
         public event Action<QualityLevel> QualityChanged;
+
+        /// <summary>Raised when <see cref="Target"/> is replaced (first frame or a size change).</summary>
+        public event Action<RenderTexture> TargetChanged;
 
         /// <summary>Sets the starting profile from the device tier (spec §8.1).</summary>
         public void SetTier(DeviceTier tier)
         {
             startQuality = QualityProfile.ForTier(tier).Level;
-            _governor = new QualityGovernor(startQuality);
+            Presenter.SetTier(tier);
         }
 
         void Awake()
         {
-            _renderer = new BallverseRenderer();
-            _governor = new QualityGovernor(startQuality == QualityLevel.Export ? QualityLevel.A : startQuality);
-            if (Context.Skins == null) Context.Skins = skins;
-            if (Context.Fonts == null) Context.Fonts = fonts;
+            BallversePresenter p = Presenter;
+            if (p.Context.Skins == null) p.Context.Skins = skins;
+            if (p.Context.Fonts == null) p.Context.Fonts = fonts;
         }
 
         void LateUpdate()
         {
-            if (Provider == null || display == null || Context.Shapes == null) return;
-            if (!Provider.TryGetFrame(out RenderFrame frame, out int tick) || frame == null) return;
-
-            if (dynamicQuality && _governor.AddFrame(Time.unscaledDeltaTime)) QualityChanged?.Invoke(_governor.Level);
-            Context.Quality = _governor.Profile;
-            Context.Tick = tick;
-
-            EnsureTarget();
-            if (_target == null) return;
-            _renderer.Render(frame, Context, _target);
+            if (!TryGetSlotSize(out int w, out int h)) return;
+            BallversePresenter p = Presenter;
+            p.DynamicQuality = dynamicQuality;
+            p.Present(w, h, Time.unscaledDeltaTime);
         }
 
-        void EnsureTarget()
+        bool TryGetSlotSize(out int width, out int height)
         {
-            Rect rect = display.rectTransform.rect;
-            Canvas canvas = display.canvas;
-            float scale = canvas != null ? canvas.scaleFactor : 1f;
-            int w = Mathf.Clamp(Mathf.RoundToInt(rect.width * scale), 16, 4096);
-            int h = Mathf.Clamp(Mathf.RoundToInt(rect.height * scale), 16, 4096);
-            if (_target != null && _target.width == w && _target.height == h) return;
-            if (_target != null)
+            Vector2Int forced = PixelSizeOverride;
+            if (forced.x > 0 && forced.y > 0)
             {
-                _target.Release();
-                RenderResources.Destroy(_target);
+                width = forced.x;
+                height = forced.y;
+                return true;
             }
-            _target = new RenderTexture(w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB)
+            if (Element != null) return BallversePresenter.TryGetPixelSize(Element, ElementPixelsPerPoint, out width, out height);
+            if (display != null)
             {
-                name = "BallverseView",
-                hideFlags = HideFlags.HideAndDontSave,
-                filterMode = FilterMode.Bilinear,
-            };
-            _target.Create();
-            display.texture = _target;
+                Rect rect = display.rectTransform.rect;
+                Canvas canvas = display.canvas;
+                float scale = canvas != null ? canvas.scaleFactor : 1f;
+                width = Mathf.RoundToInt(rect.width * scale);
+                height = Mathf.RoundToInt(rect.height * scale);
+                return width > 0 && height > 0;
+            }
+            width = 0;
+            height = 0;
+            return false;
+        }
+
+        void OnTargetChanged(RenderTexture texture)
+        {
+            if (display != null) display.texture = texture;
+            TargetChanged?.Invoke(texture);
+        }
+
+        void OnQualityChanged(QualityLevel level)
+        {
+            QualityChanged?.Invoke(level);
         }
 
         void OnDestroy()
         {
-            _renderer?.Dispose();
-            _renderer = null;
-            if (_target != null)
-            {
-                if (display != null && display.texture == _target) display.texture = null;
-                _target.Release();
-                RenderResources.Destroy(_target);
-                _target = null;
-            }
+            if (_presenter == null) return;
+            _presenter.Dispose();   // raises TargetChanged(null): the RawImage is cleared
+            _presenter.TargetChanged -= OnTargetChanged;
+            _presenter.QualityChanged -= OnQualityChanged;
+            _presenter = null;
         }
     }
 }

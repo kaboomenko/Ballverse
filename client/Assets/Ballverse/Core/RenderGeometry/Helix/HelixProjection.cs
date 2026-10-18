@@ -128,6 +128,24 @@ namespace Ballverse.Core.RenderGeometry
         /// <summary>Brightness of radial gap walls relative to the top face.</summary>
         public float GapWallShade { get; set; } = 0.78f;
 
+        /// <summary>Platforms the default Helix camera shows (M05 card «видно до 12 платформ», §7.4 «в кадре 12 платформ»).</summary>
+        public const int VisiblePlatforms = 12;
+
+        /// <summary>
+        /// Platform spacing of the tower (M05 <c>platformSpacing</c>), metres; 0 = unknown (the default camera then keeps
+        /// the arena's 16 m view height).
+        /// </summary>
+        public float PlatformSpacing { get; set; }
+
         public float TiltRadians => Math.Max(5f, Math.Min(60f, TiltDegrees)) * (MathF.PI / 180f);
+
+        /// <summary>
+        /// View height of the default Helix camera, metres: <see cref="VisiblePlatforms"/> spacings as projected (heights
+        /// compress by cos(tilt)), so the frame shows 12 platforms whatever <see cref="PlatformSpacing"/> is; 0 when the
+        /// spacing is unknown (zoom-1 arena view).
+        /// </summary>
+        public float ViewHeight => PlatformSpacing > 0f && !float.IsInfinity(PlatformSpacing)
+            ? VisiblePlatforms * PlatformSpacing * MathF.Cos(TiltRadians)
+            : 0f;
     }
 }

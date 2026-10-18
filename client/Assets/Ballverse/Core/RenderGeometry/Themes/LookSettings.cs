@@ -68,7 +68,8 @@ namespace Ballverse.Core.RenderGeometry
     /// <summary>
     /// The "Look" parameters of spec §2.2 resolved for the renderer: theme, ball palette override, skin, trail, background,
     /// glow, impact and break effects, labels and HUD. Mutable value holder; build it with <see cref="FromParams"/> from a
-    /// sanitized <see cref="ParamSet"/> (live parameters may change every frame).
+    /// sanitized <see cref="ParamSet"/>. Call <see cref="Apply"/> when the parameters change (it does not allocate, so calling it
+    /// every frame is also safe).
     /// </summary>
     public sealed class LookSettings
     {
@@ -122,9 +123,9 @@ namespace Ballverse.Core.RenderGeometry
                 IReadOnlyList<ColorRgba> list = colors.AsColors;
                 for (int i = 0; i < list.Count; i++) _ballColors.Add(list[i].ToRgba32());
             }
-            Skin = Option(values, CommonParams.BallSkin, CommonParams.BallSkins, BallSkin.Solid);
-            Trail = Option(values, CommonParams.Trail, CommonParams.Trails, TrailStyle.Short);
-            Background = Option(values, CommonParams.Background, CommonParams.Backgrounds, BackgroundOption.Theme);
+            Skin = (BallSkin)Option(values, CommonParams.BallSkin, CommonParams.BallSkins, (int)BallSkin.Solid);
+            Trail = (TrailStyle)Option(values, CommonParams.Trail, CommonParams.Trails, (int)TrailStyle.Short);
+            Background = (BackgroundOption)Option(values, CommonParams.Background, CommonParams.Backgrounds, (int)BackgroundOption.Theme);
             if (values.TryGet(CommonParams.BackgroundColor, out ParamValue bg) && bg.Kind == ParamValueKind.Color)
             {
                 BackgroundColor = bg.AsColor.ToRgba32();
@@ -132,9 +133,9 @@ namespace Ballverse.Core.RenderGeometry
             Glow = values.TryGet(CommonParams.Glow, out ParamValue glow) && glow.Kind == ParamValueKind.Float
                 ? Math.Max(0f, Math.Min(1f, (float)glow.AsFloat))
                 : 0.5f;
-            Impact = Option(values, CommonParams.ImpactFx, CommonParams.ImpactFxs, ImpactFx.Sparks);
-            Break = Option(values, BreakFxParam, BreakFxOptions, BreakFx.Shards);
-            Labels = Option(values, CommonParams.Labels, CommonParams.LabelModes, LabelMode.Off);
+            Impact = (ImpactFx)Option(values, CommonParams.ImpactFx, CommonParams.ImpactFxs, (int)ImpactFx.Sparks);
+            Break = (BreakFx)Option(values, BreakFxParam, BreakFxOptions, (int)BreakFx.Shards);
+            Labels = (LabelMode)Option(values, CommonParams.Labels, CommonParams.LabelModes, (int)LabelMode.Off);
             Hud = !values.TryGet(CommonParams.Hud, out ParamValue hud) || hud.Kind != ParamValueKind.Bool || hud.AsBool;
         }
 
@@ -189,13 +190,14 @@ namespace Ballverse.Core.RenderGeometry
             return values.TryGet(id, out ParamValue v) && v.Kind == ParamValueKind.String ? v.AsString : fallback;
         }
 
-        static T Option<T>(ParamSet values, string id, IReadOnlyList<string> options, T fallback) where T : struct, Enum
+        /// <summary>Index of the option string in <paramref name="options"/> (= the enum value), else <paramref name="fallback"/>. No boxing.</summary>
+        static int Option(ParamSet values, string id, IReadOnlyList<string> options, int fallback)
         {
             if (!values.TryGet(id, out ParamValue v) || v.Kind != ParamValueKind.String) return fallback;
             string s = v.AsString;
             for (int i = 0; i < options.Count; i++)
             {
-                if (string.Equals(options[i], s, StringComparison.Ordinal)) return (T)Enum.ToObject(typeof(T), i);
+                if (string.Equals(options[i], s, StringComparison.Ordinal)) return i;
             }
             return fallback;
         }

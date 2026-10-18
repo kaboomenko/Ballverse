@@ -6,12 +6,17 @@ namespace Ballverse.Core.RenderGeometry
 {
     /// <summary>
     /// All render events of a run in tick order (see RenderEventContract.md). The renderer asks for the events whose
-    /// effects can still be visible at a tick (<see cref="GetWindow"/>, binary search, no allocation). The log can be
-    /// saved next to the render stream (<see cref="WriteTo"/> / <see cref="ReadFrom"/>, format "BVE1") or rebuilt by
-    /// re-simulating the replay, like the stream itself (spec §7.4).
+    /// effects can still be visible at a tick (<see cref="GetWindow"/>, binary search, no allocation). A saved clip keeps
+    /// it as <see cref="ClipFileName"/> next to <c>clip.bvs</c> (<see cref="WriteTo"/> / <see cref="ReadFrom"/>, format
+    /// "BVE1"), written and rebuilt together with the render stream, so preview and export never re-simulate (spec §7.4).
     /// </summary>
     public sealed class RenderEventLog
     {
+        /// <summary>
+        /// File name of a saved clip's event log, next to <c>clip.bvs</c> (derived visual cache with the same lifetime;
+        /// see RenderEventContract.md rule 6).
+        /// </summary>
+        public const string ClipFileName = "clip.bve";
         /// <summary>Format magic "BVE1".</summary>
         public static readonly byte[] Magic = { (byte)'B', (byte)'V', (byte)'E', (byte)'1' };
         public const ushort FormatVersion = 1;
@@ -112,7 +117,12 @@ namespace Ballverse.Core.RenderGeometry
             stream.Write(tail, 0, 8);
         }
 
-        /// <summary>Reads a log written by <see cref="WriteTo"/>; corrupt data throws <see cref="InvalidDataException"/>.</summary>
+        /// <summary>
+        /// Reads a log written by <see cref="WriteTo"/>; corrupt data throws <see cref="InvalidDataException"/>. All records
+        /// are read and hashed first and the XXH64 trailer is verified before anything is validated, so corrupt or crafted
+        /// files are rejected in linear time; the event count is bounded by the bytes left in a seekable stream before
+        /// any record buffer is sized from it. Tick order and per-tick id uniqueness are then checked in O(n log n).
+        /// </summary>
         public static RenderEventLog ReadFrom(Stream stream)
         {
             if (stream == null) throw new ArgumentNullException(nameof(stream));
@@ -127,27 +137,61 @@ namespace Ballverse.Core.RenderGeometry
             if (version != FormatVersion) throw new InvalidDataException("Unsupported render event log version " + version);
             uint count = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(6));
             if (count > MaxEvents) throw new InvalidDataException("Render event log too large: " + count);
+            if (stream.CanSeek)
+            {
+                long remaining = stream.Length - stream.Position;
+                if (remaining < (long)count * RecordSize + 8)
+                {
+                    throw new InvalidDataException("Render event log is truncated: " + count + " events need more than the " + remaining + " bytes left");
+                }
+            }
             hash.Append(header);
-            var log = new RenderEventLog((int)Math.Max(1, count));
+
+            // 1. Read and hash everything; grow the buffer with the data actually read (non-seekable streams).
+            var log = new RenderEventLog((int)Math.Min(Math.Max(1u, count), 4096u));
             var record = new byte[RecordSize];
             for (int i = 0; i < count; i++)
             {
                 ReadExactly(stream, record);
                 hash.Append(record);
-                RenderEvent e = Decode(record);
-                if (!Enum.IsDefined(typeof(RenderEventType), e.Type)) throw new InvalidDataException("Unknown render event type " + (int)e.Type);
-                try
-                {
-                    log.Add(e);
-                }
-                catch (ArgumentException ex)
-                {
-                    throw new InvalidDataException("Render event log is not in tick order: " + ex.Message, ex);
-                }
+                if (log._count == log._events.Length) Array.Resize(ref log._events, (int)Math.Min((long)log._events.Length * 2, count));
+                log._events[log._count++] = Decode(record);
             }
             var tail = new byte[8];
             ReadExactly(stream, tail);
             if (BinaryPrimitives.ReadUInt64LittleEndian(tail) != hash.Digest()) throw new InvalidDataException("Render event log checksum mismatch");
+
+            // 2. Validate (the same rules as Add).
+            RenderEvent[] events = log._events;
+            int n = log._count;
+            int[] ids = null;
+            for (int i = 0; i < n;)
+            {
+                int tick = events[i].Tick;
+                if (tick < 0) throw new InvalidDataException("Render event log has a negative tick");
+                if (i > 0 && tick < events[i - 1].Tick) throw new InvalidDataException("Render event log is not in tick order at event " + i);
+                int end = i;
+                while (end < n && events[end].Tick == tick)
+                {
+                    if (!RenderEventTypes.IsDefined(events[end].Type))
+                    {
+                        throw new InvalidDataException("Unknown render event type " + (int)events[end].Type);
+                    }
+                    end++;
+                }
+                int group = end - i;
+                if (group > 1)
+                {
+                    if (ids == null || ids.Length < group) ids = new int[Math.Max(group, 16)];
+                    for (int k = 0; k < group; k++) ids[k] = events[i + k].Id;
+                    Array.Sort(ids, 0, group);
+                    for (int k = 1; k < group; k++)
+                    {
+                        if (ids[k] == ids[k - 1]) throw new InvalidDataException("Duplicate render event id " + ids[k] + " at tick " + tick);
+                    }
+                }
+                i = end;
+            }
             return log;
         }
 

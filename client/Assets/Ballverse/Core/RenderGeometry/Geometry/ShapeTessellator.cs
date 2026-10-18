@@ -61,6 +61,45 @@ namespace Ballverse.Core.RenderGeometry
             return shape.FixedThickness ? t : t * scale;
         }
 
+        /// <summary>
+        /// Radius of a circle around the body origin that contains the shape drawn at <paramref name="scale"/>, metres
+        /// (rotation-invariant; camera fitting and safe-zone fades). Circle: the scale; ring: radius + thickness / 2;
+        /// capsule: length / 2 + thickness / 2; polygon: farthest vertex; polyline: farthest point + the stroke half-width
+        /// times the default miter limit (joins never reach further). Allocation-free.
+        /// </summary>
+        public static float BoundingRadius(ShapeDefinition shape, RenderQuantization quantization, float scale)
+        {
+            if (shape == null) throw new ArgumentNullException(nameof(shape));
+            if (quantization == null) throw new ArgumentNullException(nameof(quantization));
+            if (!(scale > 0f) || float.IsInfinity(scale)) return 0f;
+            switch (shape.Kind)
+            {
+                case ShapeKind.Circle:
+                    return scale;
+                case ShapeKind.Ring:
+                    return quantization.DequantizeScale(shape.Radius) * scale + StrokeThickness(shape, quantization, scale) * 0.5f;
+                case ShapeKind.Capsule:
+                    return (quantization.DequantizeScale(shape.Length) * scale + StrokeThickness(shape, quantization, scale)) * 0.5f;
+                case ShapeKind.Polygon:
+                case ShapeKind.Polyline:
+                {
+                    ReadOnlySpan<ShapePoint> pts = shape.Points;
+                    float max2 = 0f;
+                    for (int i = 0; i < pts.Length; i++)
+                    {
+                        float x = quantization.DequantizePosition(pts[i].X), y = quantization.DequantizePosition(pts[i].Y);
+                        float d2 = x * x + y * y;
+                        if (d2 > max2) max2 = d2;
+                    }
+                    float r = MathF.Sqrt(max2) * scale;
+                    if (shape.Kind == ShapeKind.Polyline) r += StrokeThickness(shape, quantization, scale) * 0.5f * TessellationSettings.DefaultMiterLimit;
+                    return r;
+                }
+                default:
+                    return 0f;
+            }
+        }
+
         // ---------------------------------------------------------------- ring
 
         static TessellationStatus TessellateRing(ShapeDefinition shape, RenderQuantization q, float scale, in TessellationSettings s, LocalGeometry output)

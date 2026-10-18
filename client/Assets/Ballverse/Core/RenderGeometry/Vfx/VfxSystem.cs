@@ -394,6 +394,27 @@ namespace Ballverse.Core.RenderGeometry
         {
             uint color = s.Palette[e.ColorIndex];
             float z = s.HorizontalBreaks ? float.NaN : 0f;
+            float nx = e.NormalX, ny = e.NormalY;
+            if (nx * nx + ny * ny > 1e-6f)
+            {
+                // Streak along the exit direction (M02 «полоса-шлейф при вылете через проём»): a fading band left behind the
+                // ball plus fast sparks flying on along the normal.
+                float len = MathF.Sqrt(nx * nx + ny * ny);
+                nx /= len;
+                ny /= len;
+                float width = 2f * Math.Max(0.05f, e.Size > 0f ? e.Size : 0.2f);
+                float streak = 1.2f + 0.8f * Clamp01(e.Intensity > 0f ? e.Intensity : 1f);
+                Band(e.X - nx * streak * 0.5f, e.Y - ny * streak * 0.5f, z, t, 0.45f, streak, width, MathF.Atan2(ny, nx), color, 0.8f, s.Emission * 1.5f);
+                int sparks = Nominal(8, 8, 1f, s);
+                for (int i = 0; i < sparks; i++)
+                {
+                    Draws(ref rng, out float r0, out float r1, out float r2, out _, out _, out _, out _, out _);
+                    float a = MathF.Atan2(ny, nx) + (r0 * 2f - 1f) * 0.35f;
+                    float speed = 4f + 4f * r1;
+                    Ballistic(e.X, e.Y, z, MathF.Cos(a) * speed, MathF.Sin(a) * speed, 0f, 3f, 0f, t, 0.35f + 0.15f * r2, ParticleShape.Streak,
+                        0.04f, 0.04f, 0f, 0f, ColorMath.Lerp(color, ColorMath.White, 0.3f), s.Emission * 1.5f, true);
+                }
+            }
             int n = Nominal(16, 16, 1f, s);
             for (int i = 0; i < n; i++)
             {
@@ -543,6 +564,24 @@ namespace Ballverse.Core.RenderGeometry
             p.Shape = shape;
         }
 
+        /// <summary>A rotated rectangle (streak band) that thins and fades over its life.</summary>
+        void Band(float x, float y, float z, float t, float life, float length, float width, float rotation, uint color, float alpha0, float emission)
+        {
+            if (t >= life || _count >= _max) return;
+            float u = t / life;
+            ref Particle p = ref _out[_count++];
+            p.X = x;
+            p.Y = y;
+            p.Z = z;
+            p.VX = p.VY = p.VZ = 0f;
+            p.SizeX = length;
+            p.SizeY = width * (1f - 0.7f * u);
+            p.Rotation = rotation;
+            p.Color = ColorMath.WithAlpha(color, alpha0 * (1f - u) * (1f - u));
+            p.Emission = emission;
+            p.Shape = ParticleShape.Rect;
+        }
+
         static void HelixTowerBuilderRadii(ShapeDefinition ring, RenderQuantization q, float scale, out float radius, out float thickness)
         {
             float s = scale > 0f ? scale : 1f;
@@ -585,6 +624,32 @@ namespace Ballverse.Core.RenderGeometry
                 }
             }
             return amount > 0f;
+        }
+
+        /// <summary>Duration of the growth / birth pulse of a ball (Spawn event with its BodyId), seconds.</summary>
+        public const float PulseSeconds = 0.3f;
+
+        /// <summary>
+        /// Radius pulse of ball <paramref name="bodyId"/> at <paramref name="tick"/> from recent Spawn events naming it
+        /// (M02 «пульсация шара при росте»; a newborn ball pops in the same way): a scale factor ≥ 1 (up to 1.22) that
+        /// overshoots and settles within <see cref="PulseSeconds"/>. 1 when none. Pure function of the events.
+        /// </summary>
+        public static float GetPulse(ReadOnlySpan<RenderEvent> events, int tick, int bodyId)
+        {
+            int window = (int)Math.Ceiling(PulseSeconds * SimConstants.TickRate);
+            float best = 0f;
+            for (int i = events.Length - 1; i >= 0; i--)
+            {
+                RenderEvent e = events[i];
+                if (e.Tick > tick) continue;
+                if (tick - e.Tick > window) break;
+                if (e.Type != RenderEventType.Spawn || e.BodyId != bodyId) continue;
+                float u = (tick - e.Tick) * Dt / PulseSeconds;
+                if (u >= 1f) continue;
+                float a = 0.22f * MathF.Sin(MathF.PI * u) * (1f - u) * (0.5f + 0.5f * Clamp01(e.Intensity > 0f ? e.Intensity : 1f));
+                if (a > best) best = a;
+            }
+            return 1f + best;
         }
 
         /// <summary>

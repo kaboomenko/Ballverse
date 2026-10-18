@@ -45,7 +45,8 @@ namespace Ballverse.Core.RenderGeometry
         public RenderTheme(string id, IReadOnlyList<uint> palette, uint arena, uint arenaAlt, uint danger, uint accent, uint muted,
             uint text, uint gold, uint backgroundTop, uint backgroundBottom, BackgroundStyle background, uint gridColor, uint starColor,
             BallFinish ballFinish, float bloomIntensity, float bloomThreshold, float ballEmission, float shapeEmission,
-            float trailEmission, int pixelGrid, float vignette, float helixBackShade, string fontKey)
+            float trailEmission, int pixelGrid, float vignette, float helixBackShade, string fontKey,
+            float saturation = 1f, float contrast = 1f, uint tint = ColorMath.White)
         {
             if (string.IsNullOrEmpty(id)) throw new ArgumentException("Theme id is required", nameof(id));
             if (palette == null || palette.Count == 0 || palette.Count > MaxPaletteColors)
@@ -76,6 +77,9 @@ namespace Ballverse.Core.RenderGeometry
             Vignette = Check(vignette, 0f, 1f, nameof(vignette));
             HelixBackShade = Check(helixBackShade, 0f, 1f, nameof(helixBackShade));
             FontKey = string.IsNullOrEmpty(fontKey) ? "default" : fontKey;
+            Saturation = Check(saturation, 0f, 2f, nameof(saturation));
+            Contrast = Check(contrast, 0.5f, 2f, nameof(contrast));
+            Tint = tint | 0xFFu;
         }
 
         public string Id { get; }
@@ -114,6 +118,15 @@ namespace Ballverse.Core.RenderGeometry
         public float HelixBackShade { get; }
         /// <summary>Font key for labels and HUD; the renderer maps it to a font asset ("default", "pixel", "rounded").</summary>
         public string FontKey { get; }
+        /// <summary>Colour grade (spec §7.7 «цветокоррекция по теме»): saturation, 0 = grey, 1 = unchanged, up to 2.</summary>
+        public float Saturation { get; }
+        /// <summary>Colour grade: contrast around mid-grey (linear 0.18), 0.5–2, 1 = unchanged.</summary>
+        public float Contrast { get; }
+        /// <summary>Colour grade: multiplicative tint / white balance (sRGB 0xRRGGBBFF; white = unchanged).</summary>
+        public uint Tint { get; }
+
+        /// <summary>True when the grade changes the image (the composite can skip it otherwise).</summary>
+        public bool HasGrade => Saturation != 1f || Contrast != 1f || (Tint | 0xFFu) != ColorMath.White;
 
         public uint PaletteColor(int index)
         {
