@@ -103,20 +103,20 @@ namespace Ballverse.Core.Tests.RenderStream
         [Fact]
         public void GridSpecValidation()
         {
-            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(0, 5, GridTopology.Square, 0, 0, 1, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(129, 5, GridTopology.Square, 0, 0, 1, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(5, 0, GridTopology.Square, 0, 0, 1, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(5, 257, GridTopology.Square, 0, 0, 1, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(5, 5, (GridTopology)2, 0, 0, 1, 1));
-            Assert.Throws<ArgumentException>(() => new RenderGridSpec(5, 5, GridTopology.Square, 1, 0, 1, 1));
-            Assert.Throws<ArgumentException>(() => new RenderGridSpec(5, 5, GridTopology.Square, 0, 2, 1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(RenderQuantization.Default, 0, 5, GridTopology.Square, 0, 0, 1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(RenderQuantization.Default, 129, 5, GridTopology.Square, 0, 0, 1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(RenderQuantization.Default, 5, 0, GridTopology.Square, 0, 0, 1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(RenderQuantization.Default, 5, 257, GridTopology.Square, 0, 0, 1, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new RenderGridSpec(RenderQuantization.Default, 5, 5, (GridTopology)2, 0, 0, 1, 1));
+            Assert.Throws<ArgumentException>(() => new RenderGridSpec(RenderQuantization.Default, 5, 5, GridTopology.Square, 1, 0, 1, 1));
+            Assert.Throws<ArgumentException>(() => new RenderGridSpec(RenderQuantization.Default, 5, 5, GridTopology.Square, 0, 2, 1, 1));
             Assert.Throws<ArgumentNullException>(() => RenderGridSpec.FromWorld(null, 5, 5, GridTopology.Square, 0, 0, 1, 1));
-            var g = new RenderGridSpec(128, 256, GridTopology.HexOddRowsShifted, short.MinValue, short.MinValue, short.MaxValue, short.MaxValue);
+            var g = new RenderGridSpec(RenderQuantization.Default, 128, 256, GridTopology.HexOddRowsShifted, short.MinValue, short.MinValue, short.MaxValue, short.MaxValue);
             Assert.Equal(32768, g.CellCount);
             var w = RenderGridSpec.FromWorld(RenderQuantization.Default, 30, 53, GridTopology.Square, -4.5f, -8f, 4.5f, 8f);
-            Assert.Equal(new RenderGridSpec(30, 53, GridTopology.Square, -9216, -16384, 9216, 16384), w);
-            Assert.Equal(w.GetHashCode(), new RenderGridSpec(30, 53, GridTopology.Square, -9216, -16384, 9216, 16384).GetHashCode());
-            Assert.NotEqual(w, new RenderGridSpec(30, 53, GridTopology.HexOddRowsShifted, -9216, -16384, 9216, 16384));
+            Assert.Equal(new RenderGridSpec(RenderQuantization.Default, 30, 53, GridTopology.Square, -9216, -16384, 9216, 16384), w);
+            Assert.Equal(w.GetHashCode(), new RenderGridSpec(RenderQuantization.Default, 30, 53, GridTopology.Square, -9216, -16384, 9216, 16384).GetHashCode());
+            Assert.NotEqual(w, new RenderGridSpec(RenderQuantization.Default, 30, 53, GridTopology.HexOddRowsShifted, -9216, -16384, 9216, 16384));
             Assert.False(w.Equals((object)null));
             Assert.Null(new RenderStreamHeader("m").Grid);
         }
@@ -124,7 +124,7 @@ namespace Ballverse.Core.Tests.RenderStream
         [Fact]
         public void GridHeaderRoundTrips()
         {
-            var grid = new RenderGridSpec(128, 256, GridTopology.HexOddRowsShifted, -32768, -5, 32767, 6);
+            var grid = new RenderGridSpec(RenderQuantization.Default, 128, 256, GridTopology.HexOddRowsShifted, -32768, -5, 32767, 6);
             var header = new RenderStreamHeader("color_war", 60, 60, RenderQuantization.Default, grid);
             var f = new RenderFrame();
             f.SetGridSize(128, 256);
@@ -321,6 +321,76 @@ namespace Ballverse.Core.Tests.RenderStream
             for (int i = 0; i < 4; i++) decoder.Decode(ref r, dest);
             Assert.True(f.ContentEquals(dest));
             Assert.Equal(0, r.Remaining);
+        }
+
+        [Fact]
+        public void DeltaGridTieUsesChangeList()
+        {
+            // 65 x 2 = 130 cells, all 0, then cells 128 = 1 and 129 = 2:
+            //   change list = count (1) + index 128 (2-byte uvarint) + value (1) + gap 0 (1) + value (1) = 6 bytes
+            //   RLE         = run of 128 zeros (1 + 1) + run of one 1 (1 + 1) + run of one 2 (1 + 1)   = 6 bytes
+            // The documented rule "the writer picks the shorter, ties -> 0" makes this mode 0.
+            var codec = new FrameCodec(65, 2);
+            var w = new ByteWriter(256);
+            var f = new RenderFrame();
+            f.SetGridSize(65, 2);
+            codec.Encode(f, w);
+            int before = w.Length;
+            f.Grid[128] = 1;
+            f.Grid[129] = 2;
+            codec.Encode(f, w);
+            Assert.Equal(new byte[] { 0, 0, 0, 0, 0, 2, 0x80, 0x01, 1, 0, 2 }, w.Span.Slice(before).ToArray());
+
+            // Both cells 3: the runs merge, RLE = 4 bytes < list = 6 bytes, so RLE (mode 1) wins.
+            before = w.Length;
+            f.Grid[128] = 3;
+            f.Grid[129] = 3;
+            codec.Encode(f, w);
+            Assert.Equal(new byte[] { 0, 0, 0, 0, 1, 127, 0, 1, 3 }, w.Span.Slice(before).ToArray());
+
+            byte[] raw = w.Span.ToArray();
+            var decoder = new FrameCodec(65, 2);
+            var r = new ByteReader(raw, 0, raw.Length);
+            var dest = new RenderFrame();
+            for (int i = 0; i < 3; i++) decoder.Decode(ref r, dest);
+            Assert.True(f.ContentEquals(dest));
+        }
+
+        [Fact]
+        public void GridSteadyStateAppendDoesNotAllocate()
+        {
+            // M08 default grid, both a sorted input frame and an unsorted one (the writer's canonicalizing copy includes the grid).
+            const int ticks = 360;
+            var frames = StreamScenes.AddGrid(StreamScenes.Smooth(60, ticks, 9), 30, 53, 10);
+            var unsorted = new List<RenderFrame>(ticks);
+            foreach (var f in frames)
+            {
+                var u = new RenderFrame();
+                for (int i = f.BodyCount - 1; i >= 0; i--) u.AddBody(f.GetBody(i));
+                u.AddHud(1, f.Hud[1].Value);
+                u.AddHud(0, f.Hud[0].Value);
+                u.SetGridSize(30, 53);
+                f.Grid.CopyTo(u.Grid);
+                unsorted.Add(u);
+            }
+            Assert.False(unsorted[0].IsBodiesSorted());
+
+            foreach (var input in new[] { frames, unsorted })
+            {
+                var ms = new MemoryStream(4 * 1024 * 1024);
+                using (var w = new RenderStreamWriter(ms, StreamScenes.GridHeader("color_war", 30, 53), leaveOpen: true))
+                {
+                    w.DefineShape(ShapeDefinition.Circle);
+                    for (int t = 0; t < 120; t++) w.AppendFrame(t, input[t]);
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    for (int t = 120; t < ticks; t++) w.AppendFrame(t, input[t]);
+                    long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                    _output.WriteLine((input == frames ? "sorted" : "unsorted") + " grid writer allocated over " + (ticks - 120) + " frames: " + allocated + " bytes");
+                    Assert.True(allocated < 16384, "allocated " + allocated + " bytes");
+                    w.Finish();
+                }
+                using (var r = StreamScenes.Open(ms.ToArray())) Assert.True(frames[ticks - 1].ContentEquals(r.ReadFrame(ticks - 1)));
+            }
         }
 
         [Fact]

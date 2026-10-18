@@ -18,8 +18,8 @@ namespace Ballverse.Core.RenderStream
     /// </para>
     /// <para>
     /// The shape table and label table (spec §7.7, static geometry and labels) are loaded and validated on open and exposed
-    /// through <see cref="Shapes"/> and <see cref="GetLabel"/>; frames reference them by <see cref="BodyState.ShapeId"/> and
-    /// <see cref="BodyState.LabelId"/>. Grid streams (<see cref="RenderStreamHeader.Grid"/>) fill the destination's grid
+    /// through <see cref="Shapes"/> and <see cref="GetLabel"/>; frames reference them by <see cref="BodyState.ShapeId"/>,
+    /// <see cref="BodyState.LabelId"/> and <see cref="BodyState.SkinId"/>. Grid streams (<see cref="RenderStreamHeader.Grid"/>) fill the destination's grid
     /// on every read; random access works from each block's keyframe, which holds the full grid.
     /// </para>
     /// <para>
@@ -47,7 +47,6 @@ namespace Ballverse.Core.RenderStream
         readonly ShapeDefinition[] _shapes;
         readonly ReadOnlyCollection<ShapeDefinition> _shapesView;
         readonly string[] _labels;
-        readonly ReadOnlyCollection<string> _labelsView;
         readonly FrameCodec _codec;
         readonly XxHash64 _blockHash = new XxHash64();
         byte[] _compressed = new byte[1024];
@@ -124,8 +123,14 @@ namespace Ballverse.Core.RenderStream
 
                 _shapes = TableCodec.ReadShapeTable(tables, 0, (int)shapeTableLength);
                 _labels = TableCodec.ReadLabelTable(tables, (int)shapeTableLength, (int)labelTableLength);
+                if (_header.Quantization.ScaleMax < 1f)
+                {
+                    for (int i = 0; i < _shapes.Length; i++)
+                    {
+                        if (_shapes[i].Kind != ShapeKind.Circle) throw new InvalidDataException("Non-circle shape " + i + " in a stream with ScaleMax below 1");
+                    }
+                }
                 _shapesView = Array.AsReadOnly(_shapes);
-                _labelsView = Array.AsReadOnly(_labels);
                 RenderGridSpec grid = _header.Grid;
                 _codec = grid == null ? new FrameCodec() : new FrameCodec(grid.Width, grid.Height);
                 _codec.SetDecodeLimits(_shapes.Length, _labels.Length);
@@ -177,13 +182,14 @@ namespace Ballverse.Core.RenderStream
         /// <summary>The shape table: <c>Shapes[shapeId]</c> is the geometry of bodies with that <see cref="BodyState.ShapeId"/>.</summary>
         public IReadOnlyList<ShapeDefinition> Shapes => _shapesView;
 
-        /// <summary>The label table, 0-based: <c>Labels[labelId - 1]</c>. Prefer <see cref="GetLabel"/>.</summary>
-        public IReadOnlyList<string> Labels => _labelsView;
-
-        /// <summary>Number of labels; valid label ids are [1, LabelCount] plus <see cref="BodyState.NoLabel"/>.</summary>
+        /// <summary>Number of strings in the label table; valid label / skin ids are [1, LabelCount] plus 0 (none).</summary>
         public int LabelCount => _labels.Length;
 
-        /// <summary>Returns the label text of <paramref name="labelId"/>, or null for <see cref="BodyState.NoLabel"/>.</summary>
+        /// <summary>
+        /// Returns the string of <paramref name="labelId"/> (a <see cref="BodyState.LabelId"/> or <see cref="BodyState.SkinId"/>),
+        /// or null for 0 (<see cref="BodyState.NoLabel"/> / <see cref="BodyState.NoSkin"/>). Ids start at 1, so there is
+        /// deliberately no 0-based list to index.
+        /// </summary>
         public string GetLabel(int labelId)
         {
             if (labelId == BodyState.NoLabel) return null;

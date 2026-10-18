@@ -58,7 +58,7 @@ namespace Ballverse.Core.Tests.RenderStream
                         spawns++;
                         if (everSeen.Contains(b.Id)) reuses++;
                     }
-                    else if (pb.ShapeId != b.ShapeId || pb.LabelId != b.LabelId)
+                    else if (pb.ShapeId != b.ShapeId || pb.LabelId != b.LabelId || pb.SkinId != b.SkinId)
                     {
                         shapeOrLabelChanges++;
                     }
@@ -70,7 +70,7 @@ namespace Ballverse.Core.Tests.RenderStream
                 }
             }
             Assert.True(spawns > 100 && despawns > 100 && shapeOrLabelChanges > 5 && reuses > 10,
-                "spawns " + spawns + ", despawns " + despawns + ", shape or label changes " + shapeOrLabelChanges + ", reuses " + reuses);
+                "spawns " + spawns + ", despawns " + despawns + ", shape, label or skin changes " + shapeOrLabelChanges + ", reuses " + reuses);
         }
 
         [Fact]

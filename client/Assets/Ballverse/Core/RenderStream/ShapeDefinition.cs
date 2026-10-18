@@ -20,8 +20,20 @@ namespace Ballverse.Core.RenderStream
     /// <see cref="FixedThickness"/> is set (a non-scaling stroke, e.g. M01 rings that shrink at a constant thickness).
     /// </para>
     /// <para>
-    /// Validation covers counts, flags and ring gap ordering. Polygon simplicity (no self-intersection) and winding are
-    /// not checked; the renderer triangulates either winding.
+    /// Length range: lengths use the scale quantizer, so at scale 1 a thickness, ring radius or capsule length is at most
+    /// <see cref="RenderQuantization.ScaleMax"/> metres (8 m with the default quantization, half the 16 m arena height).
+    /// Longer geometry (a long M13 string, a rail across the arena) must be a <see cref="ShapeKind.Polyline"/>, whose
+    /// points use the position quantizer (±<see cref="RenderQuantization.PositionRange"/>). Non-circle shapes need
+    /// <see cref="RenderQuantization.ScaleMax"/> ≥ 1 so that scale factor 1 is representable;
+    /// <see cref="RenderStreamWriter.DefineShape"/> and the reader reject them otherwise.
+    /// </para>
+    /// <para>
+    /// Validation covers counts, flags, ring gap ordering and degenerate dimensions: polylines, rings and capsules need a
+    /// thickness ≥ 1, rings a radius ≥ 1 and a thickness ≤ 2 · radius (a non-negative inner radius). A capsule of length 0
+    /// is a dot of diameter thickness. Polygon simplicity (no self-intersection), winding, zero area and coincident
+    /// points (polygon vertices, consecutive polyline points) are not checked: they are legal, the renderer triangulates
+    /// either winding, skips zero-length segments and draws nothing for zero-area parts. At draw time a fixed-thickness
+    /// ring shrunk below half its thickness is drawn as a filled disc.
     /// </para>
     /// </summary>
     public sealed class ShapeDefinition : IEquatable<ShapeDefinition>
@@ -81,30 +93,40 @@ namespace Ballverse.Core.RenderStream
 
         /// <summary>
         /// A polyline (chain) of 2–4096 body-local points (≥ 3 when <paramref name="closed"/>) stroked with
-        /// <paramref name="thickness"/>. The span is copied.
+        /// <paramref name="thickness"/> ≥ 1. The span is copied.
         /// </summary>
         public static ShapeDefinition Polyline(ReadOnlySpan<ShapePoint> points, bool closed, ushort thickness, bool fixedThickness = false)
         {
             string error = ValidatePointCount(ShapeKind.Polyline, closed, points.Length);
             if (error != null) throw new ArgumentException(error, nameof(points));
+            error = ValidateDimensions(ShapeKind.Polyline, thickness, 0);
+            if (error != null) throw new ArgumentException(error, nameof(thickness));
             return new ShapeDefinition(ShapeKind.Polyline, points.ToArray(), Array.Empty<RingGap>(), closed, fixedThickness, thickness, 0, 0);
         }
 
         /// <summary>
-        /// A ring centred at the body origin with up to 64 gaps. Gaps must be listed in strictly ascending
+        /// A ring centred at the body origin (<paramref name="radius"/> ≥ 1 is the centre line, 1 ≤ <paramref name="thickness"/>
+        /// ≤ 2 · radius) with up to 64 gaps. Gaps must be listed in strictly ascending
         /// <see cref="RingGap.Start"/> order, each with a non-zero span, and must not overlap or touch (also across angle 0),
         /// so at least some of the ring remains. No gaps = a full ring. The span is copied.
         /// </summary>
         public static ShapeDefinition Ring(ushort radius, ushort thickness, ReadOnlySpan<RingGap> gaps, bool fixedThickness = false)
         {
-            string error = ValidateGaps(gaps);
+            string error = ValidateDimensions(ShapeKind.Ring, thickness, radius);
+            if (error != null) throw new ArgumentException(error, nameof(thickness));
+            error = ValidateGaps(gaps);
             if (error != null) throw new ArgumentException(error, nameof(gaps));
             return new ShapeDefinition(ShapeKind.Ring, Array.Empty<ShapePoint>(), gaps.ToArray(), false, fixedThickness, thickness, radius, 0);
         }
 
-        /// <summary>A capsule (segment with round caps) from (−length/2, 0) to (+length/2, 0) with diameter <paramref name="thickness"/>.</summary>
+        /// <summary>
+        /// A capsule (segment with round caps) from (−length/2, 0) to (+length/2, 0) with diameter <paramref name="thickness"/> ≥ 1
+        /// (length 0 = a dot).
+        /// </summary>
         public static ShapeDefinition Capsule(ushort length, ushort thickness, bool fixedThickness = false)
         {
+            string error = ValidateDimensions(ShapeKind.Capsule, thickness, 0);
+            if (error != null) throw new ArgumentException(error, nameof(thickness));
             return new ShapeDefinition(ShapeKind.Capsule, Array.Empty<ShapePoint>(), Array.Empty<RingGap>(), false, fixedThickness, thickness, 0, length);
         }
 
@@ -123,6 +145,19 @@ namespace Ballverse.Core.RenderStream
             if (count < min || count > RenderStreamLimits.MaxPolylinePoints)
             {
                 return (closed ? "Closed" : "Open") + " polyline needs " + min + ".." + RenderStreamLimits.MaxPolylinePoints + " points, got " + count;
+            }
+            return null;
+        }
+
+        /// <summary>Returns null if the thickness / radius are valid for the kind (see the class remarks), otherwise the reason.</summary>
+        internal static string ValidateDimensions(ShapeKind kind, ushort thickness, ushort radius)
+        {
+            if (kind != ShapeKind.Polyline && kind != ShapeKind.Ring && kind != ShapeKind.Capsule) return null;
+            if (thickness == 0) return kind + " thickness must be at least 1";
+            if (kind == ShapeKind.Ring)
+            {
+                if (radius == 0) return "Ring radius must be at least 1";
+                if (thickness > 2 * radius) return "Ring thickness " + thickness + " exceeds twice the radius " + radius;
             }
             return null;
         }

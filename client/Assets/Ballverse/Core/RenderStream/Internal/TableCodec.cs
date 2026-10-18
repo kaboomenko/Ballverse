@@ -16,7 +16,7 @@ namespace Ballverse.Core.RenderStream.Internal
     ///     Capsule:  flags u8 · length uvarint · thickness uvarint
     ///   flags:    bit0 closed (polyline only), bit1 fixed thickness; other bits zero
     ///   points:   first point x svarint · y svarint, then per point the int16-wrapped delta from the previous one (svarint x, y)
-    /// labelTable: uvarint labelCount · (uvarint utf8Length · UTF-8 bytes)[labelCount]   (label id = position + 1)
+    /// labelTable: uvarint labelCount · (uvarint utf8Length · UTF-8 bytes)[labelCount]   (label / skin id = position + 1)
     /// </code>
     /// The decoder validates everything the public factories validate and only throws <see cref="InvalidDataException"/>.
     /// </summary>
@@ -118,6 +118,7 @@ namespace Ballverse.Core.RenderStream.Internal
                     int n = r.ReadCount(RenderStreamLimits.MaxPolylinePoints, "polyline point count");
                     bool closed = (flags & FlagClosed) != 0;
                     Check(ShapeDefinition.ValidatePointCount(ShapeKind.Polyline, closed, n));
+                    Check(ShapeDefinition.ValidateDimensions(ShapeKind.Polyline, thickness, 0));
                     if (n * 2 > r.Remaining) throw new InvalidDataException("Polyline points exceed the table");
                     var points = ReadPoints(ref r, n);
                     return ShapeDefinition.CreateValidated(ShapeKind.Polyline, points, Array.Empty<RingGap>(), closed, (flags & FlagFixedThickness) != 0, thickness, 0, 0);
@@ -127,6 +128,7 @@ namespace Ballverse.Core.RenderStream.Internal
                     int flags = ReadFlags(ref r, false);
                     ushort radius = ReadUInt16Varint(ref r);
                     ushort thickness = ReadUInt16Varint(ref r);
+                    Check(ShapeDefinition.ValidateDimensions(ShapeKind.Ring, thickness, radius));
                     int n = r.ReadCount(RenderStreamLimits.MaxRingGaps, "ring gap count");
                     var gaps = n == 0 ? Array.Empty<RingGap>() : new RingGap[n];
                     for (int i = 0; i < n; i++) gaps[i] = new RingGap(ReadUInt16Varint(ref r), ReadUInt16Varint(ref r));
@@ -138,6 +140,7 @@ namespace Ballverse.Core.RenderStream.Internal
                     int flags = ReadFlags(ref r, false);
                     ushort length = ReadUInt16Varint(ref r);
                     ushort thickness = ReadUInt16Varint(ref r);
+                    Check(ShapeDefinition.ValidateDimensions(ShapeKind.Capsule, thickness, 0));
                     return ShapeDefinition.CreateValidated(ShapeKind.Capsule, Array.Empty<ShapePoint>(), Array.Empty<RingGap>(), false, (flags & FlagFixedThickness) != 0, thickness, 0, length);
                 }
                 default:

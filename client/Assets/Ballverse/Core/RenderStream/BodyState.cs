@@ -10,14 +10,24 @@ namespace Ballverse.Core.RenderStream
     /// Geometry is static and lives in the stream's shape table (spec §7.7): <see cref="ShapeId"/> references a
     /// <see cref="ShapeDefinition"/> registered with <see cref="RenderStreamWriter.DefineShape"/>; only the transform
     /// (<see cref="X"/>, <see cref="Y"/>, <see cref="Angle"/>, uniform <see cref="Scale"/>), colour and flags change per frame.
-    /// <see cref="ShapeId"/> and <see cref="LabelId"/> are fixed for a body's lifetime (spawn to despawn); if a frame
-    /// changes either for an existing id, the stream codes it as a despawn of the old body and a spawn of a new one.
+    /// <see cref="ShapeId"/>, <see cref="LabelId"/> and <see cref="SkinId"/> are fixed for a body's lifetime (spawn to
+    /// despawn); if a frame changes any of them for an existing id, the stream codes it as a despawn of the old body and a
+    /// spawn of a new one.
+    /// </para>
+    /// <para>
+    /// Participant identity (spec §2.9 M03 "имена и флаги участников", M08 "флаги или цвета команд"): a body can carry a
+    /// text <see cref="LabelId"/> (drawn on it) and, independently, a <see cref="SkinId"/> naming the image drawn on it
+    /// (a flag or avatar). Both reference the stream's string table (<see cref="RenderStreamWriter.DefineLabel"/>), so the
+    /// stream stays the only source for preview and export (§7.4). A skin string is an asset key whose meaning belongs to
+    /// the renderer's skin catalogue (e.g. "flag/ua"); the stream only carries it.
     /// </para>
     /// </summary>
     public struct BodyState : IEquatable<BodyState>
     {
         /// <summary><see cref="LabelId"/> value for a body without a label.</summary>
         public const int NoLabel = 0;
+        /// <summary><see cref="SkinId"/> value for a body drawn with its palette colour only.</summary>
+        public const int NoSkin = 0;
 
         /// <summary>Stable body id, unique within a frame. Ids may be reused after a body despawns.</summary>
         public int Id;
@@ -39,8 +49,13 @@ namespace Ballverse.Core.RenderStream
         public BodyFlags Flags;
         /// <summary>Label string id (see <see cref="RenderStreamWriter.DefineLabel"/>), or <see cref="NoLabel"/>.</summary>
         public int LabelId;
+        /// <summary>
+        /// Skin key string id (see <see cref="RenderStreamWriter.DefineLabel"/>; same string table as labels), or
+        /// <see cref="NoSkin"/>: the flag / image drawn on the body (spec §2.9 M03, M08).
+        /// </summary>
+        public int SkinId;
 
-        public BodyState(int id, int shapeId, short x, short y, ushort angle, ushort scale, byte color, BodyFlags flags, int labelId = NoLabel)
+        public BodyState(int id, int shapeId, short x, short y, ushort angle, ushort scale, byte color, BodyFlags flags, int labelId = NoLabel, int skinId = NoSkin)
         {
             Id = id;
             ShapeId = shapeId;
@@ -51,12 +66,14 @@ namespace Ballverse.Core.RenderStream
             Color = color;
             Flags = flags;
             LabelId = labelId;
+            SkinId = skinId;
         }
 
         public bool Equals(BodyState other)
         {
             return Id == other.Id && ShapeId == other.ShapeId && X == other.X && Y == other.Y && Angle == other.Angle
-                && Scale == other.Scale && Color == other.Color && Flags == other.Flags && LabelId == other.LabelId;
+                && Scale == other.Scale && Color == other.Color && Flags == other.Flags && LabelId == other.LabelId
+                && SkinId == other.SkinId;
         }
 
         public override bool Equals(object obj)
@@ -77,6 +94,7 @@ namespace Ballverse.Core.RenderStream
                 h = h * 31 + Color;
                 h = h * 31 + (int)Flags;
                 h = h * 31 + LabelId;
+                h = h * 31 + SkinId;
                 return h;
             }
         }
@@ -94,7 +112,7 @@ namespace Ballverse.Core.RenderStream
         public override string ToString()
         {
             return "#" + Id + " shape " + ShapeId + " (" + X + "," + Y + ") a=" + Angle + " s=" + Scale + " c=" + Color + " f=" + (byte)Flags
-                + (LabelId != NoLabel ? " label " + LabelId : "");
+                + (LabelId != NoLabel ? " label " + LabelId : "") + (SkinId != NoSkin ? " skin " + SkinId : "");
         }
     }
 }

@@ -22,7 +22,7 @@ namespace Ballverse.Core.RenderStream
         /// <summary>Counter-clockwise extent of the gap in angle units, in [0, 65535] (0 only for an invalid gap).</summary>
         public int Span => (End - Start) & 0xFFFF;
 
-        /// <summary>Builds a gap from world angles in radians (any finite values; they wrap).</summary>
+        /// <summary>Builds a gap from body-local angles in radians (any finite values; they wrap).</summary>
         public static RingGap FromRadians(float start, float end)
         {
             return new RingGap(RenderQuantization.QuantizeAngle(start), RenderQuantization.QuantizeAngle(end));

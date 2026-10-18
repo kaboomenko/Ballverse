@@ -9,7 +9,7 @@ namespace Ballverse.Core.RenderStream.Internal
     /// <para>Raw (uncompressed) block layout — frame 0 is a keyframe, frames 1..n-1 are deltas:</para>
     /// <code>
     /// keyframe: uvarint bodyCount · body[bodyCount] · uvarint hudCount · hud[hudCount] · [gridRle]
-    ///   body:   id · shapeId uvarint · labelId uvarint · x svarint · y svarint · angle uvarint · scale uvarint · color u8 · flags u8
+    ///   body:   id · shapeId uvarint · labelId uvarint · skinId uvarint · x svarint · y svarint · angle uvarint · scale uvarint · color u8 · flags u8
     ///   hud:    key · value svarint
     /// delta:    uvarint despawnCount · id[despawnCount]
     ///           uvarint spawnCount · body[spawnCount]
@@ -29,9 +29,9 @@ namespace Ballverse.Core.RenderStream.Internal
     /// Residuals: each 16-bit channel (x, y as int16 bits, angle, scale) is predicted as 2·prev − prevprev when the body
     /// existed in the two previous frames of this block, otherwise as prev; residual = (cur − prediction) wrapped to int16.
     /// Wrapping keeps teleports small and the decode bit-exact. HUD set values are deltas from the previous value for
-    /// existing keys and absolute for new keys. A body whose shape or label changes is coded as despawn + spawn
-    /// (shape and label are static per body lifetime). The decoder rejects shape ids at or above the stream's shape count
-    /// and label ids above its label count.
+    /// existing keys and absolute for new keys. A body whose shape, label or skin changes is coded as despawn +
+    /// spawn (they are static per body lifetime). The decoder rejects shape ids at or above the stream's shape count and
+    /// label / skin ids above its string (label) table count.
     /// </para>
     /// </summary>
     internal sealed class FrameCodec
@@ -175,7 +175,7 @@ namespace Ballverse.Core.RenderStream.Internal
                 }
                 else
                 {
-                    if (_cur[i].Body.ShapeId != bodies[j].ShapeId || _cur[i].Body.LabelId != bodies[j].LabelId)
+                    if (_cur[i].Body.ShapeId != bodies[j].ShapeId || _cur[i].Body.LabelId != bodies[j].LabelId || _cur[i].Body.SkinId != bodies[j].SkinId)
                     {
                         _intScratch[despawnCount++] = i;
                         _intScratch2[j] = -1;
@@ -408,6 +408,7 @@ namespace Ballverse.Core.RenderStream.Internal
             WriteId(w, b.Id, first, previousId);
             w.WriteUVarint((ulong)b.ShapeId);
             w.WriteUVarint((ulong)b.LabelId);
+            w.WriteUVarint((ulong)b.SkinId);
             w.WriteSVarint(b.X);
             w.WriteSVarint(b.Y);
             w.WriteUVarint(b.Angle);
@@ -683,6 +684,8 @@ namespace Ballverse.Core.RenderStream.Internal
             if (shapeId >= (ulong)shapeLimit) throw new InvalidDataException("Body " + id + " references undefined shape " + shapeId);
             ulong labelId = r.ReadUVarint();
             if (labelId > (ulong)labelLimit) throw new InvalidDataException("Body " + id + " references undefined label " + labelId);
+            ulong skinId = r.ReadUVarint();
+            if (skinId > (ulong)labelLimit) throw new InvalidDataException("Body " + id + " references undefined skin string " + skinId);
             long x = r.ReadSVarint();
             long y = r.ReadSVarint();
             if (x < short.MinValue || x > short.MaxValue || y < short.MinValue || y > short.MaxValue)
@@ -694,7 +697,7 @@ namespace Ballverse.Core.RenderStream.Internal
             if (angle > ushort.MaxValue || scale > ushort.MaxValue) throw new InvalidDataException("Angle/scale out of uint16 range");
             byte color = r.ReadByte();
             byte flags = r.ReadByte();
-            return new BodyState(id, (int)shapeId, (short)x, (short)y, (ushort)angle, (ushort)scale, color, (BodyFlags)flags, (int)labelId);
+            return new BodyState(id, (int)shapeId, (short)x, (short)y, (ushort)angle, (ushort)scale, color, (BodyFlags)flags, (int)labelId, (int)skinId);
         }
 
         static int ReadId(ref ByteReader r, bool first, int previousId)

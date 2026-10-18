@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace Ballverse.Core.RenderStream
 {
@@ -20,8 +19,6 @@ namespace Ballverse.Core.RenderStream
     /// </summary>
     public sealed class RenderFrame
     {
-        static readonly BodyIdComparer s_bodyComparer = new BodyIdComparer();
-        static readonly HudKeyComparer s_hudComparer = new HudKeyComparer();
 
         BodyState[] _bodies;
         int _bodyCount;
@@ -167,11 +164,68 @@ namespace Ballverse.Core.RenderStream
             return false;
         }
 
-        /// <summary>Sorts bodies by id and HUD entries by key (the canonical stream order).</summary>
+        /// <summary>
+        /// Sorts bodies by id and HUD entries by key (the canonical stream order). In-place heap sort: no allocation
+        /// (<c>Array.Sort</c> with a comparer allocates a delegate per call on .NET), the same result on every runtime.
+        /// </summary>
         public void Sort()
         {
-            if (!IsBodiesSorted()) Array.Sort(_bodies, 0, _bodyCount, s_bodyComparer);
-            if (!IsHudSorted()) Array.Sort(_hud, 0, _hudCount, s_hudComparer);
+            if (!IsBodiesSorted()) SortBodies(_bodies, _bodyCount);
+            if (!IsHudSorted()) SortHud(_hud, _hudCount);
+        }
+
+        static void SortBodies(BodyState[] a, int n)
+        {
+            for (int i = n / 2 - 1; i >= 0; i--) SiftBody(a, i, n);
+            for (int end = n - 1; end > 0; end--)
+            {
+                BodyState t = a[0];
+                a[0] = a[end];
+                a[end] = t;
+                SiftBody(a, 0, end);
+            }
+        }
+
+        static void SiftBody(BodyState[] a, int root, int n)
+        {
+            BodyState item = a[root];
+            while (true)
+            {
+                int child = 2 * root + 1;
+                if (child >= n) break;
+                if (child + 1 < n && a[child + 1].Id > a[child].Id) child++;
+                if (a[child].Id <= item.Id) break;
+                a[root] = a[child];
+                root = child;
+            }
+            a[root] = item;
+        }
+
+        static void SortHud(HudEntry[] a, int n)
+        {
+            for (int i = n / 2 - 1; i >= 0; i--) SiftHud(a, i, n);
+            for (int end = n - 1; end > 0; end--)
+            {
+                HudEntry t = a[0];
+                a[0] = a[end];
+                a[end] = t;
+                SiftHud(a, 0, end);
+            }
+        }
+
+        static void SiftHud(HudEntry[] a, int root, int n)
+        {
+            HudEntry item = a[root];
+            while (true)
+            {
+                int child = 2 * root + 1;
+                if (child >= n) break;
+                if (child + 1 < n && a[child + 1].Key > a[child].Key) child++;
+                if (a[child].Key <= item.Key) break;
+                a[root] = a[child];
+                root = child;
+            }
+            a[root] = item;
         }
 
         /// <summary>Replaces this frame's content with a copy of <paramref name="other"/>.</summary>
@@ -243,22 +297,6 @@ namespace Ballverse.Core.RenderStream
         {
             _bodyCount = bodyCount;
             _hudCount = hudCount;
-        }
-
-        sealed class BodyIdComparer : IComparer<BodyState>
-        {
-            public int Compare(BodyState a, BodyState b)
-            {
-                return a.Id.CompareTo(b.Id);
-            }
-        }
-
-        sealed class HudKeyComparer : IComparer<HudEntry>
-        {
-            public int Compare(HudEntry a, HudEntry b)
-            {
-                return a.Key.CompareTo(b.Key);
-            }
         }
     }
 }

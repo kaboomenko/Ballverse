@@ -164,7 +164,6 @@ namespace Ballverse.Core.Tests.RenderStream
             using (var r = StreamScenes.Open(data))
             {
                 Assert.Empty(r.Shapes);
-                Assert.Empty(r.Labels);
                 Assert.Equal(0, r.LabelCount);
                 Assert.Null(r.GetLabel(BodyState.NoLabel));
                 Assert.Throws<ArgumentOutOfRangeException>(() => r.GetLabel(1));
@@ -174,14 +173,13 @@ namespace Ballverse.Core.Tests.RenderStream
             using (var r = StreamScenes.Open(data))
             {
                 Assert.Equal(StreamScenes.StandardShapes, r.Shapes);
-                Assert.Equal(StreamScenes.StandardLabels, r.Labels);
+                Assert.Equal(StreamScenes.StandardLabels, StreamScenes.Labels(r));
                 Assert.Same(ShapeDefinition.Circle, r.Shapes[0]);
                 Assert.Equal("Анна", r.GetLabel(1));
                 Assert.Equal("Zoë 🙂", r.GetLabel(6));
                 Assert.Throws<ArgumentOutOfRangeException>(() => r.GetLabel(-1));
                 Assert.Throws<ArgumentOutOfRangeException>(() => r.GetLabel(StreamScenes.StandardLabels.Length + 1));
                 Assert.Throws<NotSupportedException>(() => ((IList<ShapeDefinition>)r.Shapes)[0] = null);
-                Assert.Throws<NotSupportedException>(() => ((IList<string>)r.Labels)[0] = null);
             }
         }
 
@@ -278,7 +276,7 @@ namespace Ballverse.Core.Tests.RenderStream
                 {
                     bool closed = rng.NextBool();
                     int n = rng.NextUInt(8) == 0 ? RenderStreamLimits.MaxPolylinePoints : rng.NextInt(closed ? 3 : 2, 200);
-                    return ShapeDefinition.Polyline(RandomPoints(ref rng, n, extreme), closed, U16(ref rng, extreme), rng.NextBool());
+                    return ShapeDefinition.Polyline(RandomPoints(ref rng, n, extreme), closed, NonZero(U16(ref rng, extreme)), rng.NextBool());
                 }
                 case 3:
                 {
@@ -294,11 +292,19 @@ namespace Ballverse.Core.Tests.RenderStream
                         gaps[i] = new RingGap((ushort)start, (ushort)((start + span) & 0xFFFF));
                     }
                     if (n == 1) gaps[0] = new RingGap((ushort)offset, (ushort)(offset + rng.NextInt(1, 65536)));
-                    return ShapeDefinition.Ring(U16(ref rng, extreme), U16(ref rng, extreme), gaps, rng.NextBool());
+                    ushort radius = NonZero(U16(ref rng, extreme));
+                    ushort thickness = (ushort)Math.Min(NonZero(U16(ref rng, extreme)), 2 * radius);
+                    return ShapeDefinition.Ring(radius, thickness, gaps, rng.NextBool());
                 }
                 default:
-                    return ShapeDefinition.Capsule(U16(ref rng, extreme), U16(ref rng, extreme), rng.NextBool());
+                    return ShapeDefinition.Capsule(U16(ref rng, extreme), NonZero(U16(ref rng, extreme)), rng.NextBool());
             }
+        }
+
+        /// <summary>Thickness and ring radius must be at least 1.</summary>
+        static ushort NonZero(ushort value)
+        {
+            return value == 0 ? (ushort)1 : value;
         }
 
         static ushort U16(ref Rng rng, bool extreme)
@@ -488,6 +494,152 @@ namespace Ballverse.Core.Tests.RenderStream
             AssertRejected(ShapeTable(w => w.WriteByte(0)), null, "bodies referencing shapes beyond a 1-shape table");
         }
 
+        static Action<ByteWriter> RawShape(ShapeKind kind, int flags, params ulong[] values)
+        {
+            return w =>
+            {
+                w.WriteByte((byte)kind);
+                w.WriteByte((byte)flags);
+                foreach (ulong v in values) w.WriteUVarint(v);
+            };
+        }
+
+        static Action<ByteWriter> RawPolyline(ulong thickness)
+        {
+            return w =>
+            {
+                w.WriteByte((byte)ShapeKind.Polyline);
+                w.WriteByte(0);
+                w.WriteUVarint(thickness);
+                w.WriteUVarint(2);
+                w.WriteSVarint(0); w.WriteSVarint(0); w.WriteSVarint(1); w.WriteSVarint(1);
+            };
+        }
+
+        static void AssertTableDecode(bool valid, byte[] table, string what)
+        {
+            if (valid)
+            {
+                Assert.Single(TableCodec.ReadShapeTable(table, 0, table.Length));
+            }
+            else
+            {
+                var e = Assert.Throws<InvalidDataException>(() => TableCodec.ReadShapeTable(table, 0, table.Length));
+                Assert.False(string.IsNullOrEmpty(e.Message), what);
+            }
+        }
+
+        [Fact]
+        public void DegenerateShapeDimensionsInTableAreInvalidData()
+        {
+            // Rejected: zero thickness, zero ring radius, ring thicker than its diameter. Each next to a legal control.
+            AssertTableDecode(false, ShapeTable(RawPolyline(0)), "polyline thickness 0");
+            AssertTableDecode(true, ShapeTable(RawPolyline(1)), "polyline thickness 1");
+            AssertTableDecode(false, ShapeTable(RawShape(ShapeKind.Capsule, 0, 100, 0)), "capsule thickness 0");
+            AssertTableDecode(true, ShapeTable(RawShape(ShapeKind.Capsule, 0, 0, 1)), "capsule length 0, thickness 1");
+            AssertTableDecode(false, ShapeTable(RawShape(ShapeKind.Ring, 0, 0, 0, 0)), "ring r=0 t=0");
+            AssertTableDecode(false, ShapeTable(RawShape(ShapeKind.Ring, 0, 0, 1, 0)), "ring r=0 t=1");
+            AssertTableDecode(false, ShapeTable(RawShape(ShapeKind.Ring, 0, 100, 0, 0)), "ring t=0");
+            AssertTableDecode(false, ShapeTable(RawShape(ShapeKind.Ring, 0, 100, 5000, 0)), "ring t > 2r");
+            AssertTableDecode(false, ShapeTable(RawShape(ShapeKind.Ring, 0, 100, 201, 0)), "ring t = 2r + 1");
+            AssertTableDecode(true, ShapeTable(RawShape(ShapeKind.Ring, 0, 100, 200, 0)), "ring t = 2r");
+
+            // Through the whole file as well (behind a valid checksum): the standard table with its capsule made degenerate.
+            byte[] table = BvsSurgery.Split(s_file).ShapeTable;
+            int at = table.Length - 14;   // Capsule(6000, 400), followed by the 8-byte Capsule(65535, 65535, fixed)
+            Assert.Equal(new byte[] { (byte)ShapeKind.Capsule, 0, 0xF0, 0x2E, 0x90, 0x03 }, table.AsSpan(at, 6).ToArray());
+            var degenerate = new byte[table.Length - 1];
+            Array.Copy(table, degenerate, at + 4);
+            degenerate[at + 4] = 0;       // thickness 400 (2-byte uvarint) -> 0
+            Array.Copy(table, at + 6, degenerate, at + 5, table.Length - at - 6);
+            Assert.True(Throws(BvsSurgery.ResealTables(s_file, degenerate, null)), "degenerate capsule accepted");
+            degenerate[at + 4] = 1;       // control: thickness 1 is legal
+            Assert.False(Throws(BvsSurgery.ResealTables(s_file, degenerate, null)));
+        }
+
+        [Fact]
+        public void NonCircleShapesNeedScaleMaxOfAtLeastOne()
+        {
+            var fine = new RenderQuantization(16f, 0.5f);
+            var ms = new MemoryStream();
+            using (var w = new RenderStreamWriter(ms, new RenderStreamHeader("liquid_sand", 60, 60, fine), leaveOpen: true))
+            {
+                Assert.Equal(0, w.DefineShape(ShapeDefinition.Circle));      // circles: scale is a radius, fine resolution is legal
+                Assert.Throws<ArgumentException>(() => w.DefineShape(ShapeDefinition.Capsule(100, 10)));
+                Assert.Throws<ArgumentException>(() => w.DefineShape(StreamScenes.StandardShapes[1]));
+                Assert.False(w.IsFaulted);
+                Assert.Equal(1, w.ShapeCount);
+                w.Finish();
+            }
+            ms.Position = 0;
+            using (var r = new RenderStreamReader(ms)) Assert.Single(r.Shapes);
+
+            ms = new MemoryStream();
+            using (var w = new RenderStreamWriter(ms, new RenderStreamHeader("m", 60, 60, new RenderQuantization(16f, 1f)), leaveOpen: true))
+            {
+                Assert.Equal(0, w.DefineShape(ShapeDefinition.Capsule(100, 10)));  // ScaleMax 1 is enough
+            }
+
+            // A file whose header claims ScaleMax < 1 while holding non-circle shapes is rejected by the reader.
+            var parts = BvsSurgery.Split(s_file);
+            BitConverter.GetBytes(0.5f).CopyTo(parts.Header, 14);
+            Assert.Throws<InvalidDataException>(() => StreamScenes.Open(BvsSurgery.Join(parts)));
+            BitConverter.GetBytes(1f).CopyTo(parts.Header, 14);
+            using (var r = StreamScenes.Open(BvsSurgery.Join(parts))) Assert.Equal(1f, r.Header.Quantization.ScaleMax);
+        }
+
+        [Fact]
+        public void SkinsRoundTripIndependentlyOfLabelsAndAreStatic()
+        {
+            // M03 participant: name label + flag skin at the same time (spec §2.9 M03 "имена и флаги участников").
+            var ms = new MemoryStream();
+            using (var w = NewWriter(ms))
+            {
+                int circle = w.DefineShape(ShapeDefinition.Circle);
+                int anna = w.DefineLabel("Анна");
+                int flagUa = w.DefineLabel("flag/ua");
+                int flagBr = w.DefineLabel("flag/br");
+                Assert.Equal(4, w.DefineLabel("Bob"));
+                var undefined = Frame(new BodyState(1, circle, 0, 0, 0, 8192, 1, BodyFlags.Visible, anna, 5));
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(0, undefined));
+                undefined = Frame(new BodyState(1, circle, 0, 0, 0, 8192, 1, BodyFlags.Visible, anna, -1));
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(0, undefined));
+                Assert.False(w.IsFaulted);
+                for (int t = 0; t < 10; t++)
+                {
+                    int skin = t < 5 ? flagUa : flagBr;   // skin change on the same id: despawn + spawn
+                    w.AppendFrame(t, Frame(
+                        new BodyState(1, circle, (short)t, 0, 0, 8192, 1, BodyFlags.Visible, anna, skin),
+                        new BodyState(2, circle, 0, (short)t, 0, 8192, 2, BodyFlags.Visible, 4, BodyState.NoSkin),
+                        new BodyState(3, circle, 0, 0, 0, 8192, 3, BodyFlags.Visible, BodyState.NoLabel, flagUa)));
+                }
+                w.Finish();
+            }
+            ms.Position = 0;
+            using (var r = new RenderStreamReader(ms))
+            {
+                for (int t = 0; t < 10; t++)
+                {
+                    var f = r.ReadFrame(t);
+                    Assert.Equal("Анна", r.GetLabel(f.GetBody(0).LabelId));
+                    Assert.Equal(t < 5 ? "flag/ua" : "flag/br", r.GetLabel(f.GetBody(0).SkinId));
+                    Assert.Equal((short)t, f.GetBody(0).X);
+                    Assert.Equal("Bob", r.GetLabel(f.GetBody(1).LabelId));
+                    Assert.Null(r.GetLabel(f.GetBody(1).SkinId));
+                    Assert.Null(r.GetLabel(f.GetBody(2).LabelId));
+                    Assert.Equal("flag/ua", r.GetLabel(f.GetBody(2).SkinId));
+                }
+            }
+
+            // In the raw block, frame 5 codes body 1 as a despawn + spawn.
+            var parts = BvsSurgery.Split(ms.ToArray());
+            var codec = new FrameCodec();
+            var br = new ByteReader(parts.RawBlocks[0], 0, parts.RawBlocks[0].Length);
+            var dest = new RenderFrame();
+            for (int t = 0; t < 5; t++) codec.Decode(ref br, dest);
+            Assert.Equal(1UL, br.ReadUVarint()); // despawn count of frame 5
+        }
+
         [Fact]
         public void InvalidLabelTablesAreRejected()
         {
@@ -533,6 +685,7 @@ namespace Ballverse.Core.Tests.RenderStream
             w.WriteSVarint(7);  // id
             w.WriteUVarint(3);  // shape id
             w.WriteUVarint(2);  // label id
+            w.WriteUVarint(1);  // skin id
             w.WriteSVarint(0); w.WriteSVarint(0); w.WriteUVarint(0); w.WriteUVarint(0); w.WriteByte(0); w.WriteByte(0);
             w.WriteUVarint(0);  // HUD
             byte[] data = w.Span.ToArray();
@@ -542,7 +695,7 @@ namespace Ballverse.Core.Tests.RenderStream
             codec.SetDecodeLimits(4, 2);
             var r = new ByteReader(data, 0, data.Length);
             codec.Decode(ref r, dest);
-            Assert.Equal(new BodyState(7, 3, 0, 0, 0, 0, 0, BodyFlags.None, 2), dest.GetBody(0));
+            Assert.Equal(new BodyState(7, 3, 0, 0, 0, 0, 0, BodyFlags.None, 2, 1), dest.GetBody(0));
 
             codec = new FrameCodec();
             codec.SetDecodeLimits(3, 2);
@@ -553,6 +706,20 @@ namespace Ballverse.Core.Tests.RenderStream
             codec.SetDecodeLimits(4, 1);
             r = new ByteReader(data, 0, data.Length);
             Assert.Throws<InvalidDataException>(() => codec.Decode(ref r, dest));
+
+            // Skin id above the string table count (label id 1 valid, skin id 2 not).
+            byte[] skin = (byte[])data.Clone();
+            skin[3] = 1;  // label id
+            skin[4] = 2;  // skin id
+            codec = new FrameCodec();
+            codec.SetDecodeLimits(4, 1);
+            r = new ByteReader(skin, 0, skin.Length);
+            Assert.Throws<InvalidDataException>(() => codec.Decode(ref r, dest));
+            codec = new FrameCodec();
+            codec.SetDecodeLimits(4, 2);
+            r = new ByteReader(skin, 0, skin.Length);
+            codec.Decode(ref r, dest);
+            Assert.Equal(2, dest.GetBody(0).SkinId);
         }
     }
 }

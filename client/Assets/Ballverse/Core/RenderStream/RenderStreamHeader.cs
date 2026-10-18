@@ -38,7 +38,11 @@ namespace Ballverse.Core.RenderStream
         {
         }
 
-        /// <param name="grid">The grid layer declaration, or null for a stream without a grid.</param>
+        /// <param name="grid">
+        /// The grid layer declaration, or null for a stream without a grid. Its <see cref="RenderGridSpec.Quantization"/>
+        /// must equal <paramref name="quantization"/> (build it with <c>RenderGridSpec.FromWorld(quantization, …)</c>),
+        /// otherwise the bounds would be read back as a different world rectangle; a mismatch throws <see cref="ArgumentException"/>.
+        /// </param>
         public RenderStreamHeader(string modeId, int tickRate, int blockTicks, RenderQuantization quantization, RenderGridSpec grid)
         {
             if (modeId == null) throw new ArgumentNullException(nameof(modeId));
@@ -49,6 +53,10 @@ namespace Ballverse.Core.RenderStream
             TickRate = tickRate;
             BlockTicks = blockTicks;
             Quantization = quantization ?? throw new ArgumentNullException(nameof(quantization));
+            if (grid != null && !grid.Quantization.Equals(quantization))
+            {
+                throw new ArgumentException("Grid bounds were quantized with a different quantization than the header's", nameof(grid));
+            }
             Grid = grid;
         }
     }

@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using Ballverse.Core;
 using Ballverse.Core.RenderStream;
 using Xunit;
 
@@ -61,6 +63,47 @@ namespace Ballverse.Core.Tests.RenderStream
         }
 
         [Fact]
+        public void SortMatchesReferenceOrderAndDoesNotAllocate()
+        {
+            var rng = Rng.FromSeed(31, 1);
+            var f = new RenderFrame();
+            for (int iter = 0; iter < 200; iter++)
+            {
+                f.Clear();
+                int n = iter == 0 ? 0 : rng.NextInt(1, iter < 100 ? 40 : 3000);
+                for (int i = 0; i < n; i++)
+                {
+                    int id = iter % 3 == 0 ? rng.NextInt(-50, 50) : (int)rng.NextUInt();   // duplicates in every third iteration
+                    f.AddBody(new BodyState(id, i, 0, 0, 0, 0, 0, BodyFlags.None));
+                }
+                int h = rng.NextInt(0, 30);
+                for (int i = 0; i < h; i++) f.AddHud(rng.NextInt(0, 1000), i);
+                var expectedIds = f.Bodies.ToArray().Select(b => b.Id).OrderBy(x => x).ToArray();
+                var expectedKeys = f.Hud.ToArray().Select(e => e.Key).OrderBy(x => x).ToArray();
+                var bodiesBefore = f.Bodies.ToArray().OrderBy(b => b.Id).ThenBy(b => b.ShapeId).ToArray();
+                f.Sort();
+                Assert.Equal(expectedIds, f.Bodies.ToArray().Select(b => b.Id).ToArray());
+                Assert.Equal(expectedKeys, f.Hud.ToArray().Select(e => e.Key).ToArray());
+                Assert.Equal(bodiesBefore, f.Bodies.ToArray().OrderBy(b => b.Id).ThenBy(b => b.ShapeId).ToArray()); // a permutation
+            }
+
+            // Reversed 2500-body frame: sorting in place allocates nothing.
+            var big = new RenderFrame(2500, 8);
+            for (int round = 0; round < 3; round++)
+            {
+                big.Clear();
+                for (int i = 2500; i > 0; i--) big.AddBody(new BodyState(i, 0, 0, 0, 0, 0, 0, BodyFlags.None));
+                for (int k = 7; k >= 0; k--) big.AddHud(k, k);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                big.Sort();
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                if (round > 0) Assert.Equal(0, allocated);
+            }
+            Assert.Equal(1, big.GetBody(0).Id);
+            Assert.Equal(2500, big.GetBody(2499).Id);
+        }
+
+        [Fact]
         public void BodyStateEquality()
         {
             var a = new BodyState(1, 0, 1, 2, 3, 4, 5, BodyFlags.Visible);
@@ -79,6 +122,13 @@ namespace Ballverse.Core.Tests.RenderStream
             Assert.Equal(BodyState.NoLabel, a.LabelId);
             Assert.Contains("label 3", c.ToString());
             Assert.DoesNotContain("label", a.ToString());
+            c = a;
+            c.SkinId = 4;
+            Assert.NotEqual(a, c);
+            Assert.NotEqual(a.GetHashCode(), c.GetHashCode());
+            Assert.Equal(BodyState.NoSkin, a.SkinId);
+            Assert.Contains("skin 4", c.ToString());
+            Assert.DoesNotContain("skin", a.ToString());
             Assert.False(a.Equals((object)"x"));
             Assert.Equal(new HudEntry(1, 2), new HudEntry(1, 2));
             Assert.True(new HudEntry(1, 2) != new HudEntry(1, 3));

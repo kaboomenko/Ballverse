@@ -9,9 +9,9 @@ namespace Ballverse.Core.Tests.RenderStream
     /// Pins the .bvs byte format: TestData/RenderStream/churn75.bvs was produced by this writer from
     /// <see cref="StreamScenes.Churn"/>(75, 2026) with <see cref="StreamScenes.AddGrid"/>(9 × 13, seed 7), the standard
     /// shape and label tables and <see cref="GoldenHeader"/> (integer-only, so platform independent). It covers every
-    /// section: header with grid, blocks (bodies with shape / label ids, HUD, both grid delta encodings), shape table,
+    /// section: header with grid, blocks (bodies with shape / label / skin ids, HUD, both grid delta encodings), shape table,
     /// label table, index and footer.
-    /// Format v1 was revised in place once before release (shape table, label table, grid layer) and the file was
+    /// Format v1 was revised in place before release (shape table, label table, grid layer, skin ids) and the file was
     /// regenerated then; any further change to the encoding must bump <see cref="RenderStreamHeader.CurrentFormatVersion"/>
     /// and regenerate the file (run <see cref="WriterReproducesGoldenFile"/> after writing the new bytes).
     /// </summary>
@@ -21,8 +21,9 @@ namespace Ballverse.Core.Tests.RenderStream
 
         static RenderStreamHeader GoldenHeader()
         {
-            var grid = new RenderGridSpec(9, 13, GridTopology.HexOddRowsShifted, -12000, -20000, 12000, 20000);
-            return new RenderStreamHeader("golden", 60, 30, new RenderQuantization(12f, 4f), grid);
+            var q = new RenderQuantization(12f, 4f);
+            var grid = new RenderGridSpec(q, 9, 13, GridTopology.HexOddRowsShifted, -12000, -20000, 12000, 20000);
+            return new RenderStreamHeader("golden", 60, 30, q, grid);
         }
 
         static System.Collections.Generic.List<RenderFrame> GoldenFrames()
@@ -55,7 +56,7 @@ namespace Ballverse.Core.Tests.RenderStream
                 Assert.Equal(75, reader.TickCount);
                 Assert.Equal(3, reader.BlockCount);
                 Assert.Equal(StreamScenes.StandardShapes, reader.Shapes);
-                Assert.Equal(StreamScenes.StandardLabels, reader.Labels);
+                Assert.Equal(StreamScenes.StandardLabels, StreamScenes.Labels(reader));
                 for (int t = 74; t >= 0; t--) Assert.True(expected[t].ContentEquals(reader.ReadFrame(t)), "tick " + t);
             }
         }

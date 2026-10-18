@@ -160,5 +160,42 @@ namespace Ballverse.Core.Tests.RenderStream
             Assert.Equal(5, b.LabelId);
             Assert.Equal(BodyState.NoLabel, q.QuantizeBody(3, 7, 0f, 0f, 0f, 1f, 2, BodyFlags.Visible).LabelId);
         }
+
+        [Fact]
+        public void DegenerateDimensionsAreRejected()
+        {
+            // Zero thickness: nothing to draw.
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Polyline(Points(3), false, 0));
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Polyline(Points(3), true, 0, fixedThickness: true));
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Capsule(100, 0));
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Capsule(0, 0));
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Ring(100, 0, new RingGap[0]));
+            // Ring radius 0, or thicker than its diameter (negative inner radius).
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Ring(0, 0, new RingGap[0]));
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Ring(0, 1, new RingGap[0]));
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Ring(100, 201, new RingGap[0]));
+            Assert.Throws<ArgumentException>(() => ShapeDefinition.Ring(ushort.MaxValue / 2, ushort.MaxValue, new RingGap[0]));
+
+            // Boundaries that stay legal.
+            Assert.Equal(1, ShapeDefinition.Polyline(Points(2), false, 1).Thickness);
+            Assert.Equal(200, ShapeDefinition.Ring(100, 200, new RingGap[0]).Thickness);   // inner radius 0: a disc
+            Assert.Equal(1, ShapeDefinition.Ring(1, 1, new RingGap[0]).Radius);
+            Assert.Equal(ushort.MaxValue, ShapeDefinition.Ring(ushort.MaxValue, ushort.MaxValue, new RingGap[0]).Thickness);
+            Assert.Equal(0, ShapeDefinition.Capsule(0, 1).Length);                          // a dot
+            // Documented as legal (renderer draws nothing / skips): coincident polygon vertices and polyline points.
+            var same = new[] { new ShapePoint(5, 5), new ShapePoint(5, 5), new ShapePoint(5, 5) };
+            Assert.Equal(3, ShapeDefinition.Polygon(same).PointCount);
+            Assert.Equal(3, ShapeDefinition.Polyline(same, false, 10).PointCount);
+        }
+
+        [Fact]
+        public void UnitScaleIsOnlyApproximatelyOne()
+        {
+            // Renderers must compare the quantized scale with UnitScale, not the dequantized float with 1f.
+            var q = RenderQuantization.Default;
+            Assert.NotEqual(1f, q.DequantizeScale(q.UnitScale));
+            Assert.Equal(q.UnitScale, q.QuantizeScale(q.DequantizeScale(q.UnitScale)));
+            Assert.Equal(1f, new RenderQuantization(16f, 1f).DequantizeScale(new RenderQuantization(16f, 1f).UnitScale));
+        }
     }
 }

@@ -137,12 +137,18 @@ namespace Ballverse.Core.RenderStream
         /// Registers an immutable shape and returns its id for <see cref="BodyState.ShapeId"/> (spec §7.7 shape table).
         /// A shape equal to an already defined one returns the existing id; new ids are 0, 1, 2… in definition order.
         /// Throws <see cref="InvalidOperationException"/> (without faulting the writer) once
-        /// <see cref="RenderStreamLimits.MaxShapes"/> shapes or <see cref="RenderStreamLimits.MaxShapeTableBytes"/> bytes are used.
+        /// <see cref="RenderStreamLimits.MaxShapes"/> shapes or <see cref="RenderStreamLimits.MaxShapeTableBytes"/> bytes are used,
+        /// and <see cref="ArgumentException"/> for a non-circle shape when the header's
+        /// <see cref="RenderQuantization.ScaleMax"/> is below 1 (scale factor 1 would not be representable).
         /// </summary>
         public int DefineShape(ShapeDefinition shape)
         {
             ThrowIfUnusable();
             if (shape == null) throw new ArgumentNullException(nameof(shape));
+            if (shape.Kind != ShapeKind.Circle && _header.Quantization.ScaleMax < 1f)
+            {
+                throw new ArgumentException("Non-circle shapes need a quantization ScaleMax of at least 1 (got " + _header.Quantization.ScaleMax + ")", nameof(shape));
+            }
             if (_shapeIds.TryGetValue(shape, out int existing)) return existing;
             if (_shapeCount == RenderStreamLimits.MaxShapes) throw new InvalidOperationException("Shape table is full (" + RenderStreamLimits.MaxShapes + " shapes)");
             _shapeScratch.Reset();
@@ -162,6 +168,8 @@ namespace Ballverse.Core.RenderStream
         /// Registers a label string drawn on bodies (names / numbers, spec §2.9 M03, M06, M07) and returns its id for
         /// <see cref="BodyState.LabelId"/>: 1, 2, 3… in definition order; an equal (ordinal) string returns the existing id.
         /// A label is 1..<see cref="RenderStreamLimits.MaxLabelLength"/> UTF-16 code units of well-formed text.
+        /// The same string table holds skin keys: pass the returned id as <see cref="BodyState.SkinId"/> to name the flag /
+        /// image drawn on a body (spec §2.9 M03, M08).
         /// Throws <see cref="InvalidOperationException"/> (without faulting) beyond <see cref="RenderStreamLimits.MaxLabels"/> labels.
         /// </summary>
         public int DefineLabel(string label)
@@ -181,7 +189,8 @@ namespace Ballverse.Core.RenderStream
         /// <summary>
         /// Appends the frame of <paramref name="tick"/>. Ticks start at 0 and must be consecutive.
         /// Bodies and HUD entries may be in any order (they are stored sorted by id / key); body ids and HUD keys must be
-        /// unique, shape ids must be defined (<see cref="DefineShape"/>), label ids defined or <see cref="BodyState.NoLabel"/>,
+        /// unique, shape ids must be defined (<see cref="DefineShape"/>), label and skin ids defined (<see cref="DefineLabel"/>)
+        /// or 0 (<see cref="BodyState.NoLabel"/> / <see cref="BodyState.NoSkin"/>),
         /// HUD keys must lie in [0, <see cref="HudEntry.MaxKey"/>] and a frame may hold at most
         /// <see cref="HudEntry.MaxEntriesPerFrame"/> HUD entries. The frame must carry a grid of exactly the header's
         /// <see cref="RenderStreamHeader.Grid"/> size, or no grid when the header declares none.
@@ -320,6 +329,7 @@ namespace Ballverse.Core.RenderStream
             {
                 if ((uint)bodies[i].ShapeId >= (uint)_shapeCount) throw new ArgumentException("Undefined shape id " + bodies[i].ShapeId + " for body " + bodies[i].Id, nameof(frame));
                 if ((uint)bodies[i].LabelId > (uint)_labelCount) throw new ArgumentException("Undefined label id " + bodies[i].LabelId + " for body " + bodies[i].Id, nameof(frame));
+                if ((uint)bodies[i].SkinId > (uint)_labelCount) throw new ArgumentException("Undefined skin string id " + bodies[i].SkinId + " for body " + bodies[i].Id, nameof(frame));
                 if (i > 0 && bodies[i].Id == bodies[i - 1].Id) throw new ArgumentException("Duplicate body id " + bodies[i].Id, nameof(frame));
             }
             var hud = f.Hud;

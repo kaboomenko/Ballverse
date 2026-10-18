@@ -93,7 +93,7 @@ namespace Ballverse.Core.Tests.RenderStream
         }
 
         /// <summary>
-        /// Heavy churn: spawns/despawns every tick, id reuse (including in the same tick with a shape or label change),
+        /// Heavy churn: spawns/despawns every tick, id reuse (including in the same tick with a shape, label or skin change),
         /// extreme ids and values, teleports, colour/flag/scale changes and HUD add/remove/change. Bodies use all
         /// <see cref="StandardShapes"/> and <see cref="StandardLabels"/>. Bodies are added in shuffled
         /// order so the writer has to canonicalize; use <see cref="Canonical"/> for the expected frames.
@@ -149,6 +149,10 @@ namespace Ballverse.Core.Tests.RenderStream
                     {
                         b.LabelId = rng.NextInt(0, StandardLabels.Length + 1); // possible label change -> despawn + spawn
                     }
+                    if (r == 14)
+                    {
+                        b.SkinId = rng.NextInt(0, StandardLabels.Length + 1);  // possible skin change -> despawn + spawn
+                    }
                     live[i] = b;
                 }
 
@@ -183,7 +187,8 @@ namespace Ballverse.Core.Tests.RenderStream
                         (ushort)rng.NextInt(0, 65536),
                         (byte)rng.NextUInt(),
                         (BodyFlags)(byte)rng.NextUInt(),
-                        rng.NextBool() ? BodyState.NoLabel : rng.NextInt(1, StandardLabels.Length + 1)));
+                        rng.NextBool() ? BodyState.NoLabel : rng.NextInt(1, StandardLabels.Length + 1),
+                        rng.NextUInt(3) == 0 ? rng.NextInt(1, StandardLabels.Length + 1) : BodyState.NoSkin));
                     velocity[id] = rng.NextInt(-400, 401);
                 }
 
@@ -295,6 +300,14 @@ namespace Ballverse.Core.Tests.RenderStream
                 w.Finish();
             }
             return ms.ToArray();
+        }
+
+        /// <summary>The reader's label (string) table in id order: element i is the string of id i + 1.</summary>
+        public static string[] Labels(RenderStreamReader reader)
+        {
+            var labels = new string[reader.LabelCount];
+            for (int i = 0; i < labels.Length; i++) labels[i] = reader.GetLabel(i + 1);
+            return labels;
         }
 
         public static RenderStreamReader Open(byte[] data)

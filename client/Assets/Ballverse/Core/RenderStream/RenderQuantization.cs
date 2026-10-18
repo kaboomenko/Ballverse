@@ -37,7 +37,12 @@ namespace Ballverse.Core.RenderStream
 
         /// <summary>Half-range of positions in metres: representable positions are [-range, +range).</summary>
         public float PositionRange { get; }
-        /// <summary>Largest representable radius / scale in metres.</summary>
+        /// <summary>
+        /// Largest representable radius / scale in metres. One parameter sets three ranges at once: the circle radius
+        /// (metres), the scale factor of non-circle shapes and every shape length at scale 1 (ring radius, thickness,
+        /// capsule length; 8 m by default). A stream with non-circle shapes needs ScaleMax ≥ 1 (enforced by
+        /// <see cref="RenderStreamWriter.DefineShape"/>); use a polyline for geometry longer than ScaleMax metres.
+        /// </summary>
         public float ScaleMax { get; }
 
         public RenderQuantization(float positionRange, float scaleMax)
@@ -112,7 +117,10 @@ namespace Ballverse.Core.RenderStream
 
         /// <summary>
         /// Quantized scale factor 1.0: a non-circle shape drawn at its defined size (spec §7.7, see <see cref="ShapeDefinition"/>).
-        /// Equals <c>QuantizeScale(1f)</c>; clamps to <see cref="ushort.MaxValue"/> when <see cref="ScaleMax"/> &lt; 1.
+        /// Equals <c>QuantizeScale(1f)</c>; clamps to <see cref="ushort.MaxValue"/> when <see cref="ScaleMax"/> &lt; 1, which is
+        /// why non-circle shapes require ScaleMax ≥ 1. It dequantizes to 1 only approximately (1.0000153 with the default
+        /// ScaleMax 8): a renderer testing for "drawn at defined size" compares the quantized value
+        /// (<c>body.Scale == UnitScale</c>), never the dequantized float with 1f.
         /// </summary>
         public ushort UnitScale => QuantizeScale(1f);
 
@@ -123,9 +131,9 @@ namespace Ballverse.Core.RenderStream
         }
 
         /// <summary>Builds a quantized <see cref="BodyState"/> from world-space values (metres, radians).</summary>
-        public BodyState QuantizeBody(int id, int shapeId, float x, float y, float angle, float scale, byte color, BodyFlags flags, int labelId = BodyState.NoLabel)
+        public BodyState QuantizeBody(int id, int shapeId, float x, float y, float angle, float scale, byte color, BodyFlags flags, int labelId = BodyState.NoLabel, int skinId = BodyState.NoSkin)
         {
-            return new BodyState(id, shapeId, QuantizePosition(x), QuantizePosition(y), QuantizeAngle(angle), QuantizeScale(scale), color, flags, labelId);
+            return new BodyState(id, shapeId, QuantizePosition(x), QuantizePosition(y), QuantizeAngle(angle), QuantizeScale(scale), color, flags, labelId, skinId);
         }
 
         public bool Equals(RenderQuantization other)

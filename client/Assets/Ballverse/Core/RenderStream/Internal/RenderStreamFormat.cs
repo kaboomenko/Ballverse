@@ -26,7 +26,7 @@ namespace Ballverse.Core.RenderStream.Internal
     /// rawHash (after decompression).
     /// <para>
     /// Format history: v1 was revised in place before release (shape table, label table and grid layer added; the
-    /// per-body kind byte replaced by shape and label ids) because nothing consumed .bvs files yet. Any further change
+    /// per-body kind byte replaced by shape, label and skin ids) because nothing consumed .bvs files yet. Any further change
     /// must bump <see cref="RenderStreamHeader.CurrentFormatVersion"/>.
     /// </para>
     /// </summary>
@@ -90,6 +90,7 @@ namespace Ballverse.Core.RenderStream.Internal
             {
                 throw new InvalidDataException("Invalid quantization parameters");
             }
+            var quantization = new RenderQuantization(positionRange, scaleMax);
 
             int gridWidth = r.ReadUInt16();
             int gridHeight = r.ReadUInt16();
@@ -107,7 +108,7 @@ namespace Ballverse.Core.RenderStream.Internal
                 short maxX = (short)r.ReadUInt16();
                 short maxY = (short)r.ReadUInt16();
                 if (minX >= maxX || minY >= maxY) throw new InvalidDataException("Invalid grid bounds");
-                grid = new RenderGridSpec(gridWidth, gridHeight, (GridTopology)topology, minX, minY, maxX, maxY);
+                grid = new RenderGridSpec(quantization, gridWidth, gridHeight, (GridTopology)topology, minX, minY, maxX, maxY);
             }
 
             int modeLength = r.ReadByte();
@@ -123,7 +124,7 @@ namespace Ballverse.Core.RenderStream.Internal
                 throw new InvalidDataException("Mode id is not valid UTF-8", e);
             }
             headerLength = r.Offset;
-            return new RenderStreamHeader(modeId, tickRate, blockTicks, new RenderQuantization(positionRange, scaleMax), grid);
+            return new RenderStreamHeader(modeId, tickRate, blockTicks, quantization, grid);
         }
 
         /// <summary>Reads exactly <paramref name="count"/> bytes or throws <see cref="InvalidDataException"/>.</summary>

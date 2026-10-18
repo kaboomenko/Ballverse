@@ -138,5 +138,97 @@ namespace Ballverse.Core.Tests.RenderStream
             _output.WriteLine("worst cold random seek at 2500 bodies: " + worstMs.ToString("F3") + " ms");
             Assert.True(worstMs < 250, "seek took " + worstMs + " ms");
         }
+
+        [Fact]
+        public void WarmScrubAt2500BodiesIsFast()
+        {
+            // Studio scrubbing (spec §3.7 "кадр обновляется ≤ 100 мс"): one reader, random seeks to the worst case,
+            // the last tick of a block (decompress + decode the whole block).
+            var dest = new RenderFrame();
+            var rng = Rng.FromSeed(2501, 3);
+            using (var reader = StreamScenes.Open(_stream.Data))
+            {
+                int blockTicks = reader.Header.BlockTicks;
+                reader.ReadFrame(blockTicks - 1, dest); // JIT and buffer warm-up
+                double total = 0, worst = 0;
+                const int seeks = 100;
+                int previous = 0;
+                for (int i = 0; i < seeks; i++)
+                {
+                    int block = rng.NextInt(0, reader.BlockCount);
+                    if (block == previous) block = (block + 1) % reader.BlockCount; // force a block load every time
+                    previous = block;
+                    int tick = Math.Min(reader.TickCount, (block + 1) * blockTicks) - 1;
+                    var sw = Stopwatch.StartNew();
+                    reader.ReadFrame(tick, dest);
+                    sw.Stop();
+                    total += sw.Elapsed.TotalMilliseconds;
+                    worst = Math.Max(worst, sw.Elapsed.TotalMilliseconds);
+                    if (_stream.Probes.TryGetValue(tick, out var expected)) Assert.True(expected.ContentEquals(dest), "tick " + tick);
+                }
+                _output.WriteLine("warm scrub at 2500 bodies, block-end ticks: avg " + (total / seeks).ToString("F3") + " ms, worst " + worst.ToString("F3") + " ms");
+                Assert.True(total / seeks < 50, "average warm seek " + (total / seeks) + " ms");
+            }
+        }
+
+        /// <summary>
+        /// M15 Liquid &amp; Sand at its tier-A budget (spec §2.9 M15 "Бюджет тел. 3000", §7.4 "до ~30 МБ/мин для M09/M15"):
+        /// 3000 non-rotating metaball particles under gravity that pile up in a container, with per-tick jitter of
+        /// ±1–3 position units (fluid solver noise that defeats linear prediction), 10 s extrapolated to a minute.
+        /// </summary>
+        [Fact]
+        public void ThreeThousandParticlesStayWithinThirtyMegabytesPerMinute()
+        {
+            const int particles = 3000;
+            var q = RenderQuantization.Default;
+            var rng = Rng.FromSeed(3000, 41);
+            var x = new double[particles];
+            var y = new double[particles];
+            var vy = new double[particles];
+            for (int i = 0; i < particles; i++)
+            {
+                x[i] = rng.NextFloat(-4.3f, 4.3f);
+                y[i] = rng.NextFloat(-7.5f, 7.5f);
+            }
+            const double dt = 1.0 / 60.0;
+            var ms = new MemoryStream();
+            var frame = new RenderFrame(particles, 1);
+            RenderFrame last = null;
+            using (var w = new RenderStreamWriter(ms, new RenderStreamHeader("liquid_sand"), leaveOpen: true))
+            {
+                int particle = w.DefineShape(ShapeDefinition.Circle);
+                for (int t = 0; t < Ticks; t++)
+                {
+                    frame.Clear();
+                    for (int i = 0; i < particles; i++)
+                    {
+                        vy[i] -= 9.8 * dt;
+                        y[i] += vy[i] * dt;
+                        double floor = -7.9 + (i % 40) * 0.05; // particles pile up in layers
+                        if (y[i] < floor) { y[i] = floor; vy[i] = 0; }
+                        BodyState b = q.QuantizeBody(i, particle, (float)x[i], (float)y[i], 0f, 0.04f, (byte)(i * 7 / particles), BodyFlags.Visible | BodyFlags.Metaball);
+                        int jitter = rng.NextInt(1, 4);
+                        b.X = (short)(b.X + (rng.NextBool() ? jitter : -jitter));
+                        jitter = rng.NextInt(1, 4);
+                        b.Y = (short)(b.Y + (rng.NextBool() ? jitter : -jitter));
+                        frame.AddBody(b);
+                    }
+                    frame.AddHud(0, t);
+                    w.AppendFrame(t, frame);
+                    if (t == Ticks - 1)
+                    {
+                        last = new RenderFrame();
+                        last.CopyFrom(frame);
+                    }
+                }
+                w.Finish();
+            }
+            byte[] data = ms.ToArray();
+            double perMinute = data.Length * (3600.0 / Ticks);
+            _output.WriteLine("3000 jittery particles x 10 s: .bvs = " + data.Length + " bytes; extrapolated " + (perMinute / 1048576.0).ToString("F2")
+                + " MB/min; " + (data.Length * 8.0 / Ticks / particles).ToString("F2") + " bits/body/frame");
+            using (var r = StreamScenes.Open(data)) Assert.True(last.ContentEquals(r.ReadFrame(Ticks - 1)));
+            Assert.True(perMinute <= BudgetBytesPerMinute, "extrapolated " + perMinute + " bytes/min, budget " + BudgetBytesPerMinute);
+        }
     }
 }
