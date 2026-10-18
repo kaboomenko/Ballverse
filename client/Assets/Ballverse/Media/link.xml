@@ -1,0 +1,8 @@
+<!--
+  IL2CPP managed code stripping: Ballverse.Media is entered from native code by reflection-like paths the linker
+  cannot see (AndroidJavaProxy method dispatch by name, [MonoPInvokeCallback] functions, JsonUtility DTO fields).
+  Preserve the whole (small) assembly.
+-->
+<linker>
+  <assembly fullname="Ballverse.Media" preserve="all" />
+</linker>
