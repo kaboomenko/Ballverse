@@ -91,6 +91,32 @@ namespace Ballverse.Core.Tests.RenderStream
         }
 
         [Fact]
+        public void HudHeavyLongBlockSeekIsFast()
+        {
+            // Worst case the writer accepts for HUD merging: the maximum HUD size, unchanged, in one 3600-tick block.
+            var frame = new RenderFrame(1, HudEntry.MaxEntriesPerFrame);
+            for (int k = 0; k < HudEntry.MaxEntriesPerFrame; k++) frame.AddHud(k * 256, k);
+            var ms = new System.IO.MemoryStream();
+            var header = new RenderStreamHeader("m", 60, RenderStreamHeader.MaxBlockTicks, RenderQuantization.Default);
+            using (var w = new RenderStreamWriter(ms, header, leaveOpen: true))
+            {
+                for (int t = 0; t < RenderStreamHeader.MaxBlockTicks; t++) w.AppendFrame(t, frame);
+                w.Finish();
+            }
+            using (var reader = StreamScenes.Open(ms.ToArray()))
+            {
+                var dest = new RenderFrame();
+                reader.ReadFrame(1, dest); // warm-up (JIT)
+                var sw = Stopwatch.StartNew();
+                reader.ReadFrame(RenderStreamHeader.MaxBlockTicks - 1, dest);
+                sw.Stop();
+                _output.WriteLine("file bytes = " + ms.Length + ", last-frame seek = " + sw.Elapsed.TotalMilliseconds.ToString("F3") + " ms");
+                Assert.True(frame.ContentEquals(dest));
+                Assert.True(sw.Elapsed.TotalMilliseconds < 100, "seek took " + sw.Elapsed.TotalMilliseconds + " ms");
+            }
+        }
+
+        [Fact]
         public void SequentialPlaybackDoesNotAllocatePerFrame()
         {
             var dest = new RenderFrame(Bodies, 4);

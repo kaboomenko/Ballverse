@@ -160,9 +160,120 @@ namespace Ballverse.Core.Tests.RenderStream
             Assert.Throws<InvalidDataException>(() => StreamScenes.Open(data));
         }
 
+        [Fact]
+        public void WriterRejectsUseAfterStreamWriteFailure()
+        {
+            // Write #1 is the header, write #2 the first block flush (completed by tick 59).
+            var ms = new FlakyStream(2);
+            using (var w = NewWriter(ms))
+            {
+                for (int t = 0; t < 59; t++) w.AppendFrame(t, OneBody());
+                Assert.False(w.IsFaulted);
+                Assert.Throws<IOException>(() => w.AppendFrame(59, OneBody()));
+                Assert.True(w.IsFaulted);
+                Assert.Throws<InvalidOperationException>(() => w.AppendFrame(59, OneBody()));
+                Assert.Throws<InvalidOperationException>(() => w.AppendFrame(60, OneBody()));
+                Assert.Throws<InvalidOperationException>(() => w.Finish());
+                Assert.False(w.IsFinished);
+            }
+            ms.Position = 0;
+            Assert.Throws<InvalidDataException>(() => new RenderStreamReader(ms));
+        }
+
+        [Fact]
+        public void FailedFinishFaultsTheWriter()
+        {
+            // 30 frames: write #2 is the partial block flushed by Finish, #3 the index, #4 the footer.
+            for (int failOn = 2; failOn <= 4; failOn++)
+            {
+                var ms = new FlakyStream(failOn);
+                using (var w = NewWriter(ms))
+                {
+                    for (int t = 0; t < 30; t++) w.AppendFrame(t, OneBody());
+                    Assert.Throws<IOException>(() => w.Finish());
+                    Assert.True(w.IsFaulted, "failOn " + failOn);
+                    Assert.False(w.IsFinished);
+                    Assert.Throws<InvalidOperationException>(() => w.Finish());
+                }
+                ms.Position = 0;
+                Assert.Throws<InvalidDataException>(() => new RenderStreamReader(ms));
+            }
+        }
+
+        [Fact]
+        public void ArgumentErrorsDoNotFaultTheWriter()
+        {
+            using (var w = NewWriter(new MemoryStream()))
+            {
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(3, OneBody()));
+                var dup = OneBody(1);
+                dup.AddBody(new BodyState(1, BodyKind.Circle, 0, 0, 0, 0, 0, BodyFlags.None));
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(0, dup));
+                Assert.False(w.IsFaulted);
+                w.AppendFrame(0, OneBody());
+                w.Finish();
+            }
+        }
+
+        [Fact]
+        public void HudEntryCapIsEnforced()
+        {
+            var ms = new MemoryStream();
+            using (var w = NewWriter(ms))
+            {
+                var full = OneBody();
+                for (int k = 0; k < HudEntry.MaxEntriesPerFrame; k++) full.AddHud(k * 200, k);
+                w.AppendFrame(0, full);
+
+                var over = OneBody();
+                for (int k = 0; k <= HudEntry.MaxEntriesPerFrame; k++) over.AddHud(k, k);
+                Assert.Throws<ArgumentException>(() => w.AppendFrame(1, over));
+                Assert.False(w.IsFaulted);
+                w.Finish();
+            }
+            ms.Position = 0;
+            using (var r = new RenderStreamReader(ms))
+            {
+                Assert.Equal(HudEntry.MaxEntriesPerFrame, r.ReadFrame(0).HudCount);
+            }
+        }
+
+        [Fact]
+        public void BlocksIsReadOnly()
+        {
+            using (var reader = StreamScenes.Open(StreamScenes.Write(StreamScenes.Churn(70, 3))))
+            {
+                Assert.Null(reader.Blocks as RenderStreamBlockInfo[]);
+                Assert.Throws<NotSupportedException>(() => ((System.Collections.Generic.IList<RenderStreamBlockInfo>)reader.Blocks)[1] = default);
+                Assert.Equal(2, reader.Blocks.Count);
+                Assert.Equal(60, reader.Blocks[1].FirstTick);
+                Assert.Same(reader.Blocks, reader.Blocks);
+                reader.ReadFrame(65);
+            }
+        }
+
         sealed class NonSeekableStream : MemoryStream
         {
             public override bool CanSeek => false;
+        }
+
+        /// <summary>Throws <see cref="IOException"/> on the N-th Write call (simulates disk full / a failed write-behind).</summary>
+        sealed class FlakyStream : MemoryStream
+        {
+            readonly int _failOn;
+            int _writes;
+
+            public FlakyStream(int failOn)
+            {
+                _failOn = failOn;
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                _writes++;
+                if (_writes == _failOn) throw new IOException("Simulated write failure");
+                base.Write(buffer, offset, count);
+            }
         }
     }
 }

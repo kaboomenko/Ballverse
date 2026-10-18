@@ -209,6 +209,22 @@ namespace Ballverse.Core.Tests.RenderStream
             }
         }
 
+        [Theory]
+        [InlineData(1)]
+        [InlineData(RenderStreamHeader.MaxBlockTicks)]
+        public void BlockTicksBoundsRoundTrip(int blockTicks)
+        {
+            var frames = StreamScenes.Churn(200, 17);
+            var expected = StreamScenes.Canonical(frames);
+            byte[] data = StreamScenes.Write(frames, new RenderStreamHeader("m", 60, blockTicks, RenderQuantization.Default));
+            using (var reader = StreamScenes.Open(data))
+            {
+                Assert.Equal((200 + blockTicks - 1) / blockTicks, reader.BlockCount);
+                for (int t = 199; t >= 0; t -= 7) AssertFrame(expected[t], reader.ReadFrame(t), t);
+                for (int t = 0; t < 200; t++) AssertFrame(expected[t], reader.ReadFrame(t), t);
+            }
+        }
+
         [Fact]
         public void ExtremeTrajectoriesWrapBitExactly()
         {

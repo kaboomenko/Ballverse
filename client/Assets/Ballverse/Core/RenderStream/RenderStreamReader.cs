@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using Ballverse.Core.Compression;
 using Ballverse.Core.RenderStream.Internal;
@@ -33,6 +34,7 @@ namespace Ballverse.Core.RenderStream
         readonly long _base;
         readonly RenderStreamHeader _header;
         readonly RenderStreamBlockInfo[] _blocks;
+        readonly ReadOnlyCollection<RenderStreamBlockInfo> _blocksView;
         readonly int _tickCount;
         readonly FrameCodec _codec = new FrameCodec();
         readonly XxHash64 _blockHash = new XxHash64();
@@ -120,6 +122,7 @@ namespace Ballverse.Core.RenderStream
                 expectedOffset += compressedLength;
             }
             if ((ulong)expectedOffset != indexOffset) throw new InvalidDataException("Blocks do not end at the index");
+            _blocksView = Array.AsReadOnly(_blocks);
         }
 
         public RenderStreamHeader Header => _header;
@@ -129,9 +132,13 @@ namespace Ballverse.Core.RenderStream
 
         public int BlockCount => _blocks.Length;
 
-        public IReadOnlyList<RenderStreamBlockInfo> Blocks => _blocks;
+        /// <summary>The validated block index (read-only view; the reader's internal copy cannot be modified through it).</summary>
+        public IReadOnlyList<RenderStreamBlockInfo> Blocks => _blocksView;
 
-        /// <summary>Decodes the frame of <paramref name="tick"/> into <paramref name="destination"/> (bodies sorted by id, HUD by key).</summary>
+        /// <summary>
+        /// Decodes the frame of <paramref name="tick"/> into <paramref name="destination"/> (bodies sorted by id, HUD by key).
+        /// On <see cref="InvalidDataException"/> the destination is left unchanged.
+        /// </summary>
         public void ReadFrame(int tick, RenderFrame destination)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(RenderStreamReader));
@@ -161,12 +168,13 @@ namespace Ballverse.Core.RenderStream
                     _codec.Skip(ref _blockReader);
                     _decodedLocal++;
                 }
-                _codec.Decode(ref _blockReader, destination);
+                _codec.Skip(ref _blockReader);
                 _decodedLocal++;
                 if (_decodedLocal == _blocks[block].FrameCount - 1 && _blockReader.Remaining != 0)
                 {
                     throw new InvalidDataException("Trailing bytes after the last frame of block " + block);
                 }
+                _codec.CopyCurrent(destination);
             }
             catch
             {

@@ -247,6 +247,70 @@ namespace Ballverse.Core.Tests.RenderStream
         }
 
         [Fact]
+        public void ReadFrameFailureDoesNotTouchDestination()
+        {
+            byte[] data = Reseal(s_file, (i, raw) =>
+            {
+                if (i != 1) return raw;
+                var copy = new byte[raw.Length + 1];
+                Array.Copy(raw, copy, raw.Length);
+                return copy;
+            });
+            using (var reader = StreamScenes.Open(data))
+            {
+                var dest = new RenderFrame();
+                dest.AddBody(new BodyState(-42, BodyKind.Other, 1, 2, 3, 4, 5, BodyFlags.Visible));
+                dest.AddHud(9, 9);
+                var sentinel = new RenderFrame();
+                sentinel.CopyFrom(dest);
+                Assert.Throws<InvalidDataException>(() => reader.ReadFrame(119, dest));
+                Assert.True(sentinel.ContentEquals(dest), "destination modified by a failed read");
+            }
+        }
+
+        [Fact]
+        public void DecoderRejectsTooManyHudEntries()
+        {
+            int max = HudEntry.MaxEntriesPerFrame;
+            var dest = new RenderFrame();
+
+            // Keyframe declaring max + 1 entries.
+            var w = new ByteWriter(4096);
+            w.WriteUVarint(0);
+            w.WriteUVarint((ulong)(max + 1));
+            for (int k = 0; k <= max; k++)
+            {
+                w.WriteUVarint(0);
+                w.WriteSVarint(k);
+            }
+            byte[] data = w.Span.ToArray();
+            var r = new ByteReader(data, 0, data.Length);
+            Assert.Throws<InvalidDataException>(() => new FrameCodec().Decode(ref r, dest));
+
+            // Keyframe with max entries, then a delta adding one new key.
+            w = new ByteWriter(4096);
+            w.WriteUVarint(0);
+            w.WriteUVarint((ulong)max);
+            for (int k = 0; k < max; k++)
+            {
+                w.WriteUVarint(0);
+                w.WriteSVarint(k);
+            }
+            w.WriteUVarint(0);           // despawns
+            w.WriteUVarint(0);           // spawns
+            w.WriteUVarint(0);           // HUD removed
+            w.WriteUVarint(1);           // HUD set
+            w.WriteUVarint((ulong)max);  // new key
+            w.WriteSVarint(1);
+            data = w.Span.ToArray();
+            var codec = new FrameCodec();
+            var r1 = new ByteReader(data, 0, data.Length);
+            codec.Decode(ref r1, dest);
+            Assert.Equal(max, dest.HudCount);
+            Assert.Throws<InvalidDataException>(() => codec.Decode(ref r1, dest));
+        }
+
+        [Fact]
         public void BlockChecksumMismatchIsRejected()
         {
             byte[] data = (byte[])s_file.Clone();

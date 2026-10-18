@@ -6,8 +6,10 @@ namespace Ballverse.Core.RenderStream
     /// Quantization of render-stream values (spec §7.4 "позиции квантуются в 16-битные координаты арены… углы — 16 бит").
     /// <list type="bullet">
     /// <item>Position: int16 over [-<see cref="PositionRange"/>, +<see cref="PositionRange"/>) metres. With the default
-    /// 16 m range the step is 32 m / 65536 ≈ 0.49 mm (the spec's "≈ 0.4 mm" figure is for the 16 m arena height;
-    /// a symmetric ±16 m range keeps off-screen bodies representable, at 0.49 mm resolution).</item>
+    /// 16 m range the step is 32 m / 65536 ≈ 0.49 mm. Deviation from the spec's "≈ 0.4 mm на арене 16 м": spanning only the
+    /// 16 m arena height would give 16 m / 65536 ≈ 0.24 mm, but the arena is 9 × 16 m centred at (0, 0) (spec §2), so the
+    /// symmetric ±16 m range covers twice the arena and keeps off-screen bodies representable. 0.49 mm is still far below
+    /// one pixel at 1080 × 1920; the spec figure should be updated to match (open question for the owner).</item>
     /// <item>Angle: uint16 over one full turn, step 2π/65536 ≈ 0.0055°; angles wrap.</item>
     /// <item>Radius / scale: uint16 over [0, <see cref="ScaleMax"/>] metres, step 8 m / 65535 ≈ 0.12 mm by default.</item>
     /// </list>

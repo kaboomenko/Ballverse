@@ -10,6 +10,13 @@ namespace Ballverse.Core.RenderStream
         /// <summary>Largest allowed <see cref="Key"/>.</summary>
         public const int MaxKey = 65535;
 
+        /// <summary>
+        /// Largest number of HUD entries in one frame. The spec's HUD is small (score, timer, a few counters, §7.4);
+        /// the cap bounds the reader's per-frame merge cost, because unchanged HUD entries cost no bytes in a delta frame.
+        /// Keys may still be sparse anywhere in [0, <see cref="MaxKey"/>].
+        /// </summary>
+        public const int MaxEntriesPerFrame = 256;
+
         /// <summary>HUD slot id in [0, <see cref="MaxKey"/>]; unique within a frame.</summary>
         public int Key;
         public int Value;

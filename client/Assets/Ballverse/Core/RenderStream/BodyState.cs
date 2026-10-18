@@ -6,6 +6,13 @@ namespace Ballverse.Core.RenderStream
     /// Visual state of one body at one tick, in the <b>quantized</b> domain used by the .bvs render stream (spec §7.4).
     /// The stream stores exactly these values, so decoding is bit-exact. Convert to/from world units with
     /// <see cref="RenderQuantization"/>.
+    /// <para>
+    /// Known limitation of format v1: a body carries only a transform, one uniform radius/scale, a colour and flags.
+    /// Shape geometry (polygon vertices such as M11 Voronoi fragments, segment endpoints, ring gaps and thickness,
+    /// finger-drawn obstacles) and non-uniform scale are not stored, so the renderer must take shapes from elsewhere
+    /// (spec §7.7 wants polygon meshes rebuilt from the stream, and §7.4/§3.9 want the stream to survive physics updates).
+    /// Adding a shape table or per-spawn extension data requires a format version bump; this is an open owner decision.
+    /// </para>
     /// </summary>
     public struct BodyState : IEquatable<BodyState>
     {

@@ -10,12 +10,12 @@ namespace Ballverse.Core.Tests.RenderStream
         static readonly RenderQuantization Q = RenderQuantization.Default;
 
         [Fact]
-        public void DefaultResolutionMatchesSpec()
+        public void DefaultResolutionIsHalfMillimetre()
         {
             Assert.Equal(16f, Q.PositionRange);
             Assert.Equal(8f, Q.ScaleMax);
             Assert.Equal(32.0 / 65536.0, Q.PositionStep, 12);   // ≈ 0.49 mm
-            Assert.InRange(Q.PositionStep, 0.00048, 0.00049);
+            Assert.InRange(Q.PositionStep, 0.00048, 0.00049);   // ±16 m range: 0.49 mm (spec says ≈ 0.4 mm, see RenderQuantization docs)
             Assert.Equal(2 * Math.PI / 65536.0, RenderQuantization.AngleStep, 12);
             Assert.Equal(8.0 / 65535.0, Q.ScaleStep, 12);
         }

@@ -20,6 +20,21 @@ namespace Ballverse.Core.RenderStream
     /// frame (two arrays of ~20 bytes per body), a sorted scratch frame (used only if the caller's frame is unsorted)
     /// and the index (28 bytes per block). All buffers grow geometrically and are reused, so steady-state appends do not allocate.
     /// </para>
+    /// <para>
+    /// CPU profile and threading: an ordinary <see cref="AppendFrame"/> only delta-encodes one frame (≈ 30 µs for 300
+    /// bodies on desktop x64). The append that completes a block also LZ4-compresses it, hashes it (XXH64) and writes it to
+    /// the stream, which costs roughly 10–20× an ordinary append (≈ 0.4–0.6 ms for 300 bodies on desktop x64), once per
+    /// block. The writer is single-threaded and not thread-safe. The spec assigns render-stream writing to the background
+    /// writing thread (§7.11), so the intended use is: the simulation copies each frame
+    /// (<see cref="RenderFrame.CopyFrom"/>) into a queue and the background thread calls <see cref="AppendFrame"/>.
+    /// </para>
+    /// <para>
+    /// Failure handling: if writing to the stream (or any other step after validation) throws, the writer becomes
+    /// <see cref="IsFaulted"/> and rethrows; every later <see cref="AppendFrame"/> / <see cref="Finish"/> throws
+    /// <see cref="InvalidOperationException"/>. The partial output never gets a footer, so readers reject it instead of
+    /// misreading it; the caller rebuilds the stream from the replay (the render stream is a cache, spec §7.4).
+    /// Argument errors (bad tick, invalid frame) are rejected before any state changes and do not fault the writer.
+    /// </para>
     /// </summary>
     public sealed class RenderStreamWriter : IDisposable
     {
@@ -40,6 +55,7 @@ namespace Ballverse.Core.RenderStream
         int _blockCount;
         int _blockFirstTick;
         bool _finished;
+        bool _faulted;
         bool _disposed;
 
         /// <summary>Writes the header immediately. Offsets in the file are relative to the stream's current position.</summary>
@@ -67,10 +83,14 @@ namespace Ballverse.Core.RenderStream
 
         public bool IsFinished => _finished;
 
+        /// <summary>True after a stream write (or another post-validation step) failed; the writer is then unusable.</summary>
+        public bool IsFaulted => _faulted;
+
         /// <summary>
         /// Appends the frame of <paramref name="tick"/>. Ticks start at 0 and must be consecutive.
         /// Bodies and HUD entries may be in any order (they are stored sorted by id / key); body ids and HUD keys must be
-        /// unique, body kinds must be defined <see cref="BodyKind"/> values and HUD keys must lie in [0, <see cref="HudEntry.MaxKey"/>].
+        /// unique, body kinds must be defined <see cref="BodyKind"/> values, HUD keys must lie in [0, <see cref="HudEntry.MaxKey"/>]
+        /// and a frame may hold at most <see cref="HudEntry.MaxEntriesPerFrame"/> HUD entries.
         /// The caller's frame is not modified and may be reused immediately.
         /// </summary>
         public void AppendFrame(int tick, RenderFrame frame)
@@ -81,10 +101,18 @@ namespace Ballverse.Core.RenderStream
             if (_tickCount == int.MaxValue) throw new InvalidOperationException("Render stream is full");
 
             RenderFrame canonical = Canonicalize(frame);
-            if (_codec.FramesInBlock == 0) _blockFirstTick = tick;
-            _codec.Encode(canonical, _raw);
-            _tickCount++;
-            if (_codec.FramesInBlock == _header.BlockTicks) FlushBlock();
+            try
+            {
+                if (_codec.FramesInBlock == 0) _blockFirstTick = tick;
+                _codec.Encode(canonical, _raw);
+                _tickCount++;
+                if (_codec.FramesInBlock == _header.BlockTicks) FlushBlock();
+            }
+            catch
+            {
+                _faulted = true;
+                throw;
+            }
         }
 
         /// <summary>
@@ -94,6 +122,20 @@ namespace Ballverse.Core.RenderStream
         public void Finish()
         {
             ThrowIfUnusable();
+            try
+            {
+                WriteTail();
+            }
+            catch
+            {
+                _faulted = true;
+                throw;
+            }
+            _finished = true;
+        }
+
+        void WriteTail()
+        {
             if (_codec.FramesInBlock > 0) FlushBlock();
 
             long indexOffset = _position;
@@ -111,7 +153,6 @@ namespace Ballverse.Core.RenderStream
             _stream.Write(_scratch.Buffer, 0, _scratch.Length);
             _position += _scratch.Length;
             _stream.Flush();
-            _finished = true;
         }
 
         /// <summary>Releases the stream (unless leaveOpen). Does not call <see cref="Finish"/>.</summary>
@@ -150,6 +191,7 @@ namespace Ballverse.Core.RenderStream
         RenderFrame Canonicalize(RenderFrame frame)
         {
             if (frame.BodyCount > FrameCodec.MaxBodiesPerFrame) throw new ArgumentException("Too many bodies in frame", nameof(frame));
+            if (frame.HudCount > HudEntry.MaxEntriesPerFrame) throw new ArgumentException("More than " + HudEntry.MaxEntriesPerFrame + " HUD entries in frame", nameof(frame));
             RenderFrame f = frame;
             if (!frame.IsBodiesSorted() || !frame.IsHudSorted())
             {
@@ -177,6 +219,7 @@ namespace Ballverse.Core.RenderStream
         {
             if (_disposed) throw new ObjectDisposedException(nameof(RenderStreamWriter));
             if (_finished) throw new InvalidOperationException("Render stream already finished");
+            if (_faulted) throw new InvalidOperationException("Render stream writer faulted after an earlier write failure");
         }
     }
 }

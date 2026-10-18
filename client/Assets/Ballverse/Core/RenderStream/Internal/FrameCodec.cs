@@ -31,8 +31,8 @@ namespace Ballverse.Core.RenderStream.Internal
     {
         /// <summary>Hard cap on bodies per frame accepted by the decoder (allocation guard).</summary>
         public const int MaxBodiesPerFrame = 1 << 20;
-        /// <summary>Hard cap on HUD entries per frame (keys are unique in [0, 65535]).</summary>
-        public const int MaxHudEntries = HudEntry.MaxKey + 1;
+        /// <summary>Hard cap on HUD entries per frame (<see cref="HudEntry.MaxEntriesPerFrame"/>).</summary>
+        public const int MaxHudEntries = HudEntry.MaxEntriesPerFrame;
 
         const int MaskX = 1;
         const int MaskY = 2;
@@ -463,6 +463,9 @@ namespace Ballverse.Core.RenderStream.Internal
                 _hudSet[k] = new HudEntry(key, ReadInt(ref r));
             }
 
+            // Unchanged HUD (the common case): keep the current state, no merge.
+            if (removedCount == 0 && setCount == 0) return;
+
             EnsureHud(ref _hudNext, Math.Min(MaxHudEntries, _hudCount - removedCount + setCount));
             int i = 0, s = 0, o = 0;
             while (true)
@@ -471,6 +474,7 @@ namespace Ballverse.Core.RenderStream.Internal
                 bool haveOld = i < _hudCount;
                 bool haveSet = s < setCount;
                 if (!haveOld && !haveSet) break;
+                if (o == MaxHudEntries) throw new InvalidDataException("Too many HUD entries in frame");
                 if (haveOld && (!haveSet || _hud[i].Key < _hudSet[s].Key))
                 {
                     _hudNext[o++] = _hud[i++];
