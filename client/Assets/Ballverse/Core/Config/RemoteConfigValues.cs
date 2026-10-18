@@ -60,6 +60,7 @@ namespace Ballverse.Core.Config
 
             _tierOverrides = RemoteConfigBuilder.SortedUnique(b.TierOverrides, t => t.DeviceModel, nameof(b.TierOverrides));
             _platformSafeZones = RemoteConfigBuilder.SortedUnique(b.PlatformSafeZones, p => p.Platform, nameof(b.PlatformSafeZones));
+            RemoteConfigBuilder.RequireUniqueCanonical(_platformSafeZones, p => PlatformSafeZone.CanonicalId(p.Platform), nameof(b.PlatformSafeZones));
             _remotePresets = RemoteConfigBuilder.BuildPresets(b.RemotePresets);
             _remoteMelodies = RemoteConfigBuilder.BuildMelodies(b.RemoteMelodies);
             _textTemplates = RemoteConfigBuilder.SortedUnique(b.TextTemplates, t => t.Language, nameof(b.TextTemplates));
@@ -216,15 +217,14 @@ namespace Ballverse.Core.Config
             return false;
         }
 
-        /// <summary>UI masks of a platform (case-insensitive id, e.g. "tiktok"), spec §3.3.</summary>
+        /// <summary>UI masks of a platform (case-insensitive id, e.g. "tiktok"; <see cref="PlatformSafeZone.SameId"/>), spec §3.3.</summary>
         public bool TryGetSafeZones(string platform, out IReadOnlyList<NormalizedRect> rects)
         {
             rects = null;
             if (platform == null) return false;
-            string key = platform.Trim();
             foreach (var p in _platformSafeZones)
             {
-                if (string.Equals(p.Platform, key, StringComparison.OrdinalIgnoreCase))
+                if (PlatformSafeZone.SameId(p.Platform, platform))
                 {
                     rects = p.Rects;
                     return true;

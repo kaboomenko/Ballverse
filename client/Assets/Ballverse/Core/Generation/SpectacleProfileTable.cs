@@ -13,8 +13,9 @@ namespace Ballverse.Core.Generation
         /// <summary>
         /// Built-in defaults. All numbers are initial guesses to be tuned through Remote Config with the balance probe (spec §8.5).
         /// Interactive-only modes (M04, M10–M12) have w1 = 0 because their duration is not selected (spec §2.4); M05 Helix Drop
-        /// keeps w1 because its default "Авто-ролик" and "Бот" controls select the duration (with the player control the
-        /// session ignores the target, so fitDuration is 1 for every candidate). Thresholds are roughly 55% of the reachable
+        /// keeps w1 because its default "Авто-ролик" and "Бот" controls select the duration; with the "Игрок" control the
+        /// session is interactive and scores with w1 = 0 against threshold − w1 (release-1 card: "w1 … равен 0 в «Игроке»",
+        /// see <see cref="GenerationSession.ScoringWeights"/>). Thresholds are roughly 55% of the reachable
         /// maximum w1 + w2 + w3 + w4.
         /// </summary>
         public static readonly SpectacleProfileTable Default = new SpectacleProfileTable(new[]

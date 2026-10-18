@@ -61,6 +61,8 @@ namespace Ballverse.Core.Generation
         int _searchLongerCount;
         GenerationStatus _status;
         GenerationResult _result;
+        readonly SpectacleWeights _scoringWeights;
+        readonly double _qualityThreshold;
 
         /// <exception cref="ArgumentNullException">options is null.</exception>
         /// <exception cref="ArgumentException">The options are inconsistent (see <see cref="GenerationSessionOptions"/>).</exception>
@@ -70,6 +72,12 @@ namespace Ballverse.Core.Generation
             _options = options.Clone();
             _options.Validate();
             _interactive = _options.EffectiveInteractive;
+            // Interactive sessions do not select the duration, so w1 is 0 (release-1 card M05: "w1 … равен 0 в «Игроке»") and the
+            // threshold drops by the same w1: pass/fail and ranking are those of the auto profile with fitDuration = 1, while
+            // Breakdown.Total follows the spec formula. Interactive-only modes already have w1 = 0 (no change).
+            SpectacleWeights w = _options.Weights;
+            _scoringWeights = _interactive && w.W1 != 0.0 ? new SpectacleWeights(0.0, w.W2, w.W3, w.W4, w.W5) : w;
+            _qualityThreshold = _interactive ? _options.QualityThreshold - w.W1 : _options.QualityThreshold;
 
             int multiplier = BudgetMultiplier(_options.ForcedWinner, _options.ParticipantCount);
             // Spec §2.5 multiplies only the candidate budget; the time budget stays the tier's unless explicitly overridden.
@@ -111,6 +119,12 @@ namespace Ballverse.Core.Generation
 
         /// <summary>The session is interactive (option or interactive mode): duration is not scored, no winner or goals (spec §2.4).</summary>
         public bool IsInteractive => _interactive;
+
+        /// <summary>Weights candidates are scored with: the options' weights, with w1 = 0 in an interactive session.</summary>
+        public SpectacleWeights ScoringWeights => _scoringWeights;
+
+        /// <summary>Threshold candidates must reach: the options' threshold, minus the options' w1 in an interactive session.</summary>
+        public double EffectiveQualityThreshold => _qualityThreshold;
 
         /// <summary>Candidates handed out but not yet evaluated (running, or reported ahead of a lower index).</summary>
         public int OutstandingCount => _issued - _evaluations.Count;
@@ -269,7 +283,7 @@ namespace Ballverse.Core.Generation
         {
             // Interactive modes: only the arena is generated, so duration is not scored (spec §2.4).
             int? target = _interactive ? null : _options.TargetDurationTicks;
-            SpectacleBreakdown breakdown = SpectacleScorer.Score(summary, target, _options.Weights, _options.Density);
+            SpectacleBreakdown breakdown = SpectacleScorer.Score(summary, target, _scoringWeights, _options.Density);
             bool matches = !HasForcedWinner || DirectorAnalysis.MatchesWinner(summary, _options.ForcedWinner);
             bool comeback = DirectorAnalysis.IsComeback(summary);
             bool goalMet;
@@ -279,7 +293,7 @@ namespace Ballverse.Core.Generation
                 case DirectorGoal.Comeback: goalMet = comeback; break;
                 default: goalMet = true; break;
             }
-            bool passes = !breakdown.IsRejected && breakdown.Total >= _options.QualityThreshold;
+            bool passes = !breakdown.IsRejected && breakdown.Total >= _qualityThreshold;
             return new CandidateEvaluation(index, CandidateSeeds.ForCandidate(_options.SessionSeed, index), summary, breakdown,
                 matches, comeback, goalMet, passes);
         }

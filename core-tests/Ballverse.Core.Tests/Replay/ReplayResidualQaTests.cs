@@ -89,7 +89,25 @@ namespace Ballverse.Core.Tests.Replay
             var header = new ReplayHeader("helix_drop", 2, "1.0.0", PhysicsBackend.CoreSim, 9, "{}");
             new ReplayWriter(ms, header).Finish(0);
             Assert.Equal(PhysicsBackend.CoreSim, ReplayReader.Read(ms.ToArray()).Header.PhysicsBackend);
-            Assert.Equal(2, (int)PhysicsBackend.CoreSim);
+        }
+
+        [Fact]
+        public void PhysicsBackendNumberingMatchesTheReleaseOneSpec()
+        {
+            // Release-1 spec §7.4: "physicsBackend u8 (1 = Core.Sim, 2 = Box2D v3 — резерв)". QA (core-integration round 1):
+            // the code had Box2DV3 = 1 and CoreSim = 2. The numbering is persisted in every .bvr, so it is pinned here.
+            Assert.Equal(0, (int)PhysicsBackend.None);
+            Assert.Equal(1, (int)PhysicsBackend.CoreSim);
+            Assert.Equal(2, (int)PhysicsBackend.Box2DV3);
+            foreach (var backend in new[] { PhysicsBackend.CoreSim, PhysicsBackend.Box2DV3 })
+            {
+                var ms = new MemoryStream();
+                new ReplayWriter(ms, new ReplayHeader("m", 1, "", backend, 0, "{}")).Finish(0);
+                byte[] b = ms.ToArray();
+                // magic 4 + formatVersion 2 + modeId (1 + 1) + modeSimVersion 2 + appVersion (1 + 0) = offset 11.
+                Assert.Equal((byte)backend, b[11]);
+                Assert.Equal(backend, ReplayReader.Read(b).Header.PhysicsBackend);
+            }
         }
     }
 }

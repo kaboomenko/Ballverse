@@ -74,24 +74,52 @@ namespace Ballverse.Core.Integration
                 ReplayQuantization.DequantizeImpulse(e.Impulse), size, pan);
         }
 
-        /// <summary>Appends the converted events to <paramref name="output"/> in record (tick) order.</summary>
-        public static void Convert(IReadOnlyList<ReplayEvent> events, ISoundBodySource bodies, List<SoundEvent> output)
+        /// <summary>The event can be converted: its tick fits the mixer's int tick (<see cref="ToSoundEvent"/>).</summary>
+        public static bool IsConvertible(in ReplayEvent e)
+        {
+            return e.Tick <= int.MaxValue;
+        }
+
+        /// <summary>
+        /// Appends the converted events to <paramref name="output"/> in record (tick) order. Never throws on replay data:
+        /// <see cref="ReplayReader"/> bounds record ticks only by the header's u32 <c>durationTicks</c>, so an event of a
+        /// corrupted or hostile file whose tick does not fit an int (far beyond any 180 s run) is skipped and counted instead.
+        /// </summary>
+        /// <returns>The number of skipped events (0 for any replay the app writes).</returns>
+        public static int Convert(IReadOnlyList<ReplayEvent> events, ISoundBodySource bodies, List<SoundEvent> output)
         {
             if (events == null) throw new ArgumentNullException(nameof(events));
+            if (bodies == null) throw new ArgumentNullException(nameof(bodies));
             if (output == null) throw new ArgumentNullException(nameof(output));
+            int skipped = 0;
             for (int i = 0; i < events.Count; i++)
             {
                 ReplayEvent e = events[i];
+                if (!IsConvertible(in e))
+                {
+                    skipped++;
+                    continue;
+                }
                 output.Add(ToSoundEvent(in e, bodies));
             }
+            return skipped;
         }
 
-        /// <summary>The converted events of a whole replay, in record (tick) order.</summary>
+        /// <summary>
+        /// The converted events of a whole replay, in record (tick) order; events whose tick does not fit an int are skipped
+        /// (see <see cref="Convert(IReadOnlyList{ReplayEvent}, ISoundBodySource, List{SoundEvent})"/>). Never throws on replay data.
+        /// </summary>
         public static SoundEvent[] Convert(ReplayFile replay, ISoundBodySource bodies)
+        {
+            return Convert(replay, bodies, out _);
+        }
+
+        /// <summary>As <see cref="Convert(ReplayFile, ISoundBodySource)"/>, also reporting how many events were skipped.</summary>
+        public static SoundEvent[] Convert(ReplayFile replay, ISoundBodySource bodies, out int skipped)
         {
             if (replay == null) throw new ArgumentNullException(nameof(replay));
             var list = new List<SoundEvent>(replay.Events.Count);
-            Convert(replay.Events, bodies, list);
+            skipped = Convert(replay.Events, bodies, list);
             return list.ToArray();
         }
     }

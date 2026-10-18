@@ -669,17 +669,22 @@ namespace Ballverse.Core.Tests.Generation
         }
 
         [Fact]
-        public void GoalScopeRaceAndBattleOnly()
+        public void GoalScopePerMode()
         {
-            // QA probes P10 (M01 + LastSecond) and P11 (M07 + Comeback): spec §2.5 "for race and battle".
+            // QA probe P11 (M07 + Comeback): spec §2.5 "камбэк — для гонки и битвы". Release-1 spec §2.5 (QA core-integration
+            // round 1, probe G1): "Победа в последнюю секунду" — в релизе 1 для M01 «Соревнование», so M01 + LastSecond is
+            // accepted while M01 + Comeback, M02 / M05 + any goal stay rejected.
             foreach (ModeInfo mode in ModeCatalog.All)
             {
                 foreach (DirectorGoal goal in new[] { DirectorGoal.LastSecond, DirectorGoal.Comeback })
                 {
                     GenerationSessionOptions o = GenerationSessionOptions.ForMode(mode.Code, DeviceTier.B, 1UL, Runs.Target);
                     o.Goal = goal;
-                    bool allowed = mode.Code == ModeCode.M03 || mode.Code == ModeCode.M06;
-                    Assert.Equal(allowed, GenerationSessionOptions.SupportsDirectorGoals(mode.Code));
+                    bool raceOrBattle = mode.Code == ModeCode.M03 || mode.Code == ModeCode.M06;
+                    bool allowed = raceOrBattle || (goal == DirectorGoal.LastSecond && mode.Code == ModeCode.M01);
+                    Assert.Equal(allowed, GenerationSessionOptions.SupportsDirectorGoal(mode.Code, goal));
+                    Assert.Equal(raceOrBattle || mode.Code == ModeCode.M01, GenerationSessionOptions.SupportsDirectorGoals(mode.Code));
+                    Assert.True(GenerationSessionOptions.SupportsDirectorGoal(mode.Code, DirectorGoal.None));
                     if (allowed) new GenerationSession(o);
                     else Assert.Throws<ArgumentException>(() => new GenerationSession(o));
                 }

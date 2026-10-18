@@ -133,7 +133,29 @@ namespace Ballverse.Core.Tests.Config
             // tier_overrides and text_templates: the cheapest per-entry maps, so the duplicate check dominates.
             // platform_safe_zones shares the same HashSet-based check and MergeByKey (its rect parsing is allocation-heavy,
             // which would make a timing bound noisy).
-            const int n = 20000;
+            // QA (core-integration round 1): an absolute wall-clock bound flaked on loaded machines. The test now compares
+            // n and 4n entries on the same machine, best of three runs each: linear parsing scales by about 4, the former
+            // O(n²) duplicate check by about 16 (≈ 3 s per map at 20000 entries). Machine speed and load cancel out.
+            const int n = 5000;
+            var small = OpenMaps(n);
+            var large = OpenMaps(4 * n);
+            RemoteConfigParser.Parse(small); // warm-up (JIT)
+            RemoteConfigParser.Parse(large);
+            var r = RemoteConfigParser.Parse(large);
+            Single(r, RemoteConfigIssueKind.DuplicateEntry, RemoteConfigIssueSeverity.Warning);
+            Assert.Equal(4 * n, r.Values.TierOverrides.Count);
+            Assert.Equal(4 * n + 2, r.Values.TextTemplates.Count);
+            Assert.Equal(new[] { "p1", "reels", "shorts", "tiktok" }, r.Values.PlatformSafeZones.Select(p => p.Platform));
+            double tSmall = BestOfThree(small);
+            double tLarge = BestOfThree(large);
+            double ratio = tLarge / Math.Max(tSmall, 1e-3);
+            Assert.True(ratio < 9.0, "4× entries took " + ratio.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)
+                + "× as long (" + tSmall.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " ms → "
+                + tLarge.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + " ms); expected ≈ 4× for linear parsing");
+        }
+
+        static Dictionary<string, string> OpenMaps(int n)
+        {
             var tiers = new StringBuilder("{");
             var texts = new StringBuilder("{");
             for (int i = 0; i < n; i++)
@@ -145,22 +167,25 @@ namespace Ballverse.Core.Tests.Config
             }
             tiers.Append('}');
             texts.Append('}');
-            var input = new Dictionary<string, string>
+            return new Dictionary<string, string>
             {
                 { RemoteConfigKeys.TierOverrides, tiers.ToString() },
                 { RemoteConfigKeys.TextTemplates, texts.ToString() },
                 { RemoteConfigKeys.PlatformSafeZones, "{\"p1\":[{\"x\":0,\"y\":0,\"w\":1,\"h\":0.1}],\"P1\":[],\"tiktok\":[]}" },
             };
-            RemoteConfigParser.Parse(input); // warm-up (JIT)
-            var sw = Stopwatch.StartNew();
-            var r = RemoteConfigParser.Parse(input);
-            sw.Stop();
-            Single(r, RemoteConfigIssueKind.DuplicateEntry, RemoteConfigIssueSeverity.Warning);
-            Assert.Equal(n, r.Values.TierOverrides.Count);
-            Assert.Equal(n + 2, r.Values.TextTemplates.Count);
-            Assert.Equal(new[] { "p1", "reels", "shorts", "tiktok" }, r.Values.PlatformSafeZones.Select(p => p.Platform));
-            // The former O(n²) duplicate check took about 3 s per map at this size; linear parsing takes about 0.1 s per map.
-            Assert.True(sw.ElapsedMilliseconds < 1500, "parse took " + sw.ElapsedMilliseconds + " ms");
+        }
+
+        static double BestOfThree(Dictionary<string, string> input)
+        {
+            double best = double.MaxValue;
+            for (int i = 0; i < 3; i++)
+            {
+                var sw = Stopwatch.StartNew();
+                RemoteConfigParser.Parse(input);
+                sw.Stop();
+                best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
+            }
+            return best;
         }
 
         // ---- presets ----

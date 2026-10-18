@@ -710,7 +710,10 @@ namespace Ballverse.Core.Config
             var obj = (JObject)ParseJson(text, JTokenType.Object, ctx);
             if (obj == null) return null;
             var delivered = new List<PlatformSafeZone>();
+            // An id is a duplicate when it equals a kept one ignoring case or after Layout's normalization
+            // (PlatformSafeZone.SameId); two sets keep this linear.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenCanonical = new HashSet<string>(StringComparer.Ordinal);
             foreach (var prop in obj.Properties())
             {
                 string platform = prop.Name.Trim();
@@ -719,11 +722,14 @@ namespace Ballverse.Core.Config
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "empty platform id ignored");
                     continue;
                 }
-                if (!seen.Add(platform))
+                string canonical = PlatformSafeZone.CanonicalId(platform);
+                if (seen.Contains(platform) || seenCanonical.Contains(canonical))
                 {
                     ctx.Warning(RemoteConfigIssueKind.DuplicateEntry, "duplicate platform " + RemoteConfigJson.Excerpt(platform) + " ignored");
                     continue;
                 }
+                seen.Add(platform);
+                seenCanonical.Add(canonical);
                 if (prop.Value.Type != JTokenType.Array)
                 {
                     ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "platform " + RemoteConfigJson.Excerpt(platform) + ": expected an array of rects; default kept");
@@ -745,7 +751,7 @@ namespace Ballverse.Core.Config
                 }
                 delivered.Add(new PlatformSafeZone(platform, rects));
             }
-            return MergeByKey(delivered, current, p => p.Platform);
+            return MergeByKey(delivered, current, p => p.Platform, p => PlatformSafeZone.CanonicalId(p.Platform));
         }
 
         /// <summary>
@@ -865,15 +871,25 @@ namespace Ballverse.Core.Config
             return MergeByKey(delivered, current, s => s.Language);
         }
 
-        /// <summary>Delivered entries plus the current entries whose key (ignoring case) was not delivered.</summary>
-        static List<T> MergeByKey<T>(List<T> delivered, List<T> current, Func<T, string> key)
+        /// <summary>
+        /// Delivered entries plus the current entries whose key (ignoring case) was not delivered, nor (when
+        /// <paramref name="canonicalKey"/> is given) their canonical key.
+        /// </summary>
+        static List<T> MergeByKey<T>(List<T> delivered, List<T> current, Func<T, string> key, Func<T, string> canonicalKey = null)
         {
             var result = new List<T>(delivered);
             var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var d in delivered) keys.Add(key(d));
+            var canonicalKeys = canonicalKey == null ? null : new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in delivered)
+            {
+                keys.Add(key(d));
+                canonicalKeys?.Add(canonicalKey(d));
+            }
             foreach (var c in current)
             {
-                if (!keys.Contains(key(c))) result.Add(c);
+                if (keys.Contains(key(c))) continue;
+                if (canonicalKeys != null && canonicalKeys.Contains(canonicalKey(c))) continue;
+                result.Add(c);
             }
             return result;
         }

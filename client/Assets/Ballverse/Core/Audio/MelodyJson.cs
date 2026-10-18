@@ -18,8 +18,10 @@ namespace Ballverse.Core.Audio
     /// <item><c>durWeight</c>: JSON number, finite, &gt; 0 and representable as a positive float. Required.</item>
     /// <item><c>velocity</c>: JSON number 0…1. Required.</item>
     /// </list>
-    /// Numbers given as strings (<c>"64"</c>) are rejected. Config should validate each entry with
-    /// <see cref="TryParse(JToken, out Melody, out IReadOnlyList{string})"/> rather than keep its own copy of these rules.
+    /// Numbers given as strings (<c>"64"</c>) are rejected. Ownership (integration decision): the Config module owns the
+    /// <c>remote_melodies</c> key and keeps its own implementation of these rules; <c>Ballverse.Core.Integration.RemoteConfigAdapters.ToMelodies</c>
+    /// re-validates every entry with <see cref="Melody.TryCreate"/> and a test feeds random melodies to both, so the two rule
+    /// sets cannot drift apart silently. Remote melodies cannot reuse a built-in melody id (the adapter skips them).
     /// The parsers never throw on bad remote data — they return the list of problems.
     /// </summary>
     public static class MelodyJson

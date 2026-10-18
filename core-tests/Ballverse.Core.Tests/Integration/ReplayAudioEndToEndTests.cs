@@ -138,5 +138,32 @@ namespace Ballverse.Core.Tests.Integration
             Assert.True(mixer.VoicesStarted > 10);
             Assert.Equal(0, mixer.MissingSamples);
         }
+
+        [Fact]
+        public void ConvertSkipsEventsBeyondTheIntTickRange()
+        {
+            // QA probe R1: ReplayReader bounds record ticks only by the u32 durationTicks, so a corrupted file with a tick above
+            // int.MaxValue reads fine; Convert used to throw ArgumentOutOfRangeException from ToSoundEvent.
+            var events = new List<ReplayEvent>
+            {
+                new ReplayEvent(5, ReplayEventType.Hit, 1, ReplayQuantization.QuantizeImpulse(3f), 0),
+                new ReplayEvent(2147483648u, ReplayEventType.Hit, 2, ReplayQuantization.QuantizeImpulse(3f), 0),
+                new ReplayEvent(uint.MaxValue, ReplayEventType.Finish, 3, 0, 0),
+            };
+            ReplayFile file = ReplayReader.Read(WriteReplay(events, uint.MaxValue));
+            Assert.Equal(3, file.Events.Count);
+            SoundEvent[] converted = ReplaySoundEvents.Convert(file, new BodyTable(), out int skipped);
+            Assert.Equal(2, skipped);
+            SoundEvent only = Assert.Single(converted);
+            Assert.Equal(5, only.Tick);
+            Assert.Single(ReplaySoundEvents.Convert(file, new BodyTable()));
+            var list = new List<SoundEvent>();
+            Assert.Equal(2, ReplaySoundEvents.Convert(file.Events, new BodyTable(), list));
+            Assert.Single(list);
+            Assert.False(ReplaySoundEvents.IsConvertible(events[1]));
+            Assert.True(ReplaySoundEvents.IsConvertible(new ReplayEvent(int.MaxValue, ReplayEventType.Hit, 0, 0, 0)));
+            ReplayEvent beyond = events[1];
+            Assert.Throws<ArgumentOutOfRangeException>(() => ReplaySoundEvents.ToSoundEvent(in beyond, new BodyTable()));
+        }
     }
 }

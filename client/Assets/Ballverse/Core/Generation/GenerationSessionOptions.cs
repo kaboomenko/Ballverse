@@ -29,8 +29,8 @@ namespace Ballverse.Core.Generation
         /// <summary>
         /// Optional mode. When set, the mode drives validation: an interactive-only mode (catalog <see cref="ModeInfo.Interactive"/>
         /// without <see cref="ModeInfo.HasAutoControl"/>) makes the session interactive even if <see cref="Interactive"/> is false
-        /// (spec §2.4); forced winner needs a mode with a winner; director goals are limited to race and battle
-        /// (<see cref="SupportsDirectorGoals"/>, spec §2.5).
+        /// (spec §2.4); forced winner needs a mode with a winner; director goals are limited per mode
+        /// (<see cref="SupportsDirectorGoal"/>, release-1 spec §2.5).
         /// </summary>
         public ModeCode? Mode { get; set; }
 
@@ -93,10 +93,30 @@ namespace Ballverse.Core.Generation
             };
         }
 
-        /// <summary>Director goals (last-second win, comeback) apply to race and battle only: M03, M06 (spec §2.5).</summary>
+        /// <summary>
+        /// The mode accepts at least one director goal (<see cref="SupportsDirectorGoal"/>): M01 (release 1) and the roadmap race
+        /// and battle M03, M06.
+        /// </summary>
         public static bool SupportsDirectorGoals(ModeCode mode)
         {
-            return mode == ModeCode.M03 || mode == ModeCode.M06;
+            return SupportsDirectorGoal(mode, DirectorGoal.LastSecond) || SupportsDirectorGoal(mode, DirectorGoal.Comeback);
+        }
+
+        /// <summary>
+        /// Director goals per mode (release-1 spec §2.5): "Победа в последнюю секунду" (<see cref="DirectorGoal.LastSecond"/>) for
+        /// M01 "Ring Escape" in its "Соревнование" variant (release 1) and for the roadmap race and battle M03, M06; "Камбэк"
+        /// (<see cref="DirectorGoal.Comeback"/>) for race and battle only (M03, M06, roadmap). <see cref="DirectorGoal.None"/> is
+        /// always supported.
+        /// </summary>
+        public static bool SupportsDirectorGoal(ModeCode mode, DirectorGoal goal)
+        {
+            switch (goal)
+            {
+                case DirectorGoal.None: return true;
+                case DirectorGoal.LastSecond: return mode == ModeCode.M01 || mode == ModeCode.M03 || mode == ModeCode.M06;
+                case DirectorGoal.Comeback: return mode == ModeCode.M03 || mode == ModeCode.M06;
+                default: return false;
+            }
         }
 
         /// <summary>The session is interactive: <see cref="Interactive"/> or an interactive-only <see cref="Mode"/> (spec §2.4).</summary>
@@ -141,8 +161,9 @@ namespace Ballverse.Core.Generation
             }
             if (Goal != DirectorGoal.None && interactive)
                 throw new ArgumentException("Interactive modes have no director goals (spec §2.4)", nameof(Goal));
-            if (Goal != DirectorGoal.None && Mode.HasValue && !SupportsDirectorGoals(Mode.Value))
-                throw new ArgumentException("Director goals apply to race and battle only (spec §2.5)", nameof(Goal));
+            if (Goal != DirectorGoal.None && Mode.HasValue && !SupportsDirectorGoal(Mode.Value, Goal))
+                throw new ArgumentException("Director goal " + Goal + " is not available for " + Mode.Value
+                    + " (spec §2.5: last second for M01, M03, M06; comeback for race and battle M03, M06)", nameof(Goal));
             if (Goal == DirectorGoal.Comeback && !hasWinner)
                 throw new ArgumentException("Comeback needs a mode with a winner (spec §2.5)", nameof(Goal));
         }

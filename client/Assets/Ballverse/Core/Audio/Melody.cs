@@ -7,8 +7,9 @@ namespace Ballverse.Core.Audio
     /// A melody for the Melody sound pack (spec §2.7): id (as stored in project.json <c>"melody": "ode_to_joy"</c>, §7.4),
     /// display name and a non-empty note list. Immutable once constructed. The rules are those of <see cref="MelodyJson"/>
     /// (the same as the Remote Config melody entries): id and name are trimmed non-blank strings, every note valid.
-    /// Remote or content data goes through <see cref="MelodyJson.TryParse(string, out Melody, out IReadOnlyList{string})"/>
-    /// or <see cref="TryCreate"/>, which never throw.
+    /// Content data goes through <see cref="MelodyJson.TryParse(string, out Melody, out IReadOnlyList{string})"/>; Remote Config
+    /// melodies are parsed by the Config module and built with <see cref="TryCreate"/> by
+    /// <c>Ballverse.Core.Integration.RemoteConfigAdapters.ToMelodies</c> (built-in ids reserved). Neither throws.
     /// </summary>
     public sealed class Melody
     {

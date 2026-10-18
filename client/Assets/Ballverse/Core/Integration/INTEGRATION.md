@@ -23,12 +23,30 @@ The Config module owns every §9.3 key: parsing, validation, defaults and the si
 | `ToGenerationBudgets(values)` | `generation_budget_by_tier` → `GenerationBudgetTable` |
 | `ToSpectacleProfiles(values, builtIn)` | `generation_weights` merged over the built-in profiles → `AdapterResult<SpectacleProfileTable>` (conflicting density bounds reported, built-in kept) |
 | `ToExportBitrates(values)` / `DefaultExportSettings(values, tier)` | `export_bitrates` (kbps) + `export_default_fps_by_tier` → `ExportBitrateTable` (bit/s) / `ExportSettings` |
-| `ToPlatformUiMasks(values)` | `platform_safe_zones` → `PlatformUiMasks` (Config already merged defaults) |
+| `ToPlatformUiMasks(values)` | `platform_safe_zones` → `PlatformUiMasks` (Config already merged defaults; never throws, see below) |
 | `LoadRemotePresets(values, schemaForMode)` | `remote_presets` → `RemotePresets.Load`; presets of unreleased modes are rejected |
-| `ToMelodies(values)` / `MelodyOptionIds(melodies)` | `remote_melodies` → Audio `Melody` (validated by Audio's rules); melody option ids for `CommonParams.Build` |
-| `WatermarkPolicy.ShouldShow(values, hasNoWatermark, keepWatermark)` | `watermark_enabled` + `NO_WATERMARK` entitlement + export toggle → `FrameRequest.showWatermark` |
+| `ToMelodies(values)` / `MelodyOptionIds(melodies)` | `remote_melodies` → Audio `Melody` (validated by Audio's rules; built-in ids reserved); melody option ids for `CommonParams.Build` |
+| `values.WatermarkEnabled` (no adapter) | `remoteWatermarkEnabled` argument of `Ballverse.Core.Projects.WatermarkPolicy.Resolve` |
 
 With `RemoteConfigValues.Defaults` every adapter reproduces the consumer's built-in defaults exactly (tested).
+
+Decisions (QA round 1):
+
+- **One watermark rule.** The canonical rule is `Ballverse.Core.Projects.WatermarkPolicy.Resolve(projectToggle,
+  hasNoWatermarkEntitlement, remoteWatermarkEnabled)` (Projects module, on main). Integration has no watermark class (a third
+  `WatermarkPolicy` made `using Ballverse.Core.Integration; using Ballverse.Core.Projects;` fail with CS0104);
+  `IntegrationOwnershipTests` keeps Integration type names unique. Monetization keeps only the presentation
+  (`WatermarkRow` / `GetRow`); merge task for the Monetization track: make `Monetization.WatermarkPolicy.ShouldApply` delegate to
+  `Projects.WatermarkPolicy.Resolve` (same rule, the entitlement set reduced to `Contains(NoWatermark)`).
+- **One Ad policy mapper.** `ToAdPolicyConfig` is the only `RemoteConfigValues → AdPolicyConfig` mapping. Merge task for the
+  unity-services track: call `RemoteConfigAdapters.ToAdPolicyConfig` and delete `AdPolicyConfigMapper` (`Services/Ads/AdPolicyStore.cs`).
+- **Platform ids.** Config treats ids equal ignoring case *or* equal after `Trim().ToLowerInvariant()` (Layout's
+  normalization) as duplicates (`PlatformSafeZone.SameId`, also enforced by `RemoteConfigBuilder`), so every snapshot builds
+  a `PlatformUiMasks`; the adapter additionally skips any id that would still collide (first wins) instead of throwing.
+  Example: U+212A KELVIN SIGN and `k` are distinct under `OrdinalIgnoreCase` but one id in Layout.
+- **Remote melodies only add.** An entry whose id equals a built-in melody id (`CommonParams.Melodies`) is skipped and
+  reported, so a project's `"melody"` always means the same notes; Config keeps its own copy of the melody rules and the
+  adapter re-validates with `Melody.TryCreate` (a randomized test keeps the two in agreement).
 
 ## Release-1 catalog
 
@@ -36,8 +54,23 @@ With `RemoteConfigValues.Defaults` every adapter reproduces the consumer's built
 ("Helix Drop" / "Хеликс-дроп", the RU name follows the EN one as in spec §2.8 and changes with it if the trademark check fails).
 All three are free by default (`FreeByDefault` ⊆ `InRelease`, enforced by `ModeInfo`). Codes are stable; the retired ids
 `grow_bounce` / `spiral_drop` are not reused. M05 is interactive with automatic controls (`HasAutoControl`), so generation
-selects its duration unless the caller sets `Interactive` for the player control. M01/M02 have winner variants (`HasWinner`).
+selects its duration unless the caller sets `Interactive` for the player control; an interactive session scores with w1 = 0
+against `QualityThreshold − w1` (release-1 card M05: "w1 … равен 0 в «Игроке»"), so pass/fail equals the auto profile with
+fitDuration = 1 while `Breakdown.Total` follows the spec formula. M01/M02 have winner variants (`HasWinner`). Director goals
+(release-1 spec §2.5, `GenerationSessionOptions.SupportsDirectorGoal`): "last second" for M01 (release 1) and roadmap M03/M06,
+"comeback" for M03/M06 only.
+
+Merge task for the Monetization track (its branch still assumes M01–M05 free): derive `MonetizationConfig.ReleasedModes` from
+`ModeCatalog.Released` (drop its own `s_release1Modes`), and update its tests and docs to `FreeByDefault` = {M01, M02, M05};
+8 Monetization tests fail after merging until then. Add a cross-module test that `MonetizationConfig.Release1` equals
+`ModeCatalog.Released` and `RemoteConfigValues.Defaults.EffectiveFreeModes`.
 Config ignores unreleased modes in `free_modes` / `gallery_order`; see `REMOTE_CONFIG_KEYS.md` for enabling a mode later.
+
+## Replay header `physicsBackend`
+
+`PhysicsBackend`: 0 = none, **1 = Core.Sim, 2 = Box2D v3** (reserved), as in the release-1 spec §7.4. QA round 1 found the
+opposite numbering in code; it was renumbered before anything shipped. The golden file `TestData/Replay/sample_v1.bvr` is
+byte-identical: its header byte 1 now reads as Core.Sim, and `ReplayTestUtil.Header` uses `CoreSim`.
 
 ## Replay ↔ Params (`ReplayParams`)
 
@@ -52,7 +85,8 @@ Config ignores unreleased modes in `free_modes` / `gallery_order`; see `REMOTE_C
 
 EVNT type → `SoundEventType` by value, tick kept, impulse = `ReplayQuantization.DequantizeImpulse`. Body size and pan come from an
 `ISoundBodySource` (the render stream in the app, `UniformSoundBodySource` for tests); returning false marks a bodyless event
-(body id −1, exempt from the per-body limit).
+(body id −1, exempt from the per-body limit). `Convert` never throws on replay data: an event whose tick does not fit an int
+(a corrupted file; the reader bounds ticks only by the u32 duration) is skipped and counted.
 
 ## Export plan (`ExportFramePlanner`, `ExportSoundSchedule`)
 

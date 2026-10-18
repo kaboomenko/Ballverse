@@ -199,5 +199,34 @@ namespace Ballverse.Core.Tests.Integration
             Assert.Equal(new long[] { 48000, 144000 }, frames120); // the third repeat would start at 5 s = the end of the output
             for (int i = 1; i < s.Length; i++) Assert.True(s[i - 1].Frame <= s[i].Frame);
         }
+
+        [Fact]
+        public void EqualFramesKeepEventOrder()
+        {
+            // QA mutant I7: dropping the index tie-breaker (an unstable Array.Sort) survived. Many hits share a tick (and the
+            // loop repeats of those ticks), so the order of equal frames feeds the mixer's rate limits and voice stealing; it must
+            // be the event order on every runtime (CoreCLR here, Mono / IL2CPP class libraries on devices).
+            var clip = new ClipTiming(60, 180, 600, afterEnd: SimAfterEnd.Loop);
+            var video = new UserVideoTiming(0, 5000000);
+            var timeline = new StudioTimeline(new TimelineSpec(clip, video, DurationMode.MatchVideo, 30));
+            var events = new List<SoundEvent>();
+            int body = 0;
+            for (int tick = 60; tick < 180; tick += 6)
+            {
+                for (int j = 0; j < 20; j++) events.Add(SoundEvent.Hit(tick, body++, 1f + j));
+            }
+            ScheduledSoundEvent[] s = ExportSoundSchedule.Build(timeline, events);
+            Assert.True(s.Length > 2 * events.Count);
+            int ties = 0;
+            for (int i = 1; i < s.Length; i++)
+            {
+                Assert.True(s[i - 1].Frame <= s[i].Frame);
+                if (s[i - 1].Frame != s[i].Frame) continue;
+                ties++;
+                Assert.True(s[i - 1].Event.BodyId < s[i].Event.BodyId,
+                    "frame " + s[i].Frame + ": body " + s[i - 1].Event.BodyId + " before " + s[i].Event.BodyId);
+            }
+            Assert.True(ties > 500, "ties " + ties);
+        }
     }
 }

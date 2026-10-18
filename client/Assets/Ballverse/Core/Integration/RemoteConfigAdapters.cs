@@ -124,14 +124,18 @@ namespace Ballverse.Core.Integration
         /// <summary>
         /// <c>platform_safe_zones</c> → <see cref="PlatformUiMasks"/>. Config has already merged delivered platforms over its
         /// offline defaults, so the result is built directly (not over <see cref="PlatformUiMasks.Default"/>); with the Config
-        /// defaults it equals <see cref="PlatformUiMasks.Default"/> rect for rect.
+        /// defaults it equals <see cref="PlatformUiMasks.Default"/> rect for rect. Config keeps platform ids unique under Layout's
+        /// normalization too (<see cref="PlatformSafeZone.SameId"/>); as a second line of defence an id that would still collide
+        /// in Layout (or is blank) is skipped, first one wins, so remote data can never make this throw.
         /// </summary>
         public static PlatformUiMasks ToPlatformUiMasks(RemoteConfigValues values)
         {
             if (values == null) throw new ArgumentNullException(nameof(values));
             var platforms = new List<KeyValuePair<string, IEnumerable<FloatRect>>>(values.PlatformSafeZones.Count);
+            var ids = new HashSet<string>(StringComparer.Ordinal);
             foreach (var zone in values.PlatformSafeZones)
             {
+                if (string.IsNullOrWhiteSpace(zone.Platform) || !ids.Add(PlatformSafeZone.CanonicalId(zone.Platform))) continue;
                 var rects = new FloatRect[zone.Rects.Count];
                 for (int i = 0; i < rects.Length; i++)
                 {
@@ -166,15 +170,24 @@ namespace Ballverse.Core.Integration
 
         /// <summary>
         /// <c>remote_melodies</c> → Audio <see cref="Melody"/> objects, validated by Audio's own rules (<see cref="Melody.TryCreate"/>).
-        /// Config applies the same rules, so rejections only appear if the two rule sets ever drift apart.
+        /// Config applies the same rules, so those rejections only appear if the two rule sets ever drift apart.
+        /// <para><b>Decision (built-in ids are reserved):</b> Remote Config only <i>adds</i> melodies (spec §2.7). An entry whose id
+        /// (trimmed, ordinal) equals a built-in melody id (<see cref="CommonParams.Melodies"/>) is skipped and reported, so a
+        /// project's <c>"melody"</c> always means the same notes whatever the console delivers; a new arrangement needs a new id.</para>
         /// </summary>
         public static AdapterResult<IReadOnlyList<Melody>> ToMelodies(RemoteConfigValues values)
         {
             if (values == null) throw new ArgumentNullException(nameof(values));
             var melodies = new List<Melody>(values.RemoteMelodies.Count);
             var issues = new List<string>();
+            var builtIn = new HashSet<string>(CommonParams.Melodies, StringComparer.Ordinal);
             foreach (var m in values.RemoteMelodies)
             {
+                if (m.Id != null && builtIn.Contains(m.Id.Trim()))
+                {
+                    issues.Add(m.Id.Trim() + ": the id of a built-in melody is reserved; remote entry ignored");
+                    continue;
+                }
                 var notes = new MelodyNote[m.Notes.Count];
                 for (int i = 0; i < notes.Length; i++)
                 {
@@ -189,7 +202,8 @@ namespace Ballverse.Core.Integration
 
         /// <summary>
         /// Melody option ids for <see cref="CommonParams.Build"/>: the built-in <see cref="CommonParams.Melodies"/> followed by the
-        /// remote melodies not already listed, so presets naming a remote melody validate (spec §2.7, §7.6).
+        /// remote melodies not already listed, so presets naming a remote melody validate (spec §2.7, §7.6). Melodies from
+        /// <see cref="ToMelodies"/> never reuse a built-in id; the duplicate check only guards hand-built lists.
         /// </summary>
         public static IReadOnlyList<string> MelodyOptionIds(IReadOnlyList<Melody> remoteMelodies)
         {

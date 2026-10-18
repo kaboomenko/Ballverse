@@ -217,6 +217,17 @@ namespace Ballverse.Core.Config
             return new List<RemoteMelody>(melodies).AsReadOnly();
         }
 
+        /// <summary>Throws when two entries share a canonical key (used for platform ids, see <see cref="PlatformSafeZone.SameId"/>).</summary>
+        internal static void RequireUniqueCanonical<T>(IReadOnlyList<T> items, Func<T, string> canonicalKey, string name)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in items)
+            {
+                string k = canonicalKey(item);
+                if (!seen.Add(k)) throw new ArgumentException("duplicate key " + k, name);
+            }
+        }
+
         internal static IReadOnlyList<T> SortedUnique<T>(List<T> items, Func<T, string> key, string name) where T : class
         {
             if (items == null) throw new ArgumentNullException(name);

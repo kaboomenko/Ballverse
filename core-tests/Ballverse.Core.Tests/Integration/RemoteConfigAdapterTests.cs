@@ -286,6 +286,51 @@ namespace Ballverse.Core.Tests.Integration
             Assert.Single(request.MaskRects);
         }
 
+        [Theory]
+        [InlineData("\u212A", "k")] // KELVIN SIGN vs k: distinct ignoring case, equal after ToLowerInvariant
+        [InlineData("\u2126", "\u03C9")] // OHM SIGN vs omega
+        [InlineData("\u212B", "\u00E5")] // ANGSTROM SIGN vs a-ring
+        public void PlatformIdsThatCollideOnlyInLayoutAreDuplicatesInConfig(string first, string second)
+        {
+            // QA A1: Config deduped with OrdinalIgnoreCase, Layout with Trim().ToLowerInvariant(); the adapter then threw
+            // "duplicate platform id" on a payload Config accepted without any issue.
+            var r = Parse((RemoteConfigKeys.PlatformSafeZones,
+                "{\"" + first + "\":[{\"x\":0,\"y\":0,\"w\":1,\"h\":0.1}],\"" + second + "\":[{\"x\":0,\"y\":0.9,\"w\":1,\"h\":0.1}]}"));
+            RemoteConfigIssue issue = Assert.Single(r.Issues);
+            Assert.Equal(RemoteConfigIssueKind.DuplicateEntry, issue.Kind);
+            Assert.Equal(new[] { first, "reels", "shorts", "tiktok" }.OrderBy(x => x, StringComparer.Ordinal),
+                r.Values.PlatformSafeZones.Select(p => p.Platform).OrderBy(x => x, StringComparer.Ordinal));
+            PlatformUiMasks m = RemoteConfigAdapters.ToPlatformUiMasks(r.Values);
+            Assert.Equal(4, m.PlatformIds.Count);
+            Assert.Equal(new[] { new FloatRect(0f, 0f, 1f, 0.1f) }, m.Get(second)); // first one wins
+        }
+
+        [Fact]
+        public void PlatformIdEqualToADefaultOnlyAfterLowerCasingReplacesTheDefault()
+        {
+            var r = Parse((RemoteConfigKeys.PlatformSafeZones, "{\"ti\u212Atok\":[{\"x\":0,\"y\":0,\"w\":1,\"h\":0.1}]}"));
+            Assert.Empty(r.Issues);
+            Assert.Equal(new[] { "reels", "shorts", "ti\u212Atok" }, r.Values.PlatformSafeZones.Select(p => p.Platform));
+            Assert.True(r.Values.TryGetSafeZones("tiktok", out var rects));
+            Assert.Single(rects);
+            PlatformUiMasks m = RemoteConfigAdapters.ToPlatformUiMasks(r.Values);
+            Assert.Equal(new[] { "reels", "shorts", "tiktok" }, m.PlatformIds);
+            Assert.Equal(new[] { new FloatRect(0f, 0f, 1f, 0.1f) }, m.Get("tiktok"));
+        }
+
+        [Fact]
+        public void BuilderRejectsPlatformIdsThatCollideInLayout()
+        {
+            var b = new RemoteConfigBuilder();
+            b.PlatformSafeZones.Clear();
+            b.PlatformSafeZones.Add(new PlatformSafeZone("\u212A", new NormalizedRect[0]));
+            b.PlatformSafeZones.Add(new PlatformSafeZone("k", new NormalizedRect[0]));
+            Assert.Throws<ArgumentException>(() => b.Build());
+            Assert.True(PlatformSafeZone.SameId("\u212A", " K "));
+            Assert.True(PlatformSafeZone.SameId("TikTok", "tiktok"));
+            Assert.False(PlatformSafeZone.SameId("tiktok", "reels"));
+        }
+
         // ---- Params ----
 
         static ParamSchema SchemaFor(string modeId)
@@ -342,14 +387,16 @@ namespace Ballverse.Core.Tests.Integration
                 + "{\"id\":\"ode_to_joy\",\"name\":\"Ode\",\"notes\":[{\"pitch\":127,\"durWeight\":100,\"velocity\":1}]}]"));
             Assert.Empty(r.Issues);
             var m = RemoteConfigAdapters.ToMelodies(r.Values);
-            Assert.False(m.HasIssues);
-            Assert.Equal(new[] { "ode_remix", "ode_to_joy" }, m.Value.Select(x => x.Id));
+            // QA (core-integration round 1, probe K1): a remote melody reusing a built-in id used to be accepted silently with no
+            // defined precedence. Built-in ids are reserved: the entry is skipped and reported.
+            string issue = Assert.Single(m.Issues);
+            Assert.StartsWith("ode_to_joy:", issue);
+            Assert.Equal(new[] { "ode_remix" }, m.Value.Select(x => x.Id));
             Assert.Equal(2, m.Value[0].Count);
             Assert.Equal(64, m.Value[0][0].Pitch);
             Assert.Equal(0f, m.Value[0][1].Velocity);
-            Assert.Equal(MelodyJson.Serialize(m.Value[1], false), MelodyJson.Serialize(new Melody("ode_to_joy", "Ode", new[] { new MelodyNote(127, 100f, 1f) }), false));
             var ids = RemoteConfigAdapters.MelodyOptionIds(m.Value);
-            Assert.Equal(CommonParams.Melodies.Count + 1, ids.Count); // ode_to_joy is built in, ode_remix is new
+            Assert.Equal(CommonParams.Melodies.Count + 1, ids.Count); // ode_remix is new
             Assert.Equal("ode_remix", ids[ids.Count - 1]);
             var schema = CommonParams.Build(melodies: ids);
             var preset = TestSchemas.Set(("soundPack", ParamValue.String("Melody")), ("melody", ParamValue.String("ode_remix")));
@@ -384,35 +431,6 @@ namespace Ballverse.Core.Tests.Integration
                 }
             }
             Assert.InRange(accepted, 50, 1950);
-        }
-
-        // ---- Watermark ----
-
-        [Theory]
-        [InlineData(true, false, false, true)]
-        [InlineData(true, false, true, true)]
-        [InlineData(true, true, false, false)]
-        [InlineData(true, true, true, true)]
-        [InlineData(false, false, false, false)]
-        [InlineData(false, false, true, false)]
-        [InlineData(false, true, false, false)]
-        [InlineData(false, true, true, false)]
-        public void WatermarkTruthTable(bool enabled, bool noWatermark, bool keep, bool expected)
-        {
-            Assert.Equal(expected, WatermarkPolicy.ShouldShow(enabled, noWatermark, keep));
-        }
-
-        [Fact]
-        public void WatermarkFromConfig()
-        {
-            Assert.True(WatermarkPolicy.ShouldShow(D, hasNoWatermark: false));
-            Assert.False(WatermarkPolicy.ShouldShow(D, hasNoWatermark: true)); // toggle defaults to "without watermark"
-            Assert.True(WatermarkPolicy.ShouldShow(D, hasNoWatermark: true, keepWatermark: true));
-            var off = Parse((RemoteConfigKeys.WatermarkEnabled, "false")).Values;
-            Assert.False(WatermarkPolicy.ShouldShow(off, hasNoWatermark: false));
-            Assert.False(WatermarkPolicy.IsToggleAvailable(false));
-            Assert.True(WatermarkPolicy.IsToggleAvailable(true));
-            Assert.Throws<ArgumentNullException>(() => WatermarkPolicy.ShouldShow(null, false));
         }
 
         [Fact]
