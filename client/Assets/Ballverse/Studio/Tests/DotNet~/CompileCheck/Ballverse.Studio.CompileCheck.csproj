@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Compile-only check of the whole Ballverse.Studio assembly outside Unity (the Unity editor is not available in the
+    development container; Unity compiles it in CI). Studio sources + the Media sources it references + Ballverse.Platform,
+    against Core and against signature stand-ins of the Unity 6 APIs the studio uses (UnityApiStubs.cs). It proves the code is
+    internally consistent and matches those signatures; the real Unity compile in GameCI remains the authority.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>Ballverse.Studio.CompileCheck</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="UnityApiStubs.cs" />
+    <Compile Include="../../../../Media/Api/*.cs;../../../../Media/Common/*.cs;../../../../Media/Internal/*.cs;../../../../Media/Fake/*.cs" />
+    <Compile Include="../../../../App/Platform/*.cs" />
+    <Compile Include="../../../**/*.cs" Exclude="../../../Tests/**" />
+    <!-- The EditMode tests of the Studio assembly (NUnit) are type-checked too. -->
+    <Compile Include="../../EditMode/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../../../../core-tests/Ballverse.Core/Ballverse.Core.csproj" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+  </ItemGroup>
+</Project>
