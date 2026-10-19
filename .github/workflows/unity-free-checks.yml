@@ -10,12 +10,19 @@ on:
       - "client/Assets/Ballverse/Media/**"
       - "client/Assets/Ballverse/UI/**"
       - "client/Assets/Ballverse/Core/**"
+      # The UI model tests compile Ballverse.Platform and assert on the package manifest.
+      - "client/Assets/Ballverse/App/Platform/**"
+      - "client/Packages/manifest.json"
       - "core-tests/MediaJavaCheck/**"
       - ".github/workflows/unity-free-checks.yml"
   pull_request:
     paths:
       - "client/Assets/Plugins/Android/**"
       - "client/Assets/Ballverse/Media/**"
+      - "client/Assets/Ballverse/UI/**"
+      - "client/Assets/Ballverse/Core/**"
+      - "client/Assets/Ballverse/App/Platform/**"
+      - "client/Packages/manifest.json"
       - "core-tests/MediaJavaCheck/**"
   workflow_dispatch:
 
