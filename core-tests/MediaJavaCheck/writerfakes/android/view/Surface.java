@@ -19,6 +19,11 @@ public final class Surface {
         mCodec.onFramePosted();
     }
 
+    /** Fake EGL: eglSwapBuffers on a window surface of this Surface posts one frame. */
+    public void onEglSwap() {
+        mCodec.onFramePosted();
+    }
+
     public void release() {
         // nothing to do
     }

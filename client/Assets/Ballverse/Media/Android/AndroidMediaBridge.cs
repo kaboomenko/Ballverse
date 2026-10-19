@@ -45,13 +45,20 @@ namespace Ballverse.Media.Android
 
         Task<string> Start(string method, IProgress<double> progress, CancellationToken ct, params object[] args)
         {
+            return Start(method, false, progress, ct, args);
+        }
+
+        /// <param name="cancelWaitsForNative">A cancel completes the task only once Java reports that the request stopped.</param>
+        Task<string> Start(string method, bool cancelWaitsForNative, IProgress<double> progress, CancellationToken ct, params object[] args)
+        {
             return _ops.Run(progress, ct, id =>
             {
                 var full = new object[args.Length + 1];
                 full[0] = id;
                 Array.Copy(args, 0, full, 1, args.Length);
                 _bridge.CallStatic(method, full);
-            }, CancelNative, e => new MediaException(MediaErrorCode.Unknown, "Java call " + method + " failed: " + e.Message, e));
+            }, CancelNative, e => new MediaException(MediaErrorCode.Unknown, "Java call " + method + " failed: " + e.Message, e),
+                false, cancelWaitsForNative);
         }
 
         void CancelNative(long id)
@@ -90,7 +97,9 @@ namespace Ballverse.Media.Android
         protected override async Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
             SegmentConcatOptions options, CancellationToken ct)
         {
-            string json = await Start("concatSegments", null, ct, string.Join("\n", segments), pcmPath ?? string.Empty, outFile,
+            // A cancelled join completes only after SegmentConcat stopped (muxer and AAC codec released, its own work file
+            // deleted): MediaBridge.submit reports the cancellation after SegmentConcat.run returned.
+            string json = await Start("concatSegments", true, null, ct, string.Join("\n", segments), pcmPath ?? string.Empty, outFile,
                 options.Fps, options.AudioBitrateBps);
             NativeWriterDto dto = NativeJson.Parse<NativeWriterDto>(json);
             return new WriterFinish(dto.frames, dto.durationUs);

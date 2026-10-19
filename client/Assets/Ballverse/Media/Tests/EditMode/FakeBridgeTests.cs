@@ -245,9 +245,11 @@ namespace Ballverse.Media.Tests
             w.AppendVideoFrame(new byte[16 * 16 * 4], 0);
             w.Dispose();
             Task<VideoWriterResult> task = _bridge.FinalizeAsync(w, CancellationToken.None);
+            // Faults once the writer's release has completed (FinalizeAsync contract: a retry may start right away).
+            _pump.RunUntil(() => task.IsCompleted);
             Assert.IsTrue(task.IsFaulted);
             Assert.IsInstanceOf<ObjectDisposedException>(task.Exception.InnerException);
-            _pump.Wait(w.Released); // tests must not leave releases pending (OpenWriterAsync waits for them)
+            Assert.IsTrue(w.Released.IsCompleted);
         }
 
         [Test]

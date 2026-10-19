@@ -32,6 +32,9 @@ namespace Ballverse.Media.Internal
 
         public static bool IsAvailable => s_context != null;
 
+        /// <summary>The captured main-thread dispatcher (Unity's context; a test pump in tests), or null before capture.</summary>
+        internal static SynchronizationContext Context => s_context;
+
         public static bool IsMainThread => s_threadId == Thread.CurrentThread.ManagedThreadId;
 
         /// <summary>Throws unless called on the main thread.</summary>

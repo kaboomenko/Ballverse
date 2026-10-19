@@ -134,5 +134,87 @@ namespace Ballverse.Media.Tests
             _ops.Complete(2, NativeStatus.Ok, "{}");
             Assert.AreEqual("{}", _pump.Wait(release));
         }
+
+        // QA round 2 (minor): a cancelled segment join returned before the native join stopped, so a retry for the same
+        // output could start beside it. Joins now use cancelWaitsForNative: the task completes when native reports.
+        Task<string> StartWaiting(CancellationToken ct)
+        {
+            return _ops.Run(null, ct, id => _log.Add("start " + id), id => _log.Add("cancel " + id),
+                e => new MediaException(MediaErrorCode.Unknown, e.Message, e), false, true);
+        }
+
+        [Test]
+        public void CancelWaitsForNative_PendingUntilNativeReports()
+        {
+            var cts = new CancellationTokenSource();
+            Task<string> task = StartWaiting(cts.Token);
+            cts.Cancel();
+            _pump.Drain(50);
+            CollectionAssert.AreEqual(new[] { "start 1", "cancel 1" }, _log);
+            Assert.IsFalse(task.IsCompleted, "completed before the native side stopped");
+            Assert.AreEqual(1, _ops.PendingCount);
+            cts.Cancel(); // a second cancel does not forward again
+            _pump.Drain(20);
+            Assert.AreEqual(2, _log.Count);
+            _ops.Complete(1, NativeStatus.Cancelled, "");
+            _pump.RunUntil(() => task.IsCompleted);
+            Assert.IsTrue(task.IsCanceled);
+            Assert.AreEqual(0, _ops.PendingCount);
+        }
+
+        [Test]
+        public void CancelWaitsForNative_LateSuccessAfterCancel_IsStillCancelled()
+        {
+            var cts = new CancellationTokenSource();
+            Task<string> task = StartWaiting(cts.Token);
+            cts.Cancel();
+            _pump.Drain(20);
+            _ops.Complete(1, NativeStatus.Ok, "{\"frames\":3}");
+            _pump.RunUntil(() => task.IsCompleted);
+            Assert.IsTrue(task.IsCanceled, "a result reported after the cancel must not be used");
+        }
+
+        [Test]
+        public void CancelWaitsForNative_WithoutCancel_CompletesNormally()
+        {
+            Task<string> task = StartWaiting(new CancellationTokenSource().Token);
+            _ops.Complete(1, NativeStatus.Ok, "{}");
+            Assert.AreEqual("{}", _pump.Wait(task));
+            CollectionAssert.AreEqual(new[] { "start 1" }, _log);
+        }
+
+        [Test]
+        public void CancelWaitsForNative_CancelAll_ForwardsAndWaits()
+        {
+            Task<string> task = StartWaiting(CancellationToken.None);
+            _ops.CancelAll();
+            CollectionAssert.AreEqual(new[] { "start 1", "cancel 1" }, _log);
+            Assert.IsFalse(task.IsCompleted);
+            _ops.Complete(1, NativeStatus.Cancelled, "");
+            _pump.RunUntil(() => task.IsCompleted);
+            Assert.IsTrue(task.IsCanceled);
+        }
+
+        [Test]
+        public void CancelWaitsForNative_NoNativeReport_GivesUpAfterTimeout()
+        {
+            int saved = NativeOps.NativeCancelTimeoutMs;
+            NativeOps.NativeCancelTimeoutMs = 100;
+            try
+            {
+                var cts = new CancellationTokenSource();
+                Task<string> task = StartWaiting(cts.Token);
+                cts.Cancel();
+                _pump.RunUntil(() => task.IsCompleted, 3000);
+                Assert.IsTrue(task.IsCanceled);
+                Assert.AreEqual(0, _ops.PendingCount);
+                _ops.Complete(1, NativeStatus.Cancelled, ""); // a very late report is ignored
+                _pump.Drain(20);
+            }
+            finally
+            {
+                NativeOps.NativeCancelTimeoutMs = saved;
+            }
+        }
     }
 }

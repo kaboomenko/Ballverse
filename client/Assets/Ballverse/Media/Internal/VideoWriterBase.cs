@@ -33,6 +33,10 @@ namespace Ballverse.Media.Internal
     /// <para><b>Release.</b> <see cref="Released"/> completes once the native side has stopped (encoder thread or queue
     /// drained, codec released) and the unfinished work file is deleted — natively by the writer that owns it, and once
     /// more here as a safety net.</para>
+    /// <para><b>Context.</b> The release chain always resumes on the media main-thread dispatcher
+    /// (<see cref="MainThread.Context"/>), never on the caller's <see cref="SynchronizationContext.Current"/>: a release
+    /// nobody awaits (plain <see cref="Dispose"/>) must not leave continuations queued on a foreign context, e.g. a test
+    /// framework's tracking context that waits for them after the test returned.</para>
     /// </remarks>
     internal abstract class VideoWriterBase : IVideoWriter
     {
@@ -245,7 +249,19 @@ namespace Ballverse.Media.Internal
         void ReleaseOnce()
         {
             if (Interlocked.Exchange(ref _released, 1) != 0) return;
-            _ = ReleaseAndSignalAsync();
+            // Every await of the release chain (here and in the platform ReleaseCoreAsync) captures the context that is
+            // current while it starts: make that the main-thread dispatcher, so completions never depend on the caller's
+            // context being pumped (see remarks) and still run on the main thread (no race with BeginCommit/EndCommit).
+            SynchronizationContext caller = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(MainThread.Context);
+            try
+            {
+                _ = ReleaseAndSignalAsync();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(caller);
+            }
         }
 
         async Task ReleaseAndSignalAsync()

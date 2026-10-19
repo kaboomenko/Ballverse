@@ -61,10 +61,10 @@ namespace Ballverse.Media.Ios
             s_ops.Progress(requestId, progress);
         }
 
-        static Task<string> Start(IProgress<double> progress, CancellationToken ct, Action<long> start)
+        static Task<string> Start(IProgress<double> progress, CancellationToken ct, Action<long> start, bool cancelWaitsForNative = false)
         {
             return s_ops.Run(progress, ct, start, IosNative.BVMedia_Cancel,
-                e => new MediaException(MediaErrorCode.Unknown, "native call failed: " + e.Message, e));
+                e => new MediaException(MediaErrorCode.Unknown, "native call failed: " + e.Message, e), false, cancelWaitsForNative);
         }
 
         protected override async Task<string> PickNativeAsync(string destinationDirectory, string baseName, IProgress<double> progress, CancellationToken ct)
@@ -100,8 +100,10 @@ namespace Ballverse.Media.Ios
         {
             string joined = string.Join("\n", segments);
             Mp4Metadata m = options.Metadata;
+            // A cancelled join completes only after BVSegmentConcat stopped (reader/writer cancelled, its own work file
+            // deleted): it reports the cancellation after that cleanup.
             string json = await Start(null, ct, id => IosNative.BVMedia_ConcatSegments(id, joined, pcmPath ?? string.Empty, outFile,
-                options.Fps, options.AudioBitrateBps, m?.Title ?? string.Empty, m?.CreationTimeIso8601 ?? string.Empty));
+                options.Fps, options.AudioBitrateBps, m?.Title ?? string.Empty, m?.CreationTimeIso8601 ?? string.Empty), true);
             NativeWriterDto dto = NativeJson.Parse<NativeWriterDto>(json);
             return new WriterFinish(dto.frames, dto.durationUs);
         }

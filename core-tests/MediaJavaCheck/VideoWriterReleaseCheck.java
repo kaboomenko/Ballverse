@@ -3,6 +3,7 @@ package com.ballverse.media;
 import android.graphics.Bitmap;
 import android.media.MediaCodec;
 import android.media.MediaMuxer;
+import android.opengl.EGL14;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -15,6 +16,10 @@ import java.util.concurrent.CountDownLatch;
  * output BY PATH, so a redo at the same path could lose the new file while the old encoder was still held. Now each
  * writer owns one work file (C# picks a unique name) and releaseAsync reports only after the writer thread has exited
  * with the codec and muxer released and its own unfinished file deleted. Run by check.sh.
+ *
+ * Round 2 (QA): plain OpenWriter on a NEW path one frame after a Dispose (studio redo / §3.8 retry) must not fail on a
+ * device with a single hardware encoder: open() waits (bounded) for writers that are stopping. Some cases also run on the
+ * EGL renderer path (fake EGL display), so the EGL teardown inside the release is covered, not only lockHardwareCanvas.
  */
 public final class VideoWriterReleaseCheck {
     private static final int W = 16;
@@ -24,6 +29,8 @@ public final class VideoWriterReleaseCheck {
     private static int sCases;
     private static int sFailures;
     private static File sDir;
+    /** A gate a case took out of MediaCodec but has not opened yet: opened after the case so a failure cannot strand a thread. */
+    private static volatile CountDownLatch sHeldGate;
 
     /** Native state captured synchronously when a request is reported. */
     private static final class Snapshot {
@@ -31,6 +38,7 @@ public final class VideoWriterReleaseCheck {
         volatile boolean fileExists;
         volatile int liveCodecs;
         volatile int liveMuxers;
+        volatile int liveEgl;
         volatile boolean stopped;
     }
 
@@ -46,6 +54,12 @@ public final class VideoWriterReleaseCheck {
             run("open failure before the thread starts", VideoWriterReleaseCheck::openFailureBeforeThread);
             run("open failure on the writer thread returns only after it stopped", VideoWriterReleaseCheck::openFailureOnThread);
             run("repeated releases all complete", VideoWriterReleaseCheck::repeatedRelease);
+            run("open on a single-encoder device waits for a stopping writer's encoder", VideoWriterReleaseCheck::openWaitsForStoppingWriter);
+            run("open does not wait for writers that are still open", VideoWriterReleaseCheck::openDoesNotWaitForOpenWriter);
+            run("EGL path: release waits for a writer thread stuck in the codec", egl(VideoWriterReleaseCheck::releaseWaitsForStuckThread));
+            run("EGL path: finish then release keeps the file", egl(VideoWriterReleaseCheck::finishThenRelease));
+            run("EGL path: cancel during finish", egl(VideoWriterReleaseCheck::cancelDuringFinish));
+            run("EGL path: open waits for a stopping writer's encoder", egl(VideoWriterReleaseCheck::openWaitsForStoppingWriter));
         } finally {
             deleteTree(sDir);
         }
@@ -63,12 +77,16 @@ public final class VideoWriterReleaseCheck {
     private static void run(String name, Case c) {
         sCases++;
         MediaCodec.resetAll();
+        EGL14.reset();
+        VideoWriter.sOpenWaitForStoppingMs = 3000;
         MediaBridge.clear();
         MediaBridge.sListener = null;
         try {
             c.run();
             if (MediaCodec.liveCount() != 0) throw new AssertionError("codec leaked: " + MediaCodec.liveCount());
             if (MediaMuxer.liveCount() != 0) throw new AssertionError("muxer leaked: " + MediaMuxer.liveCount());
+            if (EGL14.liveCount() != 0) throw new AssertionError("EGL context/surface leaked: " + EGL14.liveCount());
+            if (VideoWriter.stoppingCount() != 0) throw new AssertionError("writer still registered as stopping: " + VideoWriter.stoppingCount());
             System.out.println("  ok   " + name);
         } catch (Throwable t) {
             sFailures++;
@@ -79,6 +97,10 @@ public final class VideoWriterReleaseCheck {
             if (g != null) g.countDown();
             g = MediaCodec.eosGate;
             if (g != null) g.countDown();
+            g = sHeldGate;
+            sHeldGate = null;
+            if (g != null) g.countDown();
+            VideoWriter.waitForStoppingWriters(5000); // writers stranded by a failed case must not leak into the next one
         }
     }
 
@@ -107,6 +129,8 @@ public final class VideoWriterReleaseCheck {
     }
 
     private static void oldWriterReleaseKeepsNewFile() throws Exception {
+        // The old writer hangs: the next open() waits for its encoder only this long, then proceeds.
+        VideoWriter.sOpenWaitForStoppingMs = 300;
         File output = new File(sDir, "redo.mp4");
         File oldWork = new File(sDir, "redo.mp4.bvA.part.mp4");
         File newWork = new File(sDir, "redo.mp4.bvB.part.mp4");
@@ -120,8 +144,13 @@ public final class VideoWriterReleaseCheck {
         Snapshot snapA = captureOn(200, a, oldWork);
         a.releaseAsync(200);
         CountDownLatch gate = MediaCodec.frameGate;
+        sHeldGate = gate;
         MediaCodec.frameGate = null;
+        long t0 = System.nanoTime();
         VideoWriter b = open(newWork);
+        long waitedMs = (System.nanoTime() - t0) / 1000000L;
+        check(waitedMs >= 250, "open() did not wait for the stopping writer's encoder (" + waitedMs + " ms)");
+        check(!a.isStopped(), "the old writer must still be stuck here");
         for (int i = 0; i < 5; i++) append(b, i * FRAME_US);
         check(MediaBridge.poll(200) == null, "the old writer reported its release while still stuck");
         gate.countDown();
@@ -146,7 +175,8 @@ public final class VideoWriterReleaseCheck {
         Snapshot snap = captureOn(301, w, work);
         w.releaseAsync(301);
         expect("301 ok", 5000);
-        check(snap.captured && snap.stopped && snap.liveCodecs == 0 && snap.liveMuxers == 0, "finished writer not released at report time");
+        check(snap.captured && snap.stopped && snap.liveCodecs == 0 && snap.liveMuxers == 0 && snap.liveEgl == 0,
+                "finished writer not released at report time");
         check(snap.fileExists, "finished file missing at release time");
         check(work.exists(), "release after a successful finish deleted the file");
     }
@@ -224,6 +254,80 @@ public final class VideoWriterReleaseCheck {
         check(!work.exists(), "file left behind");
     }
 
+    // Round 2 QA: the studio retries a failed segment on a NEW path with plain OpenWriter one frame after Dispose. On a
+    // phone with one hardware AVC encoder the old writer thread may still own it: open() must wait until it is freed.
+    private static void openWaitsForStoppingWriter() throws Exception {
+        MediaCodec.maxLive = 1;
+        File oldWork = new File(sDir, "seg_000_a0.mp4.bv1.part.mp4");
+        final File newWork = new File(sDir, "seg_000_a1.mp4.bv2.part.mp4");
+        VideoWriter a = open(oldWork);
+        append(a, 0);
+        MediaCodec.frameGate = new CountDownLatch(1);
+        append(a, FRAME_US);
+        awaitBlocked(1);
+        a.releaseAsync(900);
+        check(VideoWriter.stoppingCount() == 1, "released writer not registered as stopping");
+        final VideoWriter b = new VideoWriter(newWork.getPath(), W, H, FPS, 1000000, 2, "", 192000);
+        final boolean[] opened = new boolean[1];
+        final boolean[] oldStoppedAtOpen = new boolean[1];
+        final VideoWriter old = a;
+        Thread opener = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                opened[0] = b.open();
+                oldStoppedAtOpen[0] = old.isStopped();
+            }
+        }, "opener");
+        opener.start();
+        opener.join(300);
+        check(opener.isAlive(), "open() returned while the old writer still held the only encoder");
+        CountDownLatch gate = MediaCodec.frameGate;
+        sHeldGate = gate;
+        MediaCodec.frameGate = null;
+        gate.countDown();
+        opener.join(5000);
+        check(!opener.isAlive(), "open() never returned after the old writer stopped");
+        check(opened[0], "open failed: " + b.lastError());
+        check(oldStoppedAtOpen[0], "the new encoder was configured before the old writer thread exited");
+        expect("900 ok", 5000);
+        check(!oldWork.exists(), "old work file not deleted");
+        for (int i = 0; i < 3; i++) append(b, i * FRAME_US);
+        b.finishAsync(901);
+        expect("901 ok", 5000);
+        b.releaseAsync(902);
+        expect("902 ok", 5000);
+        check(newWork.exists() && newWork.length() > 8, "retry output missing");
+    }
+
+    private static void openDoesNotWaitForOpenWriter() throws Exception {
+        File first = new File(sDir, "live.mp4.bv1.part.mp4");
+        File second = new File(sDir, "live2.mp4.bv2.part.mp4");
+        VideoWriter a = open(first);
+        append(a, 0);
+        long t0 = System.nanoTime();
+        VideoWriter b = open(second);
+        long ms = (System.nanoTime() - t0) / 1000000L;
+        check(ms < 1000, "open() waited " + ms + " ms for a writer that is still open");
+        a.releaseAsync(1000);
+        b.releaseAsync(1001);
+        String r1 = MediaBridge.poll(5000);
+        String r2 = MediaBridge.poll(5000);
+        check(r1 != null && r2 != null, "both releases must complete: " + r1 + ", " + r2);
+        check(!first.exists() && !second.exists(), "unfinished files left behind");
+    }
+
+    /** Runs a case on the EGL renderer path (fake display available) and checks that path was really taken. */
+    private static Case egl(final Case c) {
+        return new Case() {
+            @Override
+            public void run() throws Exception {
+                EGL14.available = true;
+                c.run();
+                check(EGL14.swaps.get() > 0, "the writer did not use the EGL renderer");
+            }
+        };
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private static VideoWriter open(File work) {
@@ -249,6 +353,7 @@ public final class VideoWriterReleaseCheck {
                 snap.fileExists = work.exists();
                 snap.liveCodecs = MediaCodec.liveCount();
                 snap.liveMuxers = MediaMuxer.liveCount();
+                snap.liveEgl = EGL14.liveCount();
                 snap.stopped = w.isStopped();
                 snap.captured = true;
             }
@@ -262,6 +367,7 @@ public final class VideoWriterReleaseCheck {
         check(snap.stopped, what + " reported before the writer thread exited");
         check(snap.liveCodecs == 0, what + " reported while the encoder was still held");
         check(snap.liveMuxers == 0, what + " reported while the muxer was still open");
+        check(snap.liveEgl == 0, what + " reported before the EGL context/surface were destroyed");
         check(!snap.fileExists, what + " reported before the writer deleted its unfinished file");
     }
 

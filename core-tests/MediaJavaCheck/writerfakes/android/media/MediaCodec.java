@@ -47,6 +47,11 @@ public final class MediaCodec {
     public static volatile long releaseDelayMs;
     /** Next configure() throws (encoder rejects the format). */
     public static volatile boolean failConfigure;
+    /**
+     * Encoder instances the "device" allows at once (0 = unlimited). Creating one more throws, like a phone with a single
+     * hardware AVC encoder whose previous user has not released it yet.
+     */
+    public static volatile int maxLive;
 
     private static final List<MediaCodec> ALL = new ArrayList<>();
 
@@ -73,6 +78,7 @@ public final class MediaCodec {
         frameGate = null;
         eosGate = null;
         failConfigure = false;
+        maxLive = 0;
         releaseDelayMs = 0;
         blocked.set(0);
     }
@@ -84,10 +90,16 @@ public final class MediaCodec {
     }
 
     public static MediaCodec createByCodecName(String name) {
-        return new MediaCodec();
+        return create();
     }
 
     public static MediaCodec createEncoderByType(String type) {
+        return create();
+    }
+
+    private static MediaCodec create() {
+        int max = maxLive;
+        if (max > 0 && liveCount() >= max) throw new IllegalStateException("fake device: no free encoder instance (" + max + " in use)");
         return new MediaCodec();
     }
 

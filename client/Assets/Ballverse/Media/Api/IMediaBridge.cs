@@ -72,6 +72,14 @@ namespace Ballverse.Media
         /// left by a crashed run are deleted. Disposing an unfinalized writer aborts it and deletes its temp file
         /// (asynchronously; see <see cref="IVideoWriter.Released"/>).
         /// </summary>
+        /// <remarks>
+        /// Never blocks on the C# side: it does not wait for writers of OTHER paths that are still being released. On
+        /// Android the native open waits (bounded, a few seconds at most) until the encoders of writers whose release was
+        /// requested are freed, because many devices allow a single hardware H.264 encoder; iOS (VideoToolbox) runs several
+        /// sessions side by side. For a redo or retry prefer <see cref="MediaBridgeExtensions.OpenWriterAsync"/>, or await
+        /// <see cref="IVideoWriter.ReleaseAsync"/> of the previous writer, which make the hand-over explicit on every
+        /// platform.
+        /// </remarks>
         /// <exception cref="InvalidOperationException">Another writer (or a <see cref="ConcatSegmentsAsync"/>) for the same
         /// output path has not settled yet: it is still open, finalizing, or its native side is still stopping after
         /// Dispose. Await <see cref="IVideoWriter.ReleaseAsync"/> first or use <see cref="MediaBridgeExtensions.OpenWriterAsync"/>.</exception>
@@ -88,7 +96,8 @@ namespace Ballverse.Media
         /// writer's native side has stopped (<see cref="IVideoWriter.Released"/>), so a retry may start right away.</remarks>
         /// <exception cref="InvalidOperationException">FinalizeAsync was already called for this writer (finished or still
         /// running); the output of that call is not touched.</exception>
-        /// <exception cref="ObjectDisposedException">The writer was disposed (its temp file is deleted then).</exception>
+        /// <exception cref="ObjectDisposedException">The writer was disposed. The task faults only once that writer's
+        /// release has completed (<see cref="IVideoWriter.Released"/>: native side stopped, temp file deleted).</exception>
         /// <exception cref="MediaException">The encoder failed earlier (sticky error) or fails while finishing: the writer
         /// is released (the hardware encoder is free for a retry) and the temp file deleted. A writer without frames
         /// is released the same way and fails with <see cref="InvalidOperationException"/>.</exception>
@@ -120,8 +129,10 @@ namespace Ballverse.Media
         /// <para><b>Disk space:</b> peak ≈ 3 × the export size with <c>DeleteSegmentsBeforeFastStart = false</c> on Android
         /// (segments + remuxed file + fast-start copy), above the §3.8 pre-check of 2E + 200 MB; the studio should pass
         /// <c>true</c> (peak ≈ 2E). See <see cref="SegmentConcatOptions"/>.</para>
-        /// <para>Cancellation completes the task at once; the native join stops in the background and deletes its own temp
-        /// file. A writer or join for the same <paramref name="outFile"/> that is still running makes this call throw
+        /// <para>Cancellation (and bridge disposal) completes the task — as cancelled — only after the native join has
+        /// stopped and deleted its own temp file (bounded: after 20 s without a native report it completes anyway with an
+        /// error log), so a retry for the same <paramref name="outFile"/> may start right away. A writer or join for the
+        /// same <paramref name="outFile"/> that is still running makes this call throw
         /// <see cref="InvalidOperationException"/>.</para></remarks>
         Task<VideoWriterResult> ConcatSegmentsAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
             SegmentConcatOptions options, CancellationToken ct);

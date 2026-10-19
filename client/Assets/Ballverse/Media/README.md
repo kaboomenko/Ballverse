@@ -44,14 +44,23 @@ at ≈ 2E either way.
 - `Dispose()` returns at once; `IVideoWriter.Released` / `ReleaseAsync()` complete when the native side has **stopped**:
   Android — the writer thread exited (codec, EGL, muxer released, temp file deleted; `VideoWriter.releaseAsync`); iOS —
   the serial queue drained and a running finish reached its completion handler (`BVWriter_Release`). `FinalizeAsync`
-  completes (also when cancelled or rejected) only after that. A release that hangs inside the platform is given up after
-  20 s with an error log (the hung writer can only touch its own temp file).
+  completes (also when cancelled or rejected — including `FinalizeAsync` on an already disposed writer, which faults with
+  `ObjectDisposedException` once its release finished) only after that. A release that hangs inside the platform is
+  given up after 20 s with an error log (the hung writer can only touch its own temp file).
+- The release chain always resumes on the media main-thread dispatcher (`MainThread.Context`), never on the caller's
+  `SynchronizationContext.Current`: a release nobody awaits (plain `Dispose()`) leaves nothing queued on a foreign
+  context (it hung the studio's xunit harness, whose tracking context waits for every post after the test returned).
 - While a writer for a path has not settled (open, finalizing or still stopping), `OpenWriter(path)` throws
   `InvalidOperationException` (it cannot block: the native release completes through the main thread);
   `OpenWriterAsync(path)` — an extension method on `IMediaBridge` (`MediaBridgeExtensions`), so bridge decorators need
   no change — waits for it and for every other writer that is being released (frees the hardware encoder), then calls
   `OpenWriter`. Release completions bypass `NativeOps.CancelAll`, and Android uses one process-wide
   callback/registry (like iOS), so they also arrive after the bridge was disposed and re-created.
+- Plain `OpenWriter` on a **different** path never waits in C#. On Android the Java `VideoWriter.open()` itself waits
+  (bounded, 3 s) until every writer whose abort was requested has exited its thread and released its codec — many phones
+  allow one hardware AVC encoder, and the studio retries a segment on a new path one frame after `Dispose()`. Writers that
+  are still open are never waited for. iOS (VideoToolbox) runs several encoder sessions side by side, so no wait there.
+  Callers should still prefer `OpenWriterAsync` / `await ReleaseAsync()` for a redo or retry (explicit on every platform).
 
 ## Data formats
 
@@ -74,8 +83,11 @@ at ≈ 2E either way.
   native threads (Android writer thread with its own EGL context; iOS serial dispatch queue).
 - Cancellation completes the task immediately and tells native code to stop; partial files are deleted natively, C#
   temp files (`*.faststart.tmp`, `*.tmp`) by C#. The token is armed only after the native start (`NativeOps.Run`), so a
-  native cancel never precedes its start; an already-cancelled token does not start native work at all. Exception:
-  `FinalizeAsync` completes only after the writer's native release (see *Writer files and release*).
+  native cancel never precedes its start; an already-cancelled token does not start native work at all. Exceptions:
+  `FinalizeAsync` completes only after the writer's native release (see *Writer files and release*), and a cancelled
+  `ConcatSegmentsAsync` (also on bridge disposal) completes only when the native join reported that it stopped and
+  deleted its own temp file (`NativeOps.Run(..., cancelWaitsForNative: true)`; Android `SegmentConcat` / iOS
+  `BVSegmentConcat` report after their cleanup; fallback after 20 s), so its `outFile` stays reserved until then.
 
 ## Memory
 
@@ -93,7 +105,9 @@ at ≈ 2E either way.
 - `Tests/EditMode` — NUnit EditMode tests (assembly `Ballverse.Media.Tests`, run by the Unity test workflow): reader
   frame selection, pool-starvation regressions, random read stress, NativeOps cancellation ordering, MP4 fast start /
   metadata / cancellation cleanup, PCM conversion, fake-backend finalize and segment concat, writer release / redo at the
-  same path (`WriterReleaseTests`, with `FakeMediaOptions.SimulatedReleaseDelayMs` modelling a slow encoder teardown).
+  same path (`WriterReleaseTests`, with `FakeMediaOptions.SimulatedReleaseDelayMs` modelling a slow encoder teardown:
+  unawaited release never posts to the caller's context, FinalizeAsync on a disposed writer, the 20 s release fallback,
+  a release outliving the bridge), joins whose cancel waits for the native stop (`NativeOpsTests`).
 - `Tests/DotNet~/run.sh` — the same tests under plain .NET 8 without Unity (Unity ignores `~` folders); compiles
   Api/Common/Internal/Fake with small Unity stand-ins.
 - `core-tests/MediaJavaCheck/check.sh <android-all.jar>` — javac `--release 8 -Xlint:all -Werror` over the Java plugin
@@ -105,6 +119,8 @@ at ≈ 2E either way.
   - `VideoWriterReleaseCheck` — the real `VideoWriter` lifecycle against fake codec/muxer/surface/EGL classes
     (`writerfakes/`): `releaseAsync` reports only after the writer thread exited with codec and muxer released and its
     own unfinished file deleted, a late release never touches the output path or a newer writer's file, `open()`
-    failures return only after the thread stopped.
+    failures return only after the thread stopped, `open()` on a single-encoder fake device waits for a stopping writer's
+    codec (never for open writers); key cases also run on the EGL renderer path (fake EGL14/GLES20/EGLExt), so the EGL
+    teardown inside the release is covered.
 
   android-all.jar: e.g. Robolectric's `org.robolectric:android-all` from Maven.

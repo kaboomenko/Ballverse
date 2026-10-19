@@ -30,7 +30,9 @@ namespace Ballverse.Media.Internal
         /// <summary>
         /// Remuxes the segments (validated, in order) into <paramref name="outFile"/> (a work file unique to this call)
         /// with one AAC track from <paramref name="pcmPath"/> (null = silent). Cancellation must stop native work, which
-        /// deletes its own output; the caller deletes it once more.
+        /// deletes its own output, and the returned task must complete only once native reported that it stopped
+        /// (<c>NativeOps.Run(..., cancelWaitsForNative: true)</c>): until then <paramref name="outFile"/>'s output stays
+        /// reserved for this join. The caller deletes the work file once more.
         /// </summary>
         protected abstract Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
             SegmentConcatOptions options, CancellationToken ct);
@@ -319,8 +321,18 @@ namespace Ballverse.Media.Internal
             if (!(writer is VideoWriterBase w)) throw new ArgumentException("writer was not created by this bridge", nameof(writer));
             // Preconditions are checked BEFORE the delete-on-failure region below:
             // - already finished, disposed or finalizing: the output belongs to the earlier call (a finished export, or
-            //   one still being written) — throw without touching it;
-            w.ThrowIfFinishedOrFinalizing();
+            //   one still being written) — throw without touching it; a writer that was disposed (not finalized) reports
+            //   ObjectDisposedException only once its native release has stopped and deleted its work file, so a retry at
+            //   the same path may start right away (the documented FinalizeAsync contract);
+            try
+            {
+                w.ThrowIfFinishedOrFinalizing();
+            }
+            catch (ObjectDisposedException) when (!w.IsFinalizing)
+            {
+                await w.Released;
+                throw;
+            }
             // - pre-cancelled token: never start the native finish; abort the writer (the native side deletes its work
             //   file) and complete only once it has stopped;
             // - sticky encoder error or no frames: the writer can never finish — release it now (frees the hardware
