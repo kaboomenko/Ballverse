@@ -38,7 +38,10 @@ namespace Ballverse.PlayModeTests
         {
             // Render/Runtime/RenderResources.cs CreateMaterial / CreateInstancedMaterial log this for every renderer shader for
             // which Shader.isSupported is false; the product then skips that layer (its documented degraded path). Without a
-            // graphics device no shader can run, so the renderer reports each layer once.
+            // graphics device no shader can run, so the renderer reports each layer once. CreateMaterial uses the same text
+            // ("missing or unsupported") for a shader that is not in the project at all, which is a packaging defect and not a
+            // GPU artefact: AppBootSmokeTest therefore asserts first, with or without a device, that every renderer shader
+            // resolves (RendererShaders below), so only the "unsupported" half of this message can actually be whitelisted.
             new ExpectedLog(LogType.Error,
                 @"^\[Ballverse\.Render\] Shader '[^'\r\n]+' is (missing or )?unsupported on this device; that layer is skipped\.$",
                 true, "renderer shader unsupported without a graphics device (RenderResources.CreateMaterial)"),
@@ -56,13 +59,80 @@ namespace Ballverse.PlayModeTests
             }
             return null;
         }
+
+        /// <summary>
+        /// The renderer's shaders as RenderResources loads them: (Resources name under <c>RenderResources.ShaderFolder</c>,
+        /// <c>Shader.Find</c> name). Copied from Render/Runtime/RenderResources.cs (its constructor); CompileCheck~/run.sh checks
+        /// every pair against that file. A null result for both lookups is the "missing" half of the whitelisted message above.
+        /// </summary>
+        public static readonly IReadOnlyList<KeyValuePair<string, string>> RendererShaders = new[]
+        {
+            new KeyValuePair<string, string>("BallverseBatch", "Hidden/Ballverse/Batch"),
+            new KeyValuePair<string, string>("BallverseSdfBall", "Hidden/Ballverse/SdfBall"),
+            new KeyValuePair<string, string>("BallverseParticle", "Hidden/Ballverse/Particle"),
+            new KeyValuePair<string, string>("BallverseText", "Hidden/Ballverse/Text"),
+            new KeyValuePair<string, string>("BallverseBackground", "Hidden/Ballverse/Background"),
+            new KeyValuePair<string, string>("BallversePost", "Hidden/Ballverse/Post"),
+        };
+    }
+
+    /// <summary>
+    /// Recognises error-class messages that come from GPU-side code (the renderer, the live view and gallery previews, the
+    /// studio compositor / preview / export frame renderer / covers, the glass backdrop, Unity's graphics API), by the
+    /// message text and its stack trace. Without a graphics device these are soft findings in whatever step they arrive,
+    /// because the live view renders every frame and covers / previews render from per-frame ticks, not only inside the
+    /// steps flagged GPU-dependent.
+    /// </summary>
+    public static class GpuSources
+    {
+        static readonly Regex[] s_patterns =
+        {
+            // The renderer's own log tag (Render/Runtime/*.cs).
+            new Regex(@"\[Ballverse\.Render\]", RegexOptions.CultureInvariant),
+            // Any frame in the renderer assembly.
+            new Regex(@"\bBallverse\.Render\.", RegexOptions.CultureInvariant),
+            // Sim/Unity: the live view and the gallery previews (both draw through BallverseRenderer every frame).
+            new Regex(@"\bBallverse\.Sim\.(LiveSimView|GalleryPreviewRenderer)\b", RegexOptions.CultureInvariant),
+            // Studio GPU code: compositor, frame / text renderers, emoji atlas, export frame renderer, preview player, timeline
+            // thumbnails, and the project cover (StudioServices.RenderCover). Studio storage / projects / clips are logic.
+            new Regex(@"\bBallverse\.Studio\.(StudioCompositor|StudioFrameRenderer|StudioTextRenderer|StudioEmojiAtlas|VideoTextureUploader|GpuExportFrameRenderer|StudioPreviewPlayer|TimelineThumbnails)\b",
+                RegexOptions.CultureInvariant),
+            new Regex(@"\bBallverse\.Studio\.StudioServices[:.]RenderCover\b", RegexOptions.CultureInvariant),
+            // UI glass backdrop (blurred render texture behind the glass panels).
+            new Regex(@"\bBallverse\.UI\.Glass\.", RegexOptions.CultureInvariant),
+            // Unity's graphics API.
+            new Regex(@"\bUnityEngine\.(RenderTexture|Graphics|Rendering\.|Texture2D[:.]ReadPixels|Material|Shader)\b", RegexOptions.CultureInvariant),
+        };
+
+        /// <summary>True when <paramref name="message"/> or <paramref name="stackTrace"/> points at GPU-side code.</summary>
+        public static bool IsGpuSide(string message, string stackTrace)
+        {
+            foreach (Regex r in s_patterns)
+            {
+                if ((message != null && r.IsMatch(message)) || (stackTrace != null && r.IsMatch(stackTrace))) return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>How <see cref="SmokeLog"/> treats one log message.</summary>
+    public enum SmokeLogClass
+    {
+        /// <summary>Not error-class (Log / Warning).</summary>
+        Ignored,
+        /// <summary>Matches <see cref="ExpectedLogs"/>.</summary>
+        Whitelisted,
+        /// <summary>No graphics device, and the message comes from GPU-side code or arrived during a GPU-dependent step.</summary>
+        Soft,
+        /// <summary>Fails the test.</summary>
+        Unexpected,
     }
 
     /// <summary>
     /// Watches every log message of the running app (all threads) and attributes error-class messages (Error, Exception,
     /// Assert) to the smoke step that was running. Unexpected ones fail the test at the next check with the step name, the
-    /// message and its stack trace. Without a graphics device, errors inside GPU-dependent steps are kept as soft findings
-    /// (reported, not failed); with one, every unexpected error fails.
+    /// message and its stack trace. With a graphics device every error that is not whitelisted fails. Without one (local runs
+    /// only: CI passes -ballverseSmokeRequireGpu), see <see cref="Classify"/>.
     /// </summary>
     public sealed class SmokeLog : IDisposable
     {
@@ -125,15 +195,32 @@ namespace Ballverse.PlayModeTests
             }
         }
 
+        /// <summary>
+        /// The rule for one message. Error / Exception / Assert only. Whitelisted first. Without a graphics device a message is
+        /// soft when it comes from GPU-side code (<see cref="GpuSources"/>, any step) or arrives while a step flagged
+        /// GPU-dependent is running (its time window: a logic error raised during such a step is soft too, which is why CI
+        /// requires a device). Everything else is unexpected.
+        /// </summary>
+        public static SmokeLogClass Classify(LogType type, string message, string stackTrace, bool hasGpu, bool inGpuDependentStep)
+        {
+            if (type != LogType.Error && type != LogType.Exception && type != LogType.Assert) return SmokeLogClass.Ignored;
+            if (ExpectedLogs.Find(type, message, hasGpu) != null) return SmokeLogClass.Whitelisted;
+            if (!hasGpu && (inGpuDependentStep || GpuSources.IsGpuSide(message, stackTrace))) return SmokeLogClass.Soft;
+            return SmokeLogClass.Unexpected;
+        }
+
         void OnLog(string condition, string stackTrace, LogType type)
         {
             if (type != LogType.Error && type != LogType.Exception && type != LogType.Assert) return;
             lock (_gate)
             {
                 var entry = new Entry(type, condition, stackTrace, _step);
-                if (ExpectedLogs.Find(type, condition, _hasGpu) != null) _whitelisted.Add(entry);
-                else if (!_hasGpu && _gpuDependent) _soft.Add(entry);
-                else _unexpected.Add(entry);
+                switch (Classify(type, condition, stackTrace, _hasGpu, _gpuDependent))
+                {
+                    case SmokeLogClass.Whitelisted: _whitelisted.Add(entry); break;
+                    case SmokeLogClass.Soft: _soft.Add(entry); break;
+                    case SmokeLogClass.Unexpected: _unexpected.Add(entry); break;
+                }
             }
         }
 

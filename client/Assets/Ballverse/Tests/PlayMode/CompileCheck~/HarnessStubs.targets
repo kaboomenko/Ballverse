@@ -1,0 +1,30 @@
+<Project>
+  <!--
+    Shared by Ballverse.PlayModeTests.CompileCheck.csproj and LogicTests/: the App harness's Unity and UI runtime stand-ins
+    (Tests/AppHarness~/Stubs/UnityStubs.cs, UnityStubs.Extra.cs, UiRuntimeStubs.cs), reused unchanged except that every
+    "public [static |sealed ]class" becomes "... partial class" in a copy under obj/, so Stubs/PlayModeStubs.cs can add the
+    few members the smoke test needs (Application.logMessageReceivedThreaded, UiNavigator.Push / Back / SelectTab / Stack, ...).
+  -->
+  <PropertyGroup>
+    <HarnessStubs>$(MSBuildThisFileDirectory)../../AppHarness~/Stubs/</HarnessStubs>
+  </PropertyGroup>
+  <Target Name="HarnessStubsPartial" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <_PartialDir>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)HarnessStubs/</_PartialDir>
+      <_PartialPattern>(public (?:static |sealed )?)class </_PartialPattern>
+      <_StubsA>$([System.IO.File]::ReadAllText('$(HarnessStubs)UnityStubs.cs'))</_StubsA>
+      <_StubsB>$([System.IO.File]::ReadAllText('$(HarnessStubs)UnityStubs.Extra.cs'))</_StubsB>
+      <_StubsC>$([System.IO.File]::ReadAllText('$(HarnessStubs)UiRuntimeStubs.cs'))</_StubsC>
+      <_StubsA>$([System.Text.RegularExpressions.Regex]::Replace($(_StubsA), $(_PartialPattern), '$1partial class '))</_StubsA>
+      <_StubsB>$([System.Text.RegularExpressions.Regex]::Replace($(_StubsB), $(_PartialPattern), '$1partial class '))</_StubsB>
+      <_StubsC>$([System.Text.RegularExpressions.Regex]::Replace($(_StubsC), $(_PartialPattern), '$1partial class '))</_StubsC>
+    </PropertyGroup>
+    <MakeDir Directories="$(_PartialDir)" />
+    <WriteLinesToFile File="$(_PartialDir)UnityStubs.partial.cs" Lines="$([MSBuild]::Escape($(_StubsA)))" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <WriteLinesToFile File="$(_PartialDir)UnityStubs.Extra.partial.cs" Lines="$([MSBuild]::Escape($(_StubsB)))" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <WriteLinesToFile File="$(_PartialDir)UiRuntimeStubs.partial.cs" Lines="$([MSBuild]::Escape($(_StubsC)))" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(_PartialDir)UnityStubs.partial.cs;$(_PartialDir)UnityStubs.Extra.partial.cs;$(_PartialDir)UiRuntimeStubs.partial.cs" />
+    </ItemGroup>
+  </Target>
+</Project>

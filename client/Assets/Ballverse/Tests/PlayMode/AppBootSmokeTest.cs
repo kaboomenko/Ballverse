@@ -9,6 +9,7 @@ using Ballverse.App;
 using Ballverse.Core.Params;
 using Ballverse.Core.Studio;
 using Ballverse.Media;
+using Ballverse.Render;
 using Ballverse.Services;
 using Ballverse.Sim;
 using Ballverse.Studio;
@@ -35,7 +36,8 @@ namespace Ballverse.PlayModeTests
     /// installer, MediaBridgeFactory, Ballverse.Studio runtime, Ballverse.Sim live view / previews / audio, the UI Toolkit shell,
     /// the Unity runner) in Play Mode and drives the main flow through the real view models and the real UI navigator, the
     /// same calls the screens make on a tap: first run → Ring Escape, live run at 3×, 🎲, «В видео» → studio with the clip,
-    /// export with the editor's FAKE media backend, back to the gallery, projects tab, pause / resume / low memory, shutdown.
+    /// export with the editor's FAKE media backend, back to the gallery, projects tab, every registered mode (gallery preview
+    /// + a live run), pause / resume / low memory, shutdown.
     /// Fails on any error-class log message (Unity Test Framework's default LogAssert behaviour plus <see cref="SmokeLog"/>,
     /// which names the step), a module failure, or a step that does not finish within its (generous) timeout.
     /// See README.md for what this covers and what it cannot cover without a GPU / device.
@@ -80,9 +82,15 @@ namespace Ballverse.PlayModeTests
         readonly List<string> _softFindings = new List<string>();
         readonly List<string> _timeline = new List<string>();
         readonly List<string> _toasts = new List<string>();
+        /// <summary>Every notice the app showed (AppNotices toasts and the simulation screen's notices), for post-conditions.</summary>
+        readonly List<LocalizedText> _shownNotices = new List<LocalizedText>();
         Stopwatch _stepClock;
         string _projectId;
         AppNotices _notices;
+        SimulationViewModel _sim;
+        AppSettingsStore _settings;
+        /// <summary>Photosensitive modes this test marked as warned (removed again in teardown).</summary>
+        readonly List<string> _photosensitivityMarked = new List<string>();
 
         [UnityTest, Timeout(TestTimeoutMs)]
         public IEnumerator RealAppBootsAndRunsTheMainFlow()
@@ -103,6 +111,19 @@ namespace Ballverse.PlayModeTests
                 LogAssert.ignoreFailingMessages = true;
                 Debug.LogWarning("[Smoke] No graphics device: GPU-dependent checks are soft (logged, not failed); all logic still runs.");
             }
+            // Packaging, not GPU: every renderer shader and instancing template must be in the project. RenderResources logs a
+            // missing shader with the same "missing or unsupported" text the no-GPU whitelist accepts, so this keeps a missing
+            // shader a hard failure with or without a device (SmokeLog.cs, ExpectedLogs).
+            foreach (KeyValuePair<string, string> shader in ExpectedLogs.RendererShaders)
+            {
+                Shader found = Resources.Load<Shader>(RenderResources.ShaderFolder + shader.Key);
+                if (found == null) found = Shader.Find(shader.Value);
+                Assert.IsNotNull(found, "renderer shader '" + shader.Value + "' is not in the project (Resources/" + RenderResources.ShaderFolder + shader.Key + ")");
+            }
+            Assert.IsNotNull(RenderResources.LoadTemplate(RenderResources.BallTemplate, RenderResources.BallShaderName),
+                "instancing template " + RenderResources.BallTemplate + " (shader " + RenderResources.BallShaderName + ", GPU instancing on)");
+            Assert.IsNotNull(RenderResources.LoadTemplate(RenderResources.ParticleTemplate, RenderResources.ParticleShaderName),
+                "instancing template " + RenderResources.ParticleTemplate + " (shader " + RenderResources.ParticleShaderName + ", GPU instancing on)");
 
             // ---- 1. Boot scene → Bootstrap → AppHost ------------------------------------------------------------------------
             Step("boot scene", false);
@@ -159,6 +180,7 @@ namespace Ballverse.PlayModeTests
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<StudioRunner>(), "StudioRunner (export / preview loop)");
             _notices = ctx.Notices;
             _notices.Shown += OnToast;
+            _settings = ctx.Settings;
             Info("tier " + ctx.Tier + ", navigator at " + shell.Navigator.Current + ", export stage " + composition.ViewModels.ExportModel.Stage);
 
             BallverseViewModels vms = composition.ViewModels;
@@ -166,6 +188,11 @@ namespace Ballverse.PlayModeTests
             StudioViewModel studio = vms.StudioModel;
             ExportViewModel export = vms.ExportModel;
             UiNavigator nav = shell.Navigator;
+            // SimulationViewModel.RaiseNotice sends the 🎲 / clip notices to the visible SimulationScreen's handler instead of
+            // AppNotices; listening here too keeps them in the diagnostics and the 🎲 post-condition (the screen's own
+            // handler is subscribed whenever this test is on the simulation screen, so the routing does not change).
+            _sim = sim;
+            _sim.Notice += OnToast;
 
             // ---- 3. First run lands on Ring Escape (later starts: the gallery tap does) --------------------------------------
             Step("first run → Ring Escape", false);
@@ -213,19 +240,30 @@ namespace Ballverse.PlayModeTests
             // ---- 5. 🎲 within the tier budget -------------------------------------------------------------------------------
             Step("generate (dice)", false);
             long budgetMs = ctx.Remote.Budgets.Get(ctx.Tier).TimeMs;
+            LiveRunSnapshot beforeDice = LiveRunSnapshot.Of(sim, ctx);
+            int noticesBeforeDice = _shownNotices.Count;
             sim.Generate();
             Assert.IsTrue(sim.IsGenerating, "🎲 started (the result is posted back to the main thread on a later frame)");
             double generationTimeout = Math.Max(FrameStepTimeoutS, 20.0 * budgetMs / 1000.0);
             var generating = Stopwatch.StartNew();
+            bool declinedChoice = false;
             yield return WaitUntil("generation finished (budget " + budgetMs + " ms, tier " + ctx.Tier + ")", () =>
             {
                 // A forced winner not found shows a modal choice; system back closes it (= keep the current run).
-                if (!sim.IsGenerating && sim.AwaitingWinnerDecision) nav.Back();
+                if (!sim.IsGenerating && sim.AwaitingWinnerDecision)
+                {
+                    declinedChoice = true;
+                    nav.Back();
+                }
                 return !sim.IsGenerating && !sim.AwaitingWinnerDecision;
             }, generationTimeout);
+            LiveRunSnapshot afterDice = LiveRunSnapshot.Of(sim, ctx);
             Info("generation took " + generating.ElapsedMilliseconds + " ms; style " + sim.LastGenerationStyle + ", phase " + sim.Phase
-                 + ", toasts so far: " + string.Join(", ", _toasts));
+                 + ", " + beforeDice + " → " + afterDice + (declinedChoice ? " (winner choice closed)" : "") + ", toasts so far: " + string.Join(", ", _toasts));
             Assert.IsTrue(ctx.Live.HasRun, "a run is shown after 🎲");
+            string diceFailure = SmokeChecks.DiceFailure(beforeDice, afterDice, declinedChoice,
+                _shownNotices.Skip(noticesBeforeDice).ToList(), key => ctx.Notices.TextOf(key));
+            Assert.IsNull(diceFailure, diceFailure);
 
             // ---- 6. «В видео» → studio with the clip -------------------------------------------------------------------------
             Step("to video → studio", false);
@@ -301,7 +339,6 @@ namespace Ballverse.PlayModeTests
             yield return BackToGallery(nav);
             Assert.IsFalse(studio.HasProject, "studio closed by back");
             Assert.IsFalse(sim.IsPlaying, "simulation left by back");
-            Assert.IsTrue(vms.Gallery.Modes.Any(m => m.ModeId == RingEscape), "Ring Escape card in the gallery");
 
             // ---- 9. Projects tab lists the project, then back to the Modes tab with live previews -------------------------
             Step("projects tab", false);
@@ -312,11 +349,45 @@ namespace Ballverse.PlayModeTests
             Step("project cover", true);
             yield return WaitUntil("project cover rendered", () => vms.Projects.Projects.Any(p => p.Id == projectId && p.Cover != null), _hasGpu ? NavigationTimeoutS : SoftTimeoutS, true);
 
-            Step("gallery previews", true);
             nav.SelectTab(TabId.Modes);
             Assert.AreEqual(ScreenId.Gallery, nav.Current, "modes tab");
-            yield return WaitUntil("Ring Escape gallery preview", () => vms.Gallery.GetPreview(RingEscape) != null, _hasGpu ? NavigationTimeoutS : SoftTimeoutS, true);
+
+            // ---- 9b. Every registered mode: gallery preview + a live run (M02 / M05 join by registration only) -------------
+            string[] modeIds = vms.Gallery.Modes.Select(m => m.ModeId).ToArray();
+            Info("registered modes: " + string.Join(", ", modeIds));
+            Assert.Contains(RingEscape, modeIds, "Ring Escape card in the gallery");
+            foreach (string id in modeIds)
+            {
+                Step("gallery preview " + id, true);
+                yield return WaitUntil(id + " gallery preview", () => vms.Gallery.GetPreview(id) != null, _hasGpu ? NavigationTimeoutS : SoftTimeoutS, true);
+            }
             yield return Frames(30);
+            foreach (string id in modeIds)
+            {
+                if (id == RingEscape) continue; // the main flow above ran it end to end
+                Step("mode " + id, false);
+                // The photosensitivity warning (SimulationViewModel.PhotosensitiveModes, e.g. helix_drop) is a non-cancellable
+                // UI Toolkit dialog whose OK button has no public hook outside the visual tree: mark it acknowledged up front
+                // (the setting its OK writes) so the run plays; teardown removes the mark again. See README, "cannot cover".
+                if (Array.IndexOf(SimulationViewModel.PhotosensitiveModes, id) >= 0 && !ctx.Settings.Data.PhotosensitivityWarned.Contains(id))
+                {
+                    ctx.Settings.Update(d => d.PhotosensitivityWarned.Add(id));
+                    _photosensitivityMarked.Add(id);
+                }
+                // GalleryScreen card tap: _vm.OpenMode(id); Ctx.Navigator.Push(ScreenId.Simulation).
+                vms.GalleryModel.OpenMode(id);
+                nav.Push(ScreenId.Simulation);
+                Assert.AreEqual(id, sim.ModeId, "opened mode; toasts: " + string.Join(", ", _toasts));
+                Assert.AreEqual(ScreenId.Simulation, nav.Current, "simulation screen for " + id);
+                Assert.IsTrue(ctx.Live.HasRun, id + ": a live run started");
+                Assert.IsTrue(sim.IsPlaying, id + ": the live run plays (phase " + sim.Phase + ")");
+                int modeStart = ctx.Live.Tick;
+                yield return WaitUntil(id + ": 60 live ticks", () => ctx.Live.Tick >= modeStart + 60 || ctx.Live.IsCompleted, FrameStepTimeoutS);
+                Info(id + ": tick " + ctx.Live.Tick + ", phase " + sim.Phase);
+                if (Screen.width > 0 && Screen.height > 0) Check(ctx.Surface.RenderTarget != null, id + ": LiveSimView produced a render target");
+                yield return BackToGallery(nav);
+                Assert.IsFalse(sim.IsPlaying, id + ": simulation left by back");
+            }
 
             // ---- 10. Pause / resume / low memory through the real lifecycle --------------------------------------------------
             Step("pause, resume, low memory", false);
@@ -344,6 +415,15 @@ namespace Ballverse.PlayModeTests
         {
             if (_log != null) _log.Enter("shutdown", false);
             if (_notices != null) _notices.Shown -= OnToast;
+            if (_sim != null) _sim.Notice -= OnToast;
+            if (_settings != null && _photosensitivityMarked.Count > 0 && Bootstrap.Host != null)
+            {
+                // Leave a local editor's app data as it was: the warning shows again on the next real open.
+                var marked = _photosensitivityMarked.ToArray();
+                _settings.Update(d => d.PhotosensitivityWarned.RemoveAll(m => Array.IndexOf(marked, m) >= 0));
+                _settings.Save();
+            }
+            _photosensitivityMarked.Clear();
             AppHost host = Bootstrap.Host;
             if (host != null && _projectId != null)
             {
@@ -417,6 +497,7 @@ namespace Ballverse.PlayModeTests
 
         void OnToast(LocalizedText text)
         {
+            _shownNotices.Add(text);
             _toasts.Add(text.Key ?? text.Literal ?? "?");
         }
 

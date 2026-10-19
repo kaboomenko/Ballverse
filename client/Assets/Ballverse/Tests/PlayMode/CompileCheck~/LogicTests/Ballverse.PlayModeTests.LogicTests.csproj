@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Runs the PlayMode smoke test's engine-free rules under plain .NET (no Unity): SmokeChecks (the 🎲 post-condition) against
+    the REAL view models booted by the App harness's TestApp (Tests/EditMode/App/TestApp.cs, TestFakes.cs: real Core, modes,
+    generator, Services in fake mode, fake engine ports), and SmokeLog / ExpectedLogs / GpuSources (log classification,
+    whitelist, renderer shader list). Same source set and Unity stand-ins as ../Ballverse.PlayModeTests.CompileCheck.csproj.
+    The folder ends in "~" (via its parent) so Unity ignores it. Usage: ../run.sh (.NET 8 SDK).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>Ballverse.PlayModeTests.LogicTests</AssemblyName>
+    <RootNamespace>Ballverse.PlayModeTests.LogicTests</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591;CS0618;NUnit2005;NUnit2007</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="../Stubs/*.cs" />
+    <Compile Include="../../SmokeLog.cs;../../SmokeChecks.cs" />
+    <Compile Include="../../../EditMode/App/TestApp.cs;../../../EditMode/App/TestFakes.cs" />
+    <Compile Include="../../../../App/**/*.cs" />
+    <Compile Include="../../../../Sim/**/*.cs" />
+    <Compile Include="../../../../Studio/**/*.cs" Exclude="../../../../Studio/Tests/**" />
+    <Compile Include="../../../../Media/Api/*.cs;../../../../Media/Common/*.cs;../../../../Media/Internal/*.cs;../../../../Media/Fake/*.cs" />
+    <Compile Include="../../../../Services/**/*.cs" Exclude="../../../../Services/Tests/**;../../../../Services/Editor/**" />
+    <Compile Include="../../../../Render/Runtime/*.cs" />
+    <Compile Include="../../../../UI/ViewModels/*.cs;../../../../UI/Model/**/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../../../../core-tests/Ballverse.Core/Ballverse.Core.csproj" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+
+  <Import Project="../HarnessStubs.targets" />
+</Project>

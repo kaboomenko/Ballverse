@@ -4,11 +4,11 @@
     the development container (GameCI compiles and runs the test). Compiles ../*.cs together with the REAL sources of every
     assembly it touches, the same set as Tests/AppHarness~/CompileCheck (App, Sim, Studio, Media, Services, Render runtime, UI
     view models and model, Platform, Core), against:
-      - the App harness's Unity stand-ins (Tests/AppHarness~/Stubs/UnityStubs.cs, UnityStubs.Extra.cs), reused unchanged:
-        target HarnessStubsPartial copies them to obj/ with every class made partial, so ./Stubs/PlayModeStubs.cs can add the
-        few members the test needs (Application.logMessageReceivedThreaded, SystemInfo.graphicsDeviceType, ...);
-      - ./Stubs/PlayModeStubs.cs: Unity Test Framework, scene loading, EditorSceneManager, Ballverse.Editor.ProjectSetup;
-      - ./Stubs/UiRuntimeStubs.PlayMode.cs: the UI Toolkit shell signatures (superset of the harness's copy).
+      - the App harness's Unity and UI runtime stand-ins (Tests/AppHarness~/Stubs/UnityStubs.cs, UnityStubs.Extra.cs,
+        UiRuntimeStubs.cs), reused unchanged: HarnessStubs.targets copies them to obj/ with every class made partial, so
+        ./Stubs/PlayModeStubs.cs can add the few members the test needs (Application.logMessageReceivedThreaded,
+        SystemInfo.graphicsDeviceType, UiNavigator.Push / Back / SelectTab / Stack, ...);
+      - ./Stubs/PlayModeStubs.cs: Unity Test Framework, scene loading, EditorSceneManager, Ballverse.Editor.ProjectSetup.
     SmokeEditor=true (default) compiles the editor branch (UNITY_EDITOR), SmokeEditor=false the player branch.
     Usage: ./run.sh (.NET 8 SDK). Warnings are errors. GameCI's Unity compile remains the authority.
   -->
@@ -24,7 +24,6 @@
     <SmokeEditor Condition="'$(SmokeEditor)' == ''">true</SmokeEditor>
     <DefineConstants>$(DefineConstants);UNITY_INCLUDE_TESTS</DefineConstants>
     <DefineConstants Condition="'$(SmokeEditor)' == 'true'">$(DefineConstants);UNITY_EDITOR</DefineConstants>
-    <HarnessStubs>$(MSBuildThisFileDirectory)../../AppHarness~/Stubs/</HarnessStubs>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Stubs/*.cs" />
@@ -43,21 +42,5 @@
     <PackageReference Include="NUnit" Version="3.14.0" />
   </ItemGroup>
 
-  <!-- The harness stand-ins with "public [static |sealed ]class" turned into "... partial class" (content otherwise unchanged). -->
-  <Target Name="HarnessStubsPartial" BeforeTargets="BeforeBuild">
-    <PropertyGroup>
-      <_PartialDir>$(MSBuildThisFileDirectory)$(IntermediateOutputPath)HarnessStubs/</_PartialDir>
-      <_PartialPattern>(public (?:static |sealed )?)class </_PartialPattern>
-      <_StubsA>$([System.IO.File]::ReadAllText('$(HarnessStubs)UnityStubs.cs'))</_StubsA>
-      <_StubsB>$([System.IO.File]::ReadAllText('$(HarnessStubs)UnityStubs.Extra.cs'))</_StubsB>
-      <_StubsA>$([System.Text.RegularExpressions.Regex]::Replace($(_StubsA), $(_PartialPattern), '$1partial class '))</_StubsA>
-      <_StubsB>$([System.Text.RegularExpressions.Regex]::Replace($(_StubsB), $(_PartialPattern), '$1partial class '))</_StubsB>
-    </PropertyGroup>
-    <MakeDir Directories="$(_PartialDir)" />
-    <WriteLinesToFile File="$(_PartialDir)UnityStubs.partial.cs" Lines="$([MSBuild]::Escape($(_StubsA)))" Overwrite="true" WriteOnlyWhenDifferent="true" />
-    <WriteLinesToFile File="$(_PartialDir)UnityStubs.Extra.partial.cs" Lines="$([MSBuild]::Escape($(_StubsB)))" Overwrite="true" WriteOnlyWhenDifferent="true" />
-    <ItemGroup>
-      <Compile Include="$(_PartialDir)UnityStubs.partial.cs;$(_PartialDir)UnityStubs.Extra.partial.cs" />
-    </ItemGroup>
-  </Target>
+  <Import Project="HarnessStubs.targets" />
 </Project>

@@ -1,6 +1,6 @@
-// Stand-ins for the Unity 6 / Unity Test Framework / editor APIs the PlayMode smoke test uses beyond the App harness's Unity
-// stand-ins (Tests/AppHarness~/Stubs/UnityStubs*.cs, compiled here with their classes made partial by the csproj so the
-// members below can extend them). Signatures follow the Unity 6000.3 scripting reference and com.unity.test-framework 1.6
+// Stand-ins for the Unity 6 / Unity Test Framework / editor / UI runtime APIs the PlayMode smoke test uses beyond the App
+// harness's stand-ins (Tests/AppHarness~/Stubs/UnityStubs*.cs and UiRuntimeStubs.cs, compiled here with their classes made
+// partial by HarnessStubs.targets so the members below can extend them). Signatures follow the Unity 6000.3 scripting reference and com.unity.test-framework 1.6
 // (UnityEngine.TestRunner); bodies are benign. Not part of the Unity project (the parent folder ends in "~").
 #pragma warning disable CS0067, CS1591
 using System;
@@ -174,5 +174,20 @@ namespace Ballverse.Editor
         public const string BootScenePath = ScenesFolder + "/Boot.unity";
 
         public static void Run() { }
+    }
+}
+
+namespace Ballverse.UI.Navigation
+{
+    /// <summary>
+    /// The navigator members the smoke test drives beyond the App harness's UiRuntimeStubs.cs (which has Current, Pop and the
+    /// events). Copied from UI/Runtime/Navigation/UiNavigator.cs; ../run.sh checks each line against that file.
+    /// </summary>
+    public sealed partial class UiNavigator
+    {
+        public NavigationStack Stack => default;
+        public void Push(ScreenId id) { }
+        public void SelectTab(TabId tab) { }
+        public BackOutcome Back() => default;
     }
 }

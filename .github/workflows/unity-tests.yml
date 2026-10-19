@@ -5,6 +5,8 @@ name: Unity tests
 # PlayMode smoke test (Ballverse.PlayModeTests, client/Assets/Ballverse/Tests/PlayMode/README.md): boots the real app from
 # the boot scene and drives first run -> live run -> dice -> studio -> export -> gallery; fails on any error log.
 # Needs the Unity license secrets described in docs/dev/unity.md; without them the jobs are skipped with a notice.
+# The PlayMode smoke test's .NET checks (stand-in signature greps, editor + player compile, engine-free rule tests) need no
+# Unity and no secrets: they run first, in seconds, and gate the PlayMode job.
 
 on:
   workflow_dispatch:
@@ -93,9 +95,21 @@ jobs:
           path: ${{ steps.tests.outputs.artifactsPath || 'unity-test-results' }}
           if-no-files-found: warn
 
+  playmode-dotnet:
+    name: PlayMode smoke test checks (.NET 8, no Unity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Compile check + rule tests of Ballverse.PlayModeTests
+        run: bash "client/Assets/Ballverse/Tests/PlayMode/CompileCheck~/run.sh"
+
   playmode:
     name: PlayMode tests
-    needs: check-secrets
+    needs: [check-secrets, playmode-dotnet]
     if: needs.check-secrets.outputs.ready == 'true'
     runs-on: ubuntu-latest
     # Library import of a fresh project + software-GL export; the test itself has a 60 min NUnit timeout.
