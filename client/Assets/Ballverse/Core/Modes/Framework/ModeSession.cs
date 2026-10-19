@@ -33,7 +33,15 @@ namespace Ballverse.Core.Modes
         public GameRunKind RunKind = GameRunKind.Regular;
         /// <summary>Tier live edits are sanitized for (the user's device).</summary>
         public DeviceTier Tier = DeviceTier.A;
-        /// <summary>Runner limits (180 s cap, finale reserve, catch-up cap, continue after finish); null = defaults.</summary>
+        /// <summary>
+        /// Runner limits (180 s cap, finale reserve, catch-up cap, continue after finish); null = defaults.
+        /// <para><see cref="SimRunnerOptions.MaxTicks"/> and <see cref="SimRunnerOptions.FinaleReserveTicks"/> change the
+        /// simulation and are not stored in a <c>.bvr</c>, so a session with a <see cref="Replay"/> sink requires their defaults
+        /// (the constructor throws otherwise). With <see cref="SimRunnerOptions.ContinueAfterFinish"/> the background keeps
+        /// playing for the live view (<see cref="ModeSession.Frame"/>), but every recording sink (replay, render stream,
+        /// render-event log, sound list, hash log) stops at the tick the rules finished (spec §2.1: Finished closes the
+        /// replay), so a re-simulation reproduces exactly what was recorded.</para>
+        /// </summary>
         public SimRunnerOptions Runner;
         /// <summary>
         /// Write a <see cref="RenderFrame"/> after every tick (live preview). Forced on when <see cref="RenderStream"/> is set;
@@ -95,6 +103,10 @@ namespace Ballverse.Core.Modes
         int _timeScaleMilli = 1000;
         long _accumulator;
         ModeSessionOutcome _outcome;
+        // Result as of the tick the rules finished (ContinueAfterFinish keeps simulating the background after it).
+        ReplayResult _finishedReplayResult;
+        SimResult _finishedResult;
+        bool _finishedCaptured;
 
         /// <summary>Builds the scene (nothing is simulated yet; frame 0 is written by <see cref="Start"/> or the first step).</summary>
         /// <exception cref="ArgumentException">The values are not runnable (<see cref="ModeParams.IsRunnable"/>).</exception>
@@ -105,6 +117,13 @@ namespace Ballverse.Core.Modes
             if (!ModeParams.IsRunnable(mode, values, out string problem)) throw new ArgumentException("Parameters are " + problem, nameof(values));
             _options = options ?? new ModeSessionOptions();
             _runnerOptions = _options.Runner ?? new SimRunnerOptions();
+            if (_options.Replay != null)
+            {
+                var defaults = new SimRunnerOptions();
+                if (_runnerOptions.MaxTicks != defaults.MaxTicks || _runnerOptions.FinaleReserveTicks != defaults.FinaleReserveTicks)
+                    throw new ArgumentException("Runner MaxTicks / FinaleReserveTicks are not stored in a replay: a session with a Replay sink must use their defaults",
+                        nameof(options));
+            }
             Values = values;
             Seed = seed;
             _events = new ModeEventBuffer
@@ -162,6 +181,12 @@ namespace Ballverse.Core.Modes
 
         public bool IsCompleted => _completed;
 
+        /// <summary>
+        /// The recording sinks still receive data: false after the tick the rules finished (only reachable with
+        /// <see cref="SimRunnerOptions.ContinueAfterFinish"/>, whose background play-out is live-only).
+        /// </summary>
+        public bool IsRecording => Runner.FinishedTick < 0 || World.Tick <= Runner.FinishedTick;
+
         public bool Paused { get; set; }
 
         /// <summary>Last state hash computed (every 60 ticks), and its tick (−1 before the first).</summary>
@@ -201,6 +226,13 @@ namespace Ballverse.Core.Modes
             ApplyPendingParams();
             _events.Tick = World.Tick + 1;
             if (!Runner.Step()) return false;
+            if (!_finishedCaptured && Runner.FinishedTick >= 0)
+            {
+                // Spec §2.1: Finished closes the replay; RSLT and the result are those of this tick, not of the play-out.
+                _finishedCaptured = true;
+                _finishedReplayResult = Scene.BuildReplayResult(Runner);
+                _finishedResult = Runner.Result;
+            }
             Flush();
             return true;
         }
@@ -307,23 +339,33 @@ namespace Ballverse.Core.Modes
             var run = new GameRunSummary(_options.RunKind, e, duration);
 
             ReplayResult rslt = null;
-            if (Runner.FinaleTick >= 0 || Runner.IsFinished) rslt = Scene.BuildReplayResult(Runner);
+            if (_finishedCaptured) rslt = _finishedReplayResult;
+            else if (Runner.FinaleTick >= 0 || Runner.IsFinished) rslt = Scene.BuildReplayResult(Runner);
+            SimResult result = _finishedCaptured ? _finishedResult : Runner.Result;
             ReplayHeader header = null;
             if (_replayWriter != null)
             {
                 if (rslt != null) _replayWriter.SetResult(rslt);
-                header = _replayWriter.Finish((uint)World.Tick);
+                header = _replayWriter.Finish((uint)duration);
             }
             if (_renderWriter != null)
             {
                 _renderWriter.Finish();
                 _renderWriter.Dispose();
             }
-            _outcome = new ModeSessionOutcome(header, run, Runner.Result, rslt, World.Tick);
+            _outcome = new ModeSessionOutcome(header, run, result, rslt, World.Tick);
             return _outcome;
         }
 
         // ------------------------------------------------------------------ replay re-simulation hooks
+
+        /// <summary>Ends a session that failed on stored data: releases the render-stream writer without finishing it.</summary>
+        internal void Abort()
+        {
+            if (_completed) return;
+            _completed = true;
+            if (_renderWriter != null) _renderWriter.Dispose();
+        }
 
         /// <summary>Queues a recorded input at its own tick (replay playback); recorded again when a replay sink is attached.</summary>
         internal void EnqueueRecordedInput(in SimInput input)
@@ -371,7 +413,7 @@ namespace Ballverse.Core.Modes
                 Values = Values.With(id, v);
                 if (string.Equals(id, CommonParams.TimeScale, StringComparison.Ordinal)) TimeScale = (float)v.AsFloat;
                 Scene.ApplyLiveParam(id, v);
-                if (_replayWriter != null) _replayWriter.AddParamChange(ReplayParams.ParamChange(tick, id, v, Mode.Schema));
+                if (_replayWriter != null && Runner.FinishedTick < 0) _replayWriter.AddParamChange(ReplayParams.ParamChange(tick, id, v, Mode.Schema));
             }
             _pendingParams.Clear();
         }
@@ -379,6 +421,7 @@ namespace Ballverse.Core.Modes
         void RecordInput(int tick, byte type, int a, int b, int c, int d)
         {
             if (_replayWriter == null) return;
+            if (Runner.FinishedTick >= 0 && tick > Runner.FinishedTick) return;
             _inputScratch[0] = a;
             _inputScratch[1] = b;
             _inputScratch[2] = c;
@@ -389,6 +432,13 @@ namespace Ballverse.Core.Modes
         void Flush()
         {
             int tick = World.Tick;
+            if (!IsRecording)
+            {
+                // Background play-out after Finished (ContinueAfterFinish): live view only, nothing is recorded.
+                _events.Clear();
+                if (_buildFrames) Scene.WriteFrame(Frame);
+                return;
+            }
             if (_options.RenderEvents != null)
             {
                 ReadOnlySpan<RenderEvent> re = _events.RenderEvents;

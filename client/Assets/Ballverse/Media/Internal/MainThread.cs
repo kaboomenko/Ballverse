@@ -44,14 +44,26 @@ namespace Ballverse.Media.Internal
             if (!IsMainThread) throw new InvalidOperationException(api + " must be called from the Unity main thread.");
         }
 
-        /// <summary>Queues <paramref name="action"/> to the main thread. Returns false if no context was captured (action dropped and logged).</summary>
+        /// <summary>
+        /// Queues <paramref name="action"/> to the main thread. Returns false if no context is captured: the action is dropped
+        /// with a warning.
+        /// </summary>
+        /// <remarks>
+        /// A missing context is a warning, not an error. In a player the context is captured at startup, before any native
+        /// operation can exist, so this cannot happen there. It happens for callbacks that arrive after their dispatcher went
+        /// away — native reports, token callbacks or timers that outlive an editor test whose <see cref="OverrideForTests"/>
+        /// scope ended (EditMode never runs <c>RuntimeInitializeOnLoadMethod</c>, so no context is captured between tests).
+        /// Those callbacks are late by definition and have nobody left to deliver to. An error log there was worse than
+        /// useless: Unity's test runner fails whichever test happens to be running when an unexpected error is logged,
+        /// even from another thread, so a late callback failed an unrelated test (CI: UiShellTests after NativeOpsTests).
+        /// </remarks>
         public static bool Post(Action action)
         {
             if (action == null) return false;
             SynchronizationContext ctx = s_context;
             if (ctx == null)
             {
-                Debug.LogError("[Media] MainThread.Post before the main-thread context was captured; callback dropped.");
+                Debug.LogWarning("[Media] MainThread.Post without a captured main-thread context (late callback after teardown?); callback dropped.");
                 return false;
             }
             ctx.Post(RunPosted, action);

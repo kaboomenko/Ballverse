@@ -53,6 +53,29 @@ namespace Ballverse.Core.Modes
             return id;
         }
 
+        /// <summary>Labels that can still be defined before the table is full.</summary>
+        public int FreeLabelSlots => RenderStreamLimits.MaxLabels - _labels.Count;
+
+        /// <summary>
+        /// Like <see cref="DefineLabel"/>, but never throws for data that comes from the user or a stored file (live label
+        /// names, PARM records): returns false and <see cref="Ballverse.Core.RenderStream.BodyState.NoLabel"/> when the string is
+        /// not a valid label or the table is full. Labels are never released, so a mode that defines labels from live edits
+        /// must use this (the table keeps <see cref="RenderStreamLimits.MaxLabels"/> entries for the whole run).
+        /// </summary>
+        public bool TryDefineLabel(string label, out int id)
+        {
+            id = BodyState.NoLabel;
+            if (string.IsNullOrEmpty(label)) return false;
+            if (_labelIds.TryGetValue(label, out id)) return true;
+            id = BodyState.NoLabel;
+            if (_labels.Count == RenderStreamLimits.MaxLabels) return false;
+            if (TableCodec.ValidateLabel(label) != null) return false;
+            _labels.Add(label);
+            id = _labels.Count;
+            _labelIds.Add(label, id);
+            return true;
+        }
+
         public ShapeDefinition GetShape(int shapeId)
         {
             if ((uint)shapeId >= (uint)_shapes.Count) throw new ArgumentOutOfRangeException(nameof(shapeId));

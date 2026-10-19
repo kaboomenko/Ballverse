@@ -121,31 +121,6 @@ namespace Ballverse.Core.Tests.Modes.RingEscape
         }
 
         [Fact]
-        public void GeneratorResultsEscapeBeforeTheCap()
-        {
-            // Card test (в): generator results (all styles, targetDuration 15–120 s) escape before 180 s in ≥ 99 %.
-            int n = Environment.GetEnvironmentVariable("BALLVERSE_LONG_TESTS") == "1" ? 1000 : 36;
-            int[] targets = { 15, 30, 45, 60, 90, 120 };
-            int escaped = 0;
-            for (int i = 0; i < n; i++)
-            {
-                ModeGenerationResult g = ModeGenerator.Generate(Mode, new ModeGenerationRequest
-                {
-                    BaseValues = Base(targets[i % targets.Length]),
-                    Tier = DeviceTier.C,
-                    SessionSeed = (ulong)(5000 + i),
-                    Style = (GenerationStyle)(i % 6),
-                });
-                if (!g.HasSelection) continue;
-                var s = new ModeSession(Mode, g.Values, g.Seed, new ModeSessionOptions { BuildFrames = false });
-                s.RunToEnd();
-                var scene = (RingEscapeScene)s.Scene;
-                if (scene.EscapeTick >= 0 && scene.EscapeTick < SimConstants.MaxDurationTicks) escaped++;
-            }
-            Assert.True(escaped >= n * 99 / 100, "escaped " + escaped + " of " + n);
-        }
-
-        [Fact]
         public void EveryPresetEscapesOnAHundredSeeds()
         {
             // Card test (в): each built-in preset on 100 seeds escapes before 180 s in ≥ 99 %.

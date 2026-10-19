@@ -81,7 +81,8 @@ namespace Ballverse.Core.Tests.Modes.RingEscape
                     Assert.True(MathF.Abs(b.AngularVelocity) * (r + halfT) <= RingEscapeGeometry.MaxWallSpeed + 1e-3f, "ring " + j + " wall speed");
                     Assert.True(MathF.Abs(b.ScaleVelocity) * RingEscapeScene.ReferenceRadius <= c.RingSpacing / RingEscapeGeometry.ShiftSeconds + 1e-3f, "shift speed");
                 }
-                float growLimit = 0.5f * scene.GrowLimit(current) + 1e-5f;
+                // Rule 4: with passed rings kept as walls a ball may fall back inside any of them, so every ring bounds growth.
+                float growLimit = 0.5f * scene.GrowLimit(c.EffectiveDestroyPassed ? current : 0) + 1e-5f;
                 for (int i = scene.RoundFirstBall; i < ballsBefore; i++)
                 {
                     ref readonly BallState s = ref world.GetBall(i);

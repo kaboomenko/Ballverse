@@ -44,7 +44,10 @@ namespace Ballverse.Media.Internal
         /// Upper bound for the native release (a codec that hangs inside the platform). After it <see cref="Released"/>
         /// completes anyway with an error log; the hung native writer can then only touch its own work file.
         /// </summary>
-        internal static int NativeReleaseTimeoutMs = 20000;
+        internal static int NativeReleaseTimeoutMs = DefaultNativeReleaseTimeoutMs;
+
+        /// <summary>Default of <see cref="NativeReleaseTimeoutMs"/>.</summary>
+        internal const int DefaultNativeReleaseTimeoutMs = 20000;
 
         readonly TaskCompletionSource<bool> _releasedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         readonly TaskCompletionSource<bool> _settledTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -279,18 +282,26 @@ namespace Ballverse.Media.Internal
                 }
                 if (!core.IsCompleted)
                 {
+                    // The timeout timer never outlives the wait: cancelled as soon as WhenAny returns, whichever task won,
+                    // so a release that stops in time leaves nothing running that could log later.
+                    int timeoutMs = NativeReleaseTimeoutMs;
                     using (var timeout = new CancellationTokenSource())
                     {
-                        Task first = await Task.WhenAny(core, Task.Delay(NativeReleaseTimeoutMs, timeout.Token));
+                        Task first = await Task.WhenAny(core, Task.Delay(timeoutMs, timeout.Token));
                         timeout.Cancel();
                         if (first != core)
                         {
-                            Debug.LogError("[Media] native writer for " + OutputPath + " did not stop within " + NativeReleaseTimeoutMs
+                            Debug.LogError("[Media] native writer for " + OutputPath + " did not stop within " + timeoutMs
                                 + " ms; continuing (it can only touch its own work file " + WorkPath + ")");
+                            // Nobody awaits the hung release any more: observe a late fault silently (no log after the
+                            // writer already reported its release, no unobserved-task exception from the finalizer thread).
+                            _ = core.ContinueWith(t => _ = t.Exception, CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                            core = null;
                         }
                     }
                 }
-                if (core.IsFaulted) Debug.LogException(core.Exception.GetBaseException());
+                if (core != null && core.IsFaulted) Debug.LogException(core.Exception.GetBaseException());
             }
             finally
             {

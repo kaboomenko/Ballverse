@@ -1,12 +1,22 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Ballverse.Media.Internal;
 using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace Ballverse.Media.Tests
 {
+    /// <remarks>
+    /// Unity Test Framework rule these tests live by: an Error / Assert / Exception log received while a test runs — from any
+    /// thread — fails that test unless <see cref="LogAssert.Expect(LogType, Regex)"/> matches it. So a test that takes an
+    /// intentional error path expects its exact logs, and no test may leave a timer or continuation behind that could log
+    /// after it ended (it would fail whichever test runs then): TearDown checks that no cancel fallback timer is still armed
+    /// and restores the static timeout.
+    /// </remarks>
     public sealed class NativeOpsTests
     {
         MainThreadPump _pump;
@@ -24,7 +34,9 @@ namespace Ballverse.Media.Tests
         [TearDown]
         public void TearDown()
         {
+            NativeOps.NativeCancelTimeoutMs = NativeOps.DefaultNativeCancelTimeoutMs;
             _pump.Dispose();
+            Assert.AreEqual(0, _ops.ArmedCancelTimerCount, "a cancel fallback timer outlived the test");
         }
 
         Task<string> Start(CancellationToken ct)
@@ -153,13 +165,16 @@ namespace Ballverse.Media.Tests
             CollectionAssert.AreEqual(new[] { "start 1", "cancel 1" }, _log);
             Assert.IsFalse(task.IsCompleted, "completed before the native side stopped");
             Assert.AreEqual(1, _ops.PendingCount);
+            Assert.AreEqual(1, _ops.ArmedCancelTimerCount);
             cts.Cancel(); // a second cancel does not forward again
             _pump.Drain(20);
             Assert.AreEqual(2, _log.Count);
+            Assert.AreEqual(1, _ops.ArmedCancelTimerCount, "a second cancel must not arm a second timer");
             _ops.Complete(1, NativeStatus.Cancelled, "");
             _pump.RunUntil(() => task.IsCompleted);
             Assert.IsTrue(task.IsCanceled);
             Assert.AreEqual(0, _ops.PendingCount);
+            Assert.AreEqual(0, _ops.ArmedCancelTimerCount, "the fallback timer must stop when native reports");
         }
 
         [Test]
@@ -172,6 +187,7 @@ namespace Ballverse.Media.Tests
             _ops.Complete(1, NativeStatus.Ok, "{\"frames\":3}");
             _pump.RunUntil(() => task.IsCompleted);
             Assert.IsTrue(task.IsCanceled, "a result reported after the cancel must not be used");
+            Assert.AreEqual(0, _ops.ArmedCancelTimerCount);
         }
 
         [Test]
@@ -190,31 +206,68 @@ namespace Ballverse.Media.Tests
             _ops.CancelAll();
             CollectionAssert.AreEqual(new[] { "start 1", "cancel 1" }, _log);
             Assert.IsFalse(task.IsCompleted);
+            Assert.AreEqual(1, _ops.ArmedCancelTimerCount);
             _ops.Complete(1, NativeStatus.Cancelled, "");
             _pump.RunUntil(() => task.IsCompleted);
             Assert.IsTrue(task.IsCanceled);
+            Assert.AreEqual(0, _ops.ArmedCancelTimerCount);
         }
 
+        // The one test that takes the timeout path on purpose: exactly one error log, expected (UTF fails the test on any
+        // unexpected Error log). The timeout is restored in TearDown too.
         [Test]
         public void CancelWaitsForNative_NoNativeReport_GivesUpAfterTimeout()
         {
-            int saved = NativeOps.NativeCancelTimeoutMs;
             NativeOps.NativeCancelTimeoutMs = 100;
-            try
+            LogAssert.Expect(LogType.Error, new Regex(@"^\[Media\] native operation 1 did not stop within 100 ms of its cancel; continuing$"));
+            var cts = new CancellationTokenSource();
+            Task<string> task = StartWaiting(cts.Token);
+            cts.Cancel();
+            _pump.RunUntil(() => task.IsCompleted, 3000);
+            Assert.IsTrue(task.IsCanceled);
+            Assert.AreEqual(0, _ops.PendingCount);
+            Assert.AreEqual(0, _ops.ArmedCancelTimerCount);
+            _ops.Complete(1, NativeStatus.Cancelled, ""); // a very late report is ignored
+            _pump.Drain(20);
+        }
+
+        // CI failure (UiShellTests, ~20 s after this fixture): the fallback timer of an operation whose native side reported
+        // in time was never stopped; it fired after the test, when no main-thread dispatcher existed any more, and logged an
+        // error during an unrelated test. Now the report stops the timer, and nothing of the finished test runs or logs
+        // after its dispatcher is gone. The timeout leaves a wide margin (the report arrives within a few ms of the cancel; only
+        // a main-thread stall of more than ~1 s, e.g. a GC pause on a loaded CI runner, would let the fallback fire first and
+        // log), while the sleep after the report still reaches well past it.
+        [Test]
+        public void CancelWaitsForNative_ReportInTime_TimerStopped_NothingLogsAfterTeardown()
+        {
+            NativeOps.NativeCancelTimeoutMs = 1000;
+            var cts = new CancellationTokenSource();
+            Task<string> task = StartWaiting(cts.Token);
+            cts.Cancel();
+            _pump.Drain(20);
+            Assert.AreEqual(1, _ops.ArmedCancelTimerCount);
+            _ops.Complete(1, NativeStatus.Cancelled, "");
+            _pump.RunUntil(() => task.IsCompleted);
+            Assert.IsTrue(task.IsCanceled);
+            Assert.AreEqual(0, _ops.ArmedCancelTimerCount, "the fallback timer outlived its operation");
+            _pump.Dispose(); // as after the end of a test: no main-thread dispatcher (idempotent; TearDown disposes again)
+            Thread.Sleep(1500); // well past the 1000 ms timeout
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // A callback that arrives after its dispatcher went away is dropped with a warning, never an error (an error would
+        // fail whatever test is running at that moment).
+        [Test]
+        public void Post_WithoutMainThreadContext_DropsWithWarning()
+        {
+            LogAssert.Expect(LogType.Warning, new Regex(@"^\[Media\] MainThread\.Post without a captured main-thread context"));
+            bool ran = false;
+            using (MainThread.OverrideForTests(null))
             {
-                var cts = new CancellationTokenSource();
-                Task<string> task = StartWaiting(cts.Token);
-                cts.Cancel();
-                _pump.RunUntil(() => task.IsCompleted, 3000);
-                Assert.IsTrue(task.IsCanceled);
-                Assert.AreEqual(0, _ops.PendingCount);
-                _ops.Complete(1, NativeStatus.Cancelled, ""); // a very late report is ignored
-                _pump.Drain(20);
+                Assert.IsFalse(MainThread.Post(() => ran = true));
             }
-            finally
-            {
-                NativeOps.NativeCancelTimeoutMs = saved;
-            }
+            _pump.Drain(20);
+            Assert.IsFalse(ran);
         }
     }
 }

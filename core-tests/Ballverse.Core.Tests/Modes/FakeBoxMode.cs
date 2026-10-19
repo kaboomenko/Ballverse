@@ -23,6 +23,8 @@ namespace Ballverse.Core.Tests.Modes
         public const string Kick = "kick";
         public const string Lifetime = "lifetime";
         public const byte KickInput = 1;
+        /// <summary>An input the rules cannot apply (throws InvalidOperationException): stands in for corrupted stored data.</summary>
+        public const byte PoisonInput = 2;
 
         public static readonly FakeBoxMode Instance = new FakeBoxMode();
 
@@ -107,6 +109,7 @@ namespace Ballverse.Core.Tests.Modes
             {
                 foreach (SimInput input in inputs)
                 {
+                    if (input.Type == PoisonInput) throw new InvalidOperationException("Input the rules cannot apply");
                     if (input.Type != KickInput) continue;
                     ref readonly BallState b = ref _world.GetBall(0);
                     _world.SetBallVelocity(0, b.Velocity + new Vec2(input.A, input.B) * (0.001f * _kick));

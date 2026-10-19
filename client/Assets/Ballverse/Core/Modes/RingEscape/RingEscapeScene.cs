@@ -225,6 +225,13 @@ namespace Ballverse.Core.Modes.RingEscape
         /// <summary>Rule 4 diameter limit with ring <paramref name="current"/> current.</summary>
         public float GrowLimit(int current) => _growLimit[Math.Min(Math.Max(current, 0), _ringCount)];
 
+        /// <summary>
+        /// Rule 4 as applied now: d_grow over the rings a ball can still meet as walls — from the current ring outwards when
+        /// passed rings are destroyed, over every ring when they stay as walls («Статично» / «Отдаление камеры» without
+        /// destroyPassed: a ball can fall back inside a passed ring and must still fit through its gap).
+        /// </summary>
+        public float EffectiveGrowLimit => GrowLimit(_cfg.EffectiveDestroyPassed ? _current : 0);
+
         public bool IsBallEscaped(int ball) => ball < _ballEscaped.Length && _ballEscaped[ball];
 
         public int BallTeam(int ball) => _ballTeam[ball];
@@ -445,6 +452,7 @@ namespace Ballverse.Core.Modes.RingEscape
         void BuildRings(ref Rng layout)
         {
             Span<AngularGap> gaps = stackalloc AngularGap[4];
+            Span<RingGap> qgaps = stackalloc RingGap[4];
             int gapCount = _cfg.GapCount;
             var material = ColliderMaterial.Default;
             material.Restitution = 0f;
@@ -465,7 +473,6 @@ namespace Ballverse.Core.Modes.RingEscape
                     default: _ringDirection[j] = (j & 1) == 0 ? 1f : -1f; break;
                 }
                 float w = gap * SimMath.DegToRad;
-                Span<RingGap> qgaps = stackalloc RingGap[4];
                 for (int k = 0; k < gapCount; k++)
                 {
                     float start = SimMath.TwoPi * k / gapCount;
@@ -592,11 +599,9 @@ namespace Ballverse.Core.Modes.RingEscape
         {
             int n = names == null ? 0 : names.Count;
             var ids = new int[n];
-            for (int i = 0; i < n; i++)
-            {
-                string s = names[i];
-                ids[i] = string.IsNullOrEmpty(s) ? BodyState.NoLabel : _visuals.DefineLabel(s);
-            }
+            // Labels are never released and the table holds RenderStreamLimits.MaxLabels for the whole run: live edits (or a
+            // replay with many PARM records) must not overflow it. A name that no longer fits is shown without a label.
+            for (int i = 0; i < n; i++) _visuals.TryDefineLabel(names[i], out ids[i]);
             _nameLabels = ids;
         }
 
@@ -749,7 +754,13 @@ namespace Ballverse.Core.Modes.RingEscape
                 _events.AddRender(RenderEvent.Hit(tick, 0, e.Point.X, e.Point.Y, e.Normal.X, e.Normal.Y, color, intensity, ball,
                     s.Radius, RingIdBase + _round * MaxRingsPerRound + ring, e.Feature, e.LocalAngle));
             }
-            if (_events.WantsSound) _events.AddSound(ModeSound.ForBall(SoundEventType.Hit, ball, e.Impulse, _q, s.Radius, s.Position.X));
+            // Card «Звук»: the note rises with the ring number (pitch size, see RingEscapeSound).
+            if (_events.WantsSound)
+            {
+                SoundEvent se = ModeSound.ForBall(SoundEventType.Hit, ball, e.Impulse, _q, s.Radius, s.Position.X);
+                se.BodySize = RingEscapeSound.HitPitchSize(ring);
+                _events.AddSound(se);
+            }
             if (_events.WantsReplay) _events.AddReplay(ReplayEventType.Hit, ball, ReplayQuantization.QuantizeImpulse(e.Impulse), ring);
         }
 
@@ -767,10 +778,10 @@ namespace Ballverse.Core.Modes.RingEscape
             if (_events.WantsReplay) _events.AddReplay(ReplayEventType.Hit, e.A, ReplayQuantization.QuantizeImpulse(e.Impulse), -1 - (long)e.B);
         }
 
-        /// <summary>Rule 4: grow by growOnHit, clipped to d_grow of the current ring.</summary>
+        /// <summary>Rule 4: grow by growOnHit, clipped to d_grow of the rings that are still walls (<see cref="EffectiveGrowLimit"/>).</summary>
         void Grow(int ball, float radius)
         {
-            float limit = 0.5f * GrowLimit(_current);
+            float limit = 0.5f * EffectiveGrowLimit;
             float next = radius * (1f + _cfg.GrowOnHit);
             if (next > limit) next = limit;
             if (next <= radius) return;
@@ -849,8 +860,15 @@ namespace Ballverse.Core.Modes.RingEscape
             {
                 _ringDestroyed[j] = true;
             }
-            if (_events.WantsSound) _events.AddSound(ModeSound.ForBall(SoundEventType.Break, ball, BreakSoundImpulse, _q, s.Radius, s.Position.X));
-            if (_events.WantsReplay) _events.AddReplay(ReplayEventType.Break, ball, ReplayQuantization.QuantizeImpulse(BreakSoundImpulse), j);
+            // Card «Звук» / «Модель»: the break rises with every ring and climbs further in a combo (pitch size, RingEscapeSound).
+            if (_events.WantsSound)
+            {
+                SoundEvent se = ModeSound.ForBall(SoundEventType.Break, ball, BreakSoundImpulse, _q, s.Radius, s.Position.X);
+                se.BodySize = RingEscapeSound.BreakPitchSize(j, _ballCombo[ball]);
+                _events.AddSound(se);
+            }
+            if (_events.WantsReplay)
+                _events.AddReplay(ReplayEventType.Break, ball, ReplayQuantization.QuantizeImpulse(BreakSoundImpulse), RingEscapeSound.BreakExtra(j, _ballCombo[ball]));
 
             if (j == _ringCount - 1) Escape(ball, tick);
         }
@@ -991,7 +1009,8 @@ namespace Ballverse.Core.Modes.RingEscape
             if (_cfg.AfterEscape == AfterEscapeKind.NewBall)
             {
                 int capacity = RingEscapeGeometry.StartCapacity(_cfg.BallSize, _cfg.InnerRadius, _cfg.RingThickness);
-                count = Math.Min(Math.Min(_cfg.BallCount + _round, RingEscapeParams.MaxBalls), capacity);
+                int max = Math.Max(_cfg.MaxRoundBalls, _cfg.BallCount);
+                count = Math.Min(Math.Min(_cfg.BallCount + _round, max), capacity);
             }
             RespawnBalls(count, tick);
         }

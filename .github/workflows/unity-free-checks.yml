@@ -1,14 +1,15 @@
 name: Unity-free checks
 
-# MediaBridge checks that run without Unity: the Android Java plugin compiled against the Android API 34 framework
-# classes (android-all from Maven Central) with -Xlint -Werror plus JVM unit checks, and the Ballverse.Media
-# EditMode tests under plain .NET 8.
+# Checks that run without Unity: the Android Java plugin compiled against the Android API 34 framework classes
+# (android-all from Maven Central) with -Xlint -Werror plus JVM unit checks, the Ballverse.Media EditMode tests, the
+# Ballverse.UI model tests and the Ballverse.Studio harness (compile check against Unity stand-ins + tests) under .NET 8.
 on:
   push:
     paths:
       - "client/Assets/Plugins/Android/**"
       - "client/Assets/Ballverse/Media/**"
       - "client/Assets/Ballverse/UI/**"
+      - "client/Assets/Ballverse/Studio/**"
       - "client/Assets/Ballverse/Core/**"
       # The UI model tests compile Ballverse.Platform and assert on the package manifest.
       - "client/Assets/Ballverse/App/Platform/**"
@@ -20,6 +21,7 @@ on:
       - "client/Assets/Plugins/Android/**"
       - "client/Assets/Ballverse/Media/**"
       - "client/Assets/Ballverse/UI/**"
+      - "client/Assets/Ballverse/Studio/**"
       - "client/Assets/Ballverse/Core/**"
       - "client/Assets/Ballverse/App/Platform/**"
       - "client/Packages/manifest.json"
@@ -72,3 +74,13 @@ jobs:
           dotnet-version: "8.0.x"
       - name: Ballverse.UI model tests under .NET 8
         run: dotnet test "client/Assets/Ballverse/UI/Tests~/Ballverse.UI.Model.Tests/Ballverse.UI.Model.Tests.csproj" -c Release
+
+  studio-dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Ballverse.Studio compile check and tests under .NET 8
+        run: bash "client/Assets/Ballverse/Studio/Tests/DotNet~/run.sh" --blame-hang-timeout 5m

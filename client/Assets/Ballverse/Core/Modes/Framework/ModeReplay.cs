@@ -28,6 +28,13 @@ namespace Ballverse.Core.Modes
         UnsupportedBackend = 4,
         /// <summary>The stored parameters cannot start a run (hand-made or corrupted file).</summary>
         InvalidParams = 5,
+        /// <summary>
+        /// Every recorded HASH matched, but the re-simulation did not end on the recorded duration (it finished earlier or ran
+        /// past it): the file was not recorded by this code path with default runner limits, or it was edited.
+        /// </summary>
+        DurationMismatch = 6,
+        /// <summary>A stored input or parameter change could not be applied (hand-made or corrupted file).</summary>
+        InvalidData = 7,
     }
 
     /// <summary>Sinks of a re-simulation (all optional): the regenerated render stream and visual caches.</summary>
@@ -111,14 +118,34 @@ namespace Ballverse.Core.Modes
             int duration = (int)Math.Min(header.DurationTicks, (uint)SimConstants.MaxDurationTicks);
             if (options.LastTick.HasValue) duration = Math.Max(0, Math.Min(duration, options.LastTick.Value));
 
-            var session = new ModeSession(mode, stored.Values, header.Seed, new ModeSessionOptions
+            ModeSession session = null;
+            try
             {
-                RenderStream = options.RenderStream,
-                LeaveRenderStreamOpen = options.LeaveRenderStreamOpen,
-                RenderEvents = options.RenderEvents,
-                SoundEvents = options.SoundEvents,
-                BuildFrames = options.RenderStream != null,
-            });
+                session = new ModeSession(mode, stored.Values, header.Seed, new ModeSessionOptions
+                {
+                    RenderStream = options.RenderStream,
+                    LeaveRenderStreamOpen = options.LeaveRenderStreamOpen,
+                    RenderEvents = options.RenderEvents,
+                    SoundEvents = options.SoundEvents,
+                    BuildFrames = options.RenderStream != null,
+                });
+                return Run(mode, replay, options, session, stored, duration);
+            }
+            catch (InvalidOperationException e)
+            {
+                // Stored data the mode cannot apply (e.g. a hand-made file): a status, never an exception (callers check statuses).
+                return Fail(ModeReplayStatus.InvalidData, "stored data cannot be re-simulated: " + e.Message, none, session);
+            }
+            catch (ArgumentException e)
+            {
+                return Fail(ModeReplayStatus.InvalidData, "stored data cannot be re-simulated: " + e.Message, none, session);
+            }
+        }
+
+        static ModeReplayResult Run(IModeDefinition mode, ReplayFile replay, ModeReplayOptions options, ModeSession session,
+            ReplayParamsResult stored, int duration)
+        {
+            ReplayHeader header = replay.Header;
             foreach (ReplayInput input in replay.Inputs)
             {
                 if (input.Tick > (uint)duration) break;
@@ -147,14 +174,32 @@ namespace Ballverse.Core.Modes
                 }
             }
 
-            HashVerificationResult verification = verifier.Finish((uint)session.Tick);
+            // Without a trim-out every recorded hash must be reached: a run that stops early (e.g. a file recorded with other
+            // runner limits) is not verified. With a trim-out, hashes after it are not required.
+            bool partial = options.LastTick.HasValue && duration < (int)Math.Min(header.DurationTicks, (uint)SimConstants.MaxDurationTicks);
+            HashVerificationResult verification = partial ? verifier.Finish((uint)duration) : verifier.Finish();
             ModeSessionOutcome outcome = session.Complete();
             bool resultMatches = replay.Result == null ? outcome.ReplayResult == null : replay.Result.Equals(outcome.ReplayResult);
             // A partial re-simulation (trim-out before the end) cannot reproduce the final result; nothing to compare.
-            if (session.Tick < (int)header.DurationTicks) resultMatches = verification.IsMatch;
-            ModeReplayStatus status = verification.IsMatch ? ModeReplayStatus.Verified : ModeReplayStatus.HashMismatch;
-            return new ModeReplayResult(status, verification.IsMatch ? null : verification.ToString(), verification, stored.IsExact,
-                session.Tick, outcome.Result, outcome.ReplayResult, resultMatches);
+            if (partial) resultMatches = verification.IsMatch && session.Tick == duration;
+            ModeReplayStatus status;
+            string message = null;
+            if (!verification.IsMatch)
+            {
+                status = ModeReplayStatus.HashMismatch;
+                message = verification.ToString();
+            }
+            else if (session.Tick != duration)
+            {
+                status = ModeReplayStatus.DurationMismatch;
+                message = "re-simulation ended at tick " + session.Tick + ", the replay at " + duration;
+            }
+            else
+            {
+                status = ModeReplayStatus.Verified;
+            }
+            return new ModeReplayResult(status, message, verification, stored.IsExact, session.Tick, outcome.Result, outcome.ReplayResult,
+                resultMatches);
         }
 
         /// <summary>Reads a <c>.bvr</c> and re-simulates it (see <see cref="Resimulate(IModeDefinition, ReplayFile, ModeReplayOptions)"/>).</summary>
@@ -164,9 +209,15 @@ namespace Ballverse.Core.Modes
             return Resimulate(mode, ReplayReader.Read(bvr), options);
         }
 
-        static ModeReplayResult Fail(ModeReplayStatus status, string message, HashVerificationResult none)
+        static ModeReplayResult Fail(ModeReplayStatus status, string message, HashVerificationResult none, ModeSession session = null)
         {
-            return new ModeReplayResult(status, message, none, false, 0, SimResult.None, null, false);
+            int ticks = 0;
+            if (session != null)
+            {
+                ticks = session.Tick;
+                session.Abort();
+            }
+            return new ModeReplayResult(status, message, none, false, ticks, SimResult.None, null, false);
         }
     }
 }

@@ -88,13 +88,16 @@ namespace Ballverse.Core.Tests.Modes
             Assert.Equal(rec.Hashes, file.Hashes);
             var bvs = new MemoryStream();
             var log = new RenderEventLog();
-            ModeReplayResult r = ModeReplay.Resimulate(mode, file, new ModeReplayOptions { RenderStream = bvs, RenderEvents = log });
+            var sound = new List<Ballverse.Core.Audio.SoundEvent>();
+            ModeReplayResult r = ModeReplay.Resimulate(mode, file, new ModeReplayOptions { RenderStream = bvs, RenderEvents = log, SoundEvents = sound });
             Assert.True(r.IsVerified, r.Message);
             Assert.True(r.ParamsExact);
             Assert.True(r.ResultMatches);
             Assert.Equal(rec.Hashes.Count, r.Verification.VerifiedCount);
             Assert.Equal(rec.RenderStream, bvs.ToArray());
             Assert.Equal(rec.RenderEvents.Count, log.Count);
+            Assert.Equal(rec.SoundEvents, sound);
+            Assert.Equal((int)file.Header.DurationTicks, r.Ticks);
             return r;
         }
 
