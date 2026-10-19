@@ -125,6 +125,8 @@ Rules:
    such candidates (`CandidateRunSummary.Stuck`). Collisions = what the card counts for eventDensity; significant ticks =
    the card's "значимые события".
 8. **Allocation**: no managed allocation per tick in steady state (pre-size arrays in `BuildScene`; `world.ReserveBalls`).
+   The solver's own per-tick event buffers grow once to their high-water mark in crowded scenes; measure after that
+   (`ModeConformance.MeasureSteadyStateAllocation(mode, values, seed, warmupTicks, measureTicks)`).
 9. **Performance**: the release-1 budget scenes of the card must step in < 1 ms per tick on desktop CI (smoke test).
 
 ## 4. Recording conventions
@@ -146,6 +148,12 @@ ModeSessionOutcome o = session.Complete();          // finishes sinks, RSLT, Gam
 ModeReplayResult r = ModeReplay.Resimulate(def, replayFile, options);   // HashVerifier + optional render stream rebuild
 ModeGenerationResult g = ModeGenerator.Generate(def, request);         // chosen seed + values (+ forced winner / goal)
 ```
+
+Session details: `SetLiveParam` sanitizes for the session tier, clamps numbers to `TryGetDynamicRange`, applies the value
+at the next tick boundary (PARM at that tick) — except the pacing of `timeScale`, which changes at once. `EnqueueInput`
+returns the tick the input applies to (the next tick) and records INPT. `Complete()` writes RSLT only when the run reached
+its finale or the cap; `GameRunSummary` is Finished when the rules finished (or the cap hit), otherwise Abandoned (or the
+caller's override, e.g. `RestartedBeforeFinale`). `ModeGenerator.RunCandidate` runs exactly the live code path headless.
 
 Registration of M02 / M05 happens in a later integration step: `registry.Register(GeometryBounceMode.Instance)` /
 `registry.Register(HelixDropMode.Instance)` next to `RingEscapeMode.Instance` in `ReleaseModes.CreateRegistry()`.
