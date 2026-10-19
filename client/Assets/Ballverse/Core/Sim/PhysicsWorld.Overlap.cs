@@ -101,6 +101,7 @@ namespace Ballverse.Core.Sim
 
             float r = ball.Radius;
             Vec2 v0 = ball.Velocity;
+            float w0 = ball.AngularVelocity;
             int touching = 0;
             for (int i = 0; i < m; i++)
             {
@@ -117,7 +118,7 @@ namespace Ballverse.Core.Sim
                 touching |= 1 << i;
                 ApplyImpulse(bi, ref cf);
             }
-            if ((touching & (touching - 1)) != 0) ResolveWedge(bi, touching, m, v0);
+            if ((touching & (touching - 1)) != 0) ResolveWedge(bi, touching, m, v0, w0);
             ball.Position = p;
         }
 
@@ -137,8 +138,9 @@ namespace Ballverse.Core.Sim
         /// <list type="number">
         /// <item>compression: the nearest velocity to the base velocity v_b leaving no touching contact behind, N·v ≥ N·v_wall
         /// (projection onto the feasible set); v_b is the velocity before the sequential responses when that one still
-        /// approaches a touching contact, else the velocity after them; if there is none (a pusher crushing the ball into the
-        /// opening) the sequential result stays;</item>
+        /// approaches a touching contact, else the velocity after them; when v_b is the velocity before them, the spin goes back
+        /// to its value before them too (the joint response is frictionless); if there is none (a pusher crushing the ball into
+        /// the opening) the sequential result stays;</item>
         /// <item>restitution on the joint impulse (Poisson): v' = v_c + e·(v_c − v_b), e the largest restitution of the touching
         /// contacts (as in <see cref="ApplyImpulse"/>, from their approach before the responses; zero below the resting
         /// threshold, so a held ball only follows the walls); a v' still approaching a contact is projected again.</item>
@@ -148,7 +150,7 @@ namespace Ballverse.Core.Sim
         /// opening's axis (QA: a 9.5 m/s hit left at 12.1 m/s with e = 0.9). The velocity change is added to the contacts' Hit
         /// events (<see cref="RecordWedgeImpulse"/>).
         /// </summary>
-        void ResolveWedge(int bi, int touching, int m, Vec2 v0)
+        void ResolveWedge(int bi, int touching, int m, Vec2 v0, float w0)
         {
             ref BallState ball = ref _balls[bi];
             Vec2 v = ball.Velocity;
@@ -184,8 +186,13 @@ namespace Ballverse.Core.Sim
             // along the opening (same speed at e = 1) that the restitution step would mirror out of the narrow cone of leaving
             // velocities (QA: an elastic ball kept 0.58 of its speed). The joint response therefore starts from the velocity
             // before them (v0) whenever v0 still moves into a touching contact; otherwise from v.
-            Vec2 vb = LeavesAll(v0, touching, m) ? v : v0;
+            bool fromV0 = !LeavesAll(v0, touching, m);
+            Vec2 vb = fromV0 ? v0 : v;
             if (!NearestLeavingVelocity(vb, touching, m, out Vec2 solved)) return;
+            // The joint response is frictionless and replaces the sequential responses' linear result; when it starts from v0 it
+            // also drops their spin change (w0: the spin before them). Keeping that friction spin while discarding the linear
+            // friction impulse that paid for it would add energy (QA: +6.7 % in one elastic hit with friction 0.8).
+            if (fromV0) ball.AngularVelocity = w0;
             if (e > 0f)
             {
                 Vec2 bounced = solved + (solved - vb) * e;

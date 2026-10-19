@@ -52,6 +52,15 @@ namespace Ballverse.Core.Sim
         /// <summary>Test diagnostics: the last substep's ball–ball grid was stored sparsely (PhysicsWorld.Pairs.cs).</summary>
         internal bool SparseGridUsed => _gridSparse;
 
+        /// <summary>
+        /// Test diagnostics: substeps that re-sorted the radial indexes (some interval or membership changed) and substeps in
+        /// which some collider's membership (active wall / active sensor / none) changed, since the world was created.
+        /// </summary>
+        internal int RadialIndexRebuilds => _radialRebuilds;
+        internal int RadialMembershipChanges => _radialMembershipChanges;
+
+        int _radialRebuilds, _radialMembershipChanges;
+
         /// <summary>Test diagnostics: index entries of the last substep whose radial interval meets the path inflated by <paramref name="reach"/> (−1 if the index is not in use).</summary>
         internal int CountRadialCandidates(Vec2 p0, Vec2 p1, float reach, bool sensors)
         {
@@ -159,7 +168,7 @@ namespace Ballverse.Core.Sim
             bool changed = !_radialReusable || wantWalls != _radialHadWalls || wantSensors != _radialHadSensors;
             Vec2 o = _colliderBounds[pivot].Centre;
             _radialPivot = o;
-            bool finite = true;
+            bool finite = true, memberChanged = false;
             for (int c = 0; c < _colliderCount; c++)
             {
                 ref ColliderBounds cb = ref _colliderBounds[c];
@@ -168,6 +177,7 @@ namespace Ballverse.Core.Sim
                 {
                     _radialMember[c] = member;
                     changed = true;
+                    memberChanged = true;
                 }
                 if (member == RadialNone) continue;
                 float d = (cb.Centre - o).Length;
@@ -191,8 +201,10 @@ namespace Ballverse.Core.Sim
                 _radialReusable = false;
                 return;
             }
+            if (memberChanged) _radialMembershipChanges++;
             if (changed)
             {
+                _radialRebuilds++;
                 if (wantWalls) FillRadialIndex(_wallIndex, false);
                 if (wantSensors) FillRadialIndex(_sensorIndex, true);
             }

@@ -14,7 +14,9 @@ namespace Ballverse.Core.Tests.Sim
     /// exact float bits of every ball's position, velocity, angle and spin, and every event field by field. The scenes cover
     /// the release-1 shapes (Ring Escape rings with gaps and passage sensors, Geometry Bounce polygons with many balls,
     /// Helix Drop platforms) and a mixed one with every collider kind as walls and sensors, moving / scaling / scripted
-    /// bodies, collision filters, toggled colliders and a contact hook that rejects contacts and kills balls.
+    /// bodies, collision filters, toggled colliders and a contact hook that rejects contacts and kills balls; two more keep
+    /// their colliders moving (compressing rings, a translating tower) with no membership change, so the index must re-sort
+    /// on motion alone (<see cref="RunMovingLockstep"/>).
     /// </summary>
     public class BroadphaseEquivalenceTests
     {
@@ -234,6 +236,111 @@ namespace Ballverse.Core.Tests.Sim
             });
             Assert.True(wall > 0.99f && sensor > 0.99f, "index used on " + wall * 100f + " / " + sensor * 100f + " % of ticks");
             Assert.True(events >= 5 * balls, "only " + events + " events");
+        }
+
+        /// <summary>
+        /// Lockstep run (<see cref="RunLockstep"/>) that also checks the index re-sorts on collider motion alone: after the
+        /// first tick no collider's membership may change, and at least <paramref name="minRebuildFraction"/> of the substeps
+        /// must still re-sort the index (the intervals move). QA (wedge restitution fix, round 1): with the interval-change
+        /// branch no longer invalidating the index, every scene above stayed green — their colliders either keep their radial
+        /// intervals or change membership often enough to force rebuilds — while 60 compressing rings diverged from the
+        /// exhaustive path at tick 72 and a rising tower at tick 66.
+        /// </summary>
+        static void RunMovingLockstep(Func<PhysicsWorld> build, int ticks, Action<PhysicsWorld, int> beforeStep, float minRebuildFraction)
+        {
+            PhysicsWorld probe = build();
+            beforeStep?.Invoke(probe, 0);
+            probe.Step();
+            int membershipAfterFirstTick = probe.RadialMembershipChanges, rebuildsAfterFirstTick = probe.RadialIndexRebuilds;
+            int substeps = probe.Settings.Substeps;
+            var (wall, sensor, events, _) = RunLockstep(build, ticks, beforeStep);
+            Assert.True(wall > 0.99f && sensor > 0.99f, "index used on " + wall * 100f + " / " + sensor * 100f + " % of ticks");
+            Assert.True(events > 100, "only " + events + " events");
+            // The same run again outside the lockstep, for the index counters (deterministic: identical to the run above).
+            for (int t = 1; t < ticks; t++)
+            {
+                beforeStep?.Invoke(probe, t);
+                probe.Step();
+            }
+            Assert.True(probe.RadialMembershipChanges == membershipAfterFirstTick,
+                "membership changed in " + (probe.RadialMembershipChanges - membershipAfterFirstTick) + " substeps: the scene must move colliders only");
+            int rebuilds = probe.RadialIndexRebuilds - rebuildsAfterFirstTick;
+            int total = (ticks - 1) * substeps;
+            Assert.True(rebuilds >= minRebuildFraction * total, "index re-sorted in only " + rebuilds + " of " + total + " substeps");
+        }
+
+        /// <summary>
+        /// Ring Escape «Сжатие» (release-1 M01 compresses its rings through SetBodyScaleVelocity, no membership change): 60
+        /// concentric rings, each a reference ring (radius 1 m) with a passage sensor on a body scaled to its radius, all
+        /// shrinking at 4 % of their initial scale per second (0.5 m/s radially at the outer ring), the rate reversed every
+        /// 4 s; 16 balls launched from the centre. No ring is ever disabled.
+        /// </summary>
+        [Fact]
+        public void CompressingRingsWithoutMembershipChangesMatchTheExhaustiveScan()
+        {
+            const int rings = 60;
+            float[] rate = new float[rings];
+            RunMovingLockstep(() =>
+            {
+                var w = new PhysicsWorld(SimSettings.Default);
+                var rng = Rng.FromSeed(23UL, 21);
+                for (int k = 0; k < rings; k++)
+                {
+                    float scale = 0.8f + 0.2f * k;
+                    rate[k] = -0.04f * scale;
+                    int body = w.AddBody(new BodyDef
+                    {
+                        Motion = BodyMotion.Kinematic,
+                        Position = Vec2.Zero,
+                        Angle = rng.NextFloat(0f, SimMath.TwoPi),
+                        AngularVelocity = (k % 2 == 0 ? 1f : -1f) * rng.NextFloat(0.5f, 2.5f),
+                        Scale = scale,
+                        ScaleVelocity = rate[k],
+                    });
+                    w.AddRing(body, Vec2.Zero, 1f, 0.04f / scale, new[] { AngularGap.Centered(0f, rng.NextFloat(0.25f, 0.9f)) }, SimTestUtil.Wall(0.95f, 0.1f));
+                    w.AddRing(body, Vec2.Zero, 1f + 0.08f / scale, 0f, ReadOnlySpan<AngularGap>.Empty, ColliderMaterial.Sensor(k));
+                }
+                for (int i = 0; i < 16; i++)
+                {
+                    w.AddBall(SimTestUtil.Ball(new Vec2(rng.NextFloat(-0.3f, 0.3f), rng.NextFloat(-0.3f, 0.3f)),
+                        Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi)) * rng.NextFloat(4f, 12f), 0.05f, 0.95f, 0.1f));
+                }
+                return w;
+            }, 600, (w, t) =>
+            {
+                if (t == 0 || t % 240 != 0) return;
+                float sign = (t / 240) % 2 == 0 ? 1f : -1f;
+                for (int k = 0; k < rings; k++) w.SetBodyScaleVelocity(k, sign * rate[k]);
+            }, 0.95f);
+        }
+
+        /// <summary>
+        /// Helix Drop tower (spin platforms with passage sensors) moving as a whole at 2 m/s, up and down in turns of 1 s, plus
+        /// a row of 12 pegs sliding sideways at 1.5 m/s, against static side walls (the pivot): every platform's interval moves
+        /// every substep while no collider is toggled.
+        /// </summary>
+        [Fact]
+        public void TranslatingTowerWithoutMembershipChangesMatchesTheExhaustiveScan()
+        {
+            int[] tower = null;
+            int pegs = -1;
+            RunMovingLockstep(() =>
+            {
+                PhysicsWorld w = TowerScene(30, 6, 13UL, out tower);
+                pegs = w.AddBody(BodyDef.Kinematic(new Vec2(0f, -6f), 0f, 0f));
+                for (int k = 0; k < 12; k++) w.AddCircle(pegs, new Vec2(-1.4f + 0.25f * k, 0.3f * (k % 3)), 0.06f, SimTestUtil.Wall(0.8f, 0.2f));
+                return w;
+            }, 600, (w, t) =>
+            {
+                float up = (t / 60) % 2 == 0 ? 2f : -2f;
+                float spin = (t / 30) % 2 == 0 ? 3f : -3f;
+                for (int k = 0; k < tower.Length; k++)
+                {
+                    w.SetBodyVelocity(tower[k], new Vec2(0f, up), 0f);
+                    w.SetBodySpinVelocity(tower[k], spin);
+                }
+                w.SetBodyVelocity(pegs, new Vec2((t / 45) % 2 == 0 ? 1.5f : -1.5f, 0f), 0f);
+            }, 0.95f);
         }
 
         /// <summary>Rejects contacts with collider <see cref="OneWay"/> from below, kills balls touching <see cref="Deadly"/>, toggles <see cref="Toggle"/> on every 7th hit.</summary>

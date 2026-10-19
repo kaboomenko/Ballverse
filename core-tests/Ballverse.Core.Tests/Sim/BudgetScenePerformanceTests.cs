@@ -18,12 +18,17 @@ namespace Ballverse.Core.Tests.Sim
     /// which keeps a busy machine's preemption out of it.
     /// </para>
     /// <para>
-    /// Limits: measured in four full runs of this class on the development container (x64, .NET 8 Release, a heavily shared
-    /// machine: load average 8–18 on 4 cores during the runs; each scene's measured range is quoted at the scene), every limit
-    /// is below twice the lowest measured ratio — a 2× solver regression fails even on the luckiest run — and at least 1.3×
-    /// the highest measured ratio (the margin for a different runner, quoted per scene). The calibration loop is re-measured
-    /// around every scene and an attempt over the limit is repeated up to three times (best counts), so a burst of load on
-    /// the runner does not fail a test while a real regression fails every attempt. Before the collider broadphase the Ring Escape 100-ring scene
+    /// Limits: from 15 full runs of this class on the development container (x64, .NET 8 Release, a shared 4-core machine;
+    /// four runs at load average 8–18, three by QA, eight at load 4–8, two of them during bursts of other work that slowed the
+    /// Geometry Bounce scenes 1.45–1.65× while the latency-bound calibration loop barely moved). Each scene quotes its lowest and highest
+    /// ratio, its detection threshold (limit ÷ lowest ratio: the smallest slowdown that fails even on the luckiest run measured)
+    /// and its margin (limit ÷ highest ratio, quiet runs / the loaded burst). Every detection threshold is 1.75–1.95×, so a 2×
+    /// regression of the step fails; QA's check (M01 at 16 instead of 8 substeps: 2.0–2.1× the cost) now fails every attempt.
+    /// The 1.75–1.95× band leaves the calibration loop's own run-to-run spread (1.9–2.2 ms, ±8 %) on the safe side. The
+    /// calibration loop is re-measured around every scene and an attempt over the limit is repeated up to five times (best
+    /// counts), so a burst of load on the runner does not fail a test while a real regression fails every attempt. GitHub
+    /// runner ratios could not be fetched for these limits (CI artifact download refused); a runner whose memory system is
+    /// relatively slower than its ALU than this container's would eat into the margins. Before the collider broadphase the Ring Escape 100-ring scene
     /// measured 1.07× calibration on a GitHub runner (1.94 ms/tick) against a 1.0× limit — the dense ball grid grew with the
     /// balls' spread, so the cost depended on how far the time-based warm-up had run. Measured times and the ratio to the
     /// 0.5 ms target are written to the test output; the absolute target is tracked, not asserted.
@@ -147,8 +152,8 @@ namespace Ballverse.Core.Tests.Sim
             return best;
         }
 
-        /// <summary>Measurement attempts per scene; the best ratio counts.</summary>
-        const int Attempts = 3;
+        /// <summary>Measurement attempts per scene; the best ratio counts (a passing attempt ends the measurement).</summary>
+        const int Attempts = 5;
 
         /// <summary>
         /// Times the scene (<paramref name="measure"/>, ms/tick) with the calibration loop measured right before and after
@@ -177,7 +182,7 @@ namespace Ballverse.Core.Tests.Sim
                 }
             }
             _out.WriteLine(scene + ": " + bestMs.ToString("F3") + " ms/tick (" + (bestMs / 0.5).ToString("F2") + "× the 0.5 ms target), "
-                + bestRatio.ToString("F3") + "× calibration (" + bestCalib.ToString("F3") + " ms), limit " + ratioLimit + "×, attempts " + attempts);
+                + bestRatio.ToString("F4") + "× calibration (" + bestCalib.ToString("F3") + " ms), limit " + ratioLimit + "×, attempts " + attempts);
             Assert.True(bestRatio < ratioLimit, scene + ": " + bestMs + " ms/tick is " + bestRatio + "× the calibration loop (limit " + ratioLimit + "×, best of " + attempts + ")");
             return bestRatio;
         }
@@ -214,21 +219,23 @@ namespace Ballverse.Core.Tests.Sim
         }
 
         /// <summary>
-        /// Measured ratios / limits (margin over the highest): tier A 8 substeps 0.247–0.370× / 0.48× (1.30×); tier A 6
-        /// substeps 0.191–0.276× / 0.37× (1.34×); tier B 0.117–0.158× / 0.21× (1.33×); tier C 0.051–0.060× / 0.09× (1.50×).
+        /// Ratio lowest – highest quiet (highest in the loaded burst) / limit / detection threshold / margin quiet (burst):
+        /// tier A 8 substeps 0.233–0.370 (0.382) / 0.43 / 1.85× / 1.16× (1.13×); tier A 6 substeps 0.189–0.276 (0.298) / 0.36 /
+        /// 1.90× / 1.30× (1.21×); tier B 0.117–0.158 (0.167) / 0.21 / 1.79× / 1.33× (1.26×); tier C 0.047–0.065 (0.087) /
+        /// 0.092 / 1.95× / 1.42× (1.06×).
         /// </summary>
         [Theory]
-        [InlineData("A", 200, 0.48, 8)]
-        [InlineData("A", 200, 0.37, 6)]
+        [InlineData("A", 200, 0.43, 8)]
+        [InlineData("A", 200, 0.36, 6)]
         [InlineData("B", 120, 0.21, 8)]
-        [InlineData("C", 60, 0.09, 8)]
+        [InlineData("C", 60, 0.092, 8)]
         public void GeometryBounceBudgetScenes(string tier, int balls, double ratioLimit, int substeps)
         {
             Report("M02 tier " + tier + " (" + balls + " balls Ø0.34 m, rotating hexagon, " + substeps + " substeps)",
                 () => TimeTicks(() => GeometryBounce(balls, substeps: substeps)), ratioLimit * Slack);
         }
 
-        /// <summary>Measured 0.360–0.459×; limit 0.65× (margin 1.42×).</summary>
+        /// <summary>Ratio 0.355–0.459 (0.535 in the loaded burst); limit 0.65, detection threshold 1.83×, margin 1.42× (1.21×).</summary>
         [Fact]
         public void GeometryBounceWithFullSizeSpreadStaysCheap()
         {
@@ -282,13 +289,16 @@ namespace Ballverse.Core.Tests.Sim
 
         /// <summary>
         /// Ring Escape (M01) at its budget: 100 rotating rings with a gap each (own bodies), a passage sensor per ring, 20 balls.
-        /// Measured 0.069–0.080× (0.145–0.163 ms/tick); limit 0.13× (margin 1.63×). Before the broadphase: 0.14× here at this
-        /// state, and 1.07× on a GitHub runner with the old time-based warm-up (a later, costlier state).
+        /// Ratio 0.057–0.066 at load 4–8 (0.112–0.136 ms/tick), up to 0.080 at load 8–18; limit 0.105: detection threshold 1.85×,
+        /// margin 1.60× (1.31× at load 8–18). QA (round 1): the old 0.13 limit passed the scene at 16 substeps (2.0–2.1× the
+        /// cost, ratios 0.107–0.121) in 4 of 4 runs. Eight rounds (the scene is cheap) steady the best batch. Before the
+        /// broadphase: 0.14× here at this state, and 1.07× on a GitHub runner with the old time-based warm-up (a later, costlier
+        /// state).
         /// </summary>
         [Fact]
         public void RingEscapeHundredRingsTwentyBalls()
         {
-            Report("M01 (100 rings + 100 sensors, 20 balls)", () => TimeTicks(() => RingEscape(100)), 0.13 * Slack);
+            Report("M01 (100 rings + 100 sensors, 20 balls)", () => TimeTicks(() => RingEscape(100), rounds: 8), 0.105 * Slack);
         }
 
         /// <summary>
@@ -317,9 +327,10 @@ namespace Ballverse.Core.Tests.Sim
         }
 
         /// <summary>
-        /// Helix Drop (M05): one ball falling through a tower of 30 spinning platforms with gaps, swiped tower spin. Measured
-        /// 0.0062–0.0080× (0.013–0.015 ms/tick); limit 0.0115× (margin 1.44×). (The old 0.007 ms/tick was measured after the
-        /// 0.2 s warm-up had run the ball out of the tower.)
+        /// Helix Drop (M05): one ball falling through a tower of 30 spinning platforms with gaps, swiped tower spin. Ratio
+        /// 0.0060–0.0080 (0.013–0.015 ms/tick; the scene is cache-resident, load barely moves it); limit 0.0105: detection
+        /// threshold 1.75×, margin 1.31×. Eight rounds (the scene is cheap). (The old 0.007 ms/tick was measured after the 0.2 s
+        /// warm-up had run the ball out of the tower.)
         /// </summary>
         [Fact]
         public void HelixDropThirtyPlatforms()
@@ -342,7 +353,7 @@ namespace Ballverse.Core.Tests.Sim
             {
                 float spin = (tick / 30) % 2 == 0 ? 3f : -3f;
                 for (int k = 0; k < tower.Length; k++) world.SetBodySpinVelocity(tower[k], spin);
-            }), 0.0115 * Slack);
+            }, rounds: 8), 0.0105 * Slack);
         }
 
         /// <summary>

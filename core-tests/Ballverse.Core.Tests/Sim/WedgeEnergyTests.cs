@@ -207,6 +207,86 @@ namespace Ballverse.Core.Tests.Sim
         }
 
         /// <summary>
+        /// Straight drop as in <see cref="StraightDropRebound"/> but with friction <paramref name="friction"/> on ball and walls and
+        /// rotation on, starting <paramref name="x0"/> off the opening's centre. Returns the kinetic energy per kg of the tick
+        /// before the impact (linear only: the ball falls without spin), the total kinetic energy (linear + ¼r²ω²: solid disc)
+        /// right after the impact, and the spin then; kinetic energy -1 if the ball never hit.
+        /// </summary>
+        static (float kin, float kout, float spin) FrictionDropImpact(bool ring, float freeFraction, float e, float friction, float speed, float x0)
+        {
+            var w = new PhysicsWorld(SimSettings.Default);
+            int body = w.AddBody(BodyDef.Static(Vec2.Zero));
+            float halfGap = HalfGap(freeFraction);
+            var m = SimTestUtil.Wall(e, friction);
+            if (ring)
+            {
+                w.AddRing(body, new Vec2(0f, MathF.Sqrt(1f - halfGap * halfGap)), 1f, T, new[] { AngularGap.Centered(-SimMath.HalfPi, 2f * MathF.Asin(halfGap)) }, m);
+            }
+            else
+            {
+                w.AddSegment(body, new Vec2(-2f, 0f), new Vec2(-halfGap, 0f), T, m);
+                w.AddSegment(body, new Vec2(halfGap, 0f), new Vec2(2f, 0f), T, m);
+            }
+            int b = w.AddBall(SimTestUtil.Ball(new Vec2(x0, 0.3f), new Vec2(0f, -speed), R, e, friction));
+            for (int tick = 0; tick < 20; tick++)
+            {
+                ref readonly BallState s0 = ref w.GetBall(b);
+                Vec2 before = s0.Velocity;
+                float kin = 0.5f * before.LengthSquared + 0.25f * R * R * s0.AngularVelocity * s0.AngularVelocity;
+                w.Step();
+                ref readonly BallState s1 = ref w.GetBall(b);
+                if (before.Y < 0f && s1.Velocity.Y > before.Y + 1f)
+                {
+                    float kout = 0.5f * s1.Velocity.LengthSquared + 0.25f * R * R * s1.AngularVelocity * s1.AngularVelocity;
+                    return (kin, kout, s1.AngularVelocity);
+                }
+            }
+            return (-1f, 0f, 0f);
+        }
+
+        /// <summary>
+        /// QA (wedge restitution fix, round 1): the wedge response rebuilt the linear velocity from the velocity before the
+        /// sequential responses but kept the spin their friction impulses had given the ball, so an elastic ball (e = 1) with
+        /// friction left a narrow opening with its full elastic speed plus that spin: up to +6.7 % kinetic energy in one hit
+        /// (friction 0.8; M02 Chaos style, e 1.0–1.1 with friction 0.2, meets such openings). Drops onto static segments and a
+        /// ring gap at 95–99.9 % free width, 3–10 m/s, friction 0.2–0.8, rotation on: the total kinetic energy right after the
+        /// impact (linear + spin) never exceeds that of the tick before plus what gravity adds in the impact tick
+        /// (½(v_in + g·dt)², which a centred elastic hit at 99 % width reaches exactly) by more than 0.5 % of ½v_in². Measured
+        /// after the fix: at most 0.00 %; the code under review: 2.0 / 4.2 / 6.4 % at friction 0.2 / 0.3 / 0.8 (spin up to
+        /// 8.7 rad/s from a spinless fall).
+        /// </summary>
+        [Theory]
+        [InlineData(false, 0.2f)]
+        [InlineData(true, 0.2f)]
+        [InlineData(false, 0.3f)]
+        [InlineData(true, 0.3f)]
+        [InlineData(false, 0.8f)]
+        [InlineData(true, 0.8f)]
+        public void ElasticBounceWithFrictionOffNarrowOpeningGainsNoEnergy(bool ring, float friction)
+        {
+            const float e = 1f;
+            float gdt = SimSettings.StandardGravity / SimConstants.TickRate;
+            float worst = float.MinValue;
+            string worstCase = "";
+            int hits = 0;
+            foreach (float ff in new[] { 0.95f, 0.97f, 0.99f, 0.995f, 0.999f })
+            foreach (float speed in new[] { 3f, 5f, 7f, 10f })
+            foreach (float x0 in new[] { 0f, 0.01f, -0.03f })
+            {
+                var (kin, kout, spin) = FrictionDropImpact(ring, ff, e, friction, speed, x0);
+                if (kin < 0f) continue;
+                hits++;
+                float vin = MathF.Sqrt(2f * kin);
+                float gain = (kout - 0.5f * (vin + gdt) * (vin + gdt)) / kin;
+                if (gain <= worst) continue;
+                worst = gain;
+                worstCase = "free width " + ff + ", " + speed + " m/s, x0 " + x0 + ": E_in " + kin + ", E_out " + kout + ", spin " + spin;
+            }
+            Assert.True(hits >= 50, "only " + hits + " of 60 drops hit the opening");
+            Assert.True(worst <= 0.005f, "kinetic energy gain " + (worst * 100f) + " % of ½v_in² beyond the gravity work (" + worstCase + ")");
+        }
+
+        /// <summary>
         /// QA's drop (residual minors, round 2): segments with free width 99 % of the ball diameter, e = 0.9, a ball at 0.5 m
         /// moving down at 9 m/s hits at 9.49 m/s and must rebound at 0.5–0.9 of that (the fixed code: 6.78 m/s = 0.715; the
         /// code under review 12.10 m/s; without the wedge restitution 0).
