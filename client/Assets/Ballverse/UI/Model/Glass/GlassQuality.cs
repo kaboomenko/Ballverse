@@ -115,6 +115,26 @@ namespace Ballverse.UI.Glass
             return c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
         }
 
+        /// <summary>
+        /// Luminance of a fill of opacity <paramref name="alpha"/> over a background when the renderer blends the
+        /// sRGB-encoded values (gamma blending; colours as sRGB components 0–1).
+        /// </summary>
+        public static double GammaBlendLuminance(double bgR, double bgG, double bgB, double fillR, double fillG, double fillB, double alpha)
+        {
+            double a = Math.Max(0, Math.Min(1, alpha));
+            return LinearLuminance(
+                SrgbToLinear(bgR + (fillR - bgR) * a),
+                SrgbToLinear(bgG + (fillG - bgG) * a),
+                SrgbToLinear(bgB + (fillB - bgB) * a));
+        }
+
+        /// <summary>Luminance of a fill of opacity <paramref name="alpha"/> over a background when the renderer blends in linear space.</summary>
+        public static double LinearBlendLuminance(double backgroundLum, double fillLum, double alpha)
+        {
+            double a = Math.Max(0, Math.Min(1, alpha));
+            return backgroundLum + (fillLum - backgroundLum) * a;
+        }
+
         public static double ContrastRatio(double luminanceA, double luminanceB)
         {
             double hi = Math.Max(luminanceA, luminanceB);

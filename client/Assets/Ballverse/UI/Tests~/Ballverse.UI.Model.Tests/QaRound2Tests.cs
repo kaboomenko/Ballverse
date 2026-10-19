@@ -275,11 +275,12 @@ namespace Ballverse.UI.Tests
             }
             string view = Strip(File.ReadAllText(Ui("Runtime", "Screens", "Studio", "TimelineView.cs")));
             Assert.Contains("TimelineGeometry.PlaceHandles(x, width, bandMin, bandMax)", view);
-            Assert.Contains("PageRoot().worldBound", Body(view, "void PlaceHandles(VisualElement segment, float x, float width)"));
+            Assert.Contains("HandleBand(segment.parent, out float bandMin, out float bandMax)", Body(view, "void PlaceHandles(VisualElement segment, float x, float width, SegmentClip clip)"));
+            Assert.Contains("PageRoot().worldBound", Body(view, "internal void HandleBand(VisualElement track, out float bandMin, out float bandMax)"));
             // The page root the band is measured against fills the screen layer.
             Assert.Contains("bv-page", Regex.Match(studio, "name=\"studio\" class=\"([^\"]+)\"").Groups[1].Value);
             Assert.Contains("bv-fill", Regex.Match(studio, "name=\"studio\" class=\"([^\"]+)\"").Groups[1].Value);
-            Assert.Contains("PlaceHandles(element, x, width)", Body(view, "void Place(VisualElement element, long startUs, long lengthUs)"));
+            Assert.Contains("PlaceHandles(element, x, width, clip)", Body(view, "void Place(VisualElement element, long startUs, long lengthUs)"));
             // A text handle pressed without moving selects the layer (short spans are mostly handle).
             Assert.Contains("new EdgeDrag(this, left, EditTarget.TextTrim, true, () => TextSelected?.Invoke(index), index)", view);
         }

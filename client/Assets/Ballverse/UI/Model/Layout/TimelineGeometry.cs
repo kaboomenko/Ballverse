@@ -211,6 +211,34 @@ namespace Ballverse.UI.Layout
             return new HandlePlacement(left, right, w);
         }
 
+        /// <summary>
+        /// The drawn part of a segment: the segment clipped to its track [0, <paramref name="trackWidth"/>]. The segment
+        /// element itself keeps its true position (a V clip may start before S, a text span may end after the reel), so
+        /// its trim handles stay on the true edges and keep their 44 pt hit areas, while its fill, border, thumbnails and
+        /// label are drawn only inside the track and never over the badge column or the side padding. Positions are panel
+        /// units, track coordinates in, segment coordinates out. Pure.
+        /// </summary>
+        public static SegmentClip ClipToTrack(float segmentX, float segmentWidth, float trackWidth)
+        {
+            float w = Math.Max(0f, segmentWidth);
+            float tw = Math.Max(0f, trackWidth);
+            float start = Math.Min(Math.Max(segmentX, 0f), tw);
+            float end = Math.Max(Math.Min(segmentX + w, tw), start);
+            return new SegmentClip(start - segmentX, end - start, segmentX < 0f, segmentX + w > tw);
+        }
+
+        /// <summary>
+        /// Where a trim handle draws its grip (handle coordinates): on the segment edge it trims, moved onto the drawn
+        /// part of the segment when that edge lies outside the track, and kept inside the handle.
+        /// </summary>
+        /// <param name="edgeInSegment">The edge in segment coordinates (0 = start, segment width = end).</param>
+        /// <param name="handleX">Left of the handle in segment coordinates.</param>
+        public static float GripInHandle(float edgeInSegment, float handleX, SegmentClip clip)
+        {
+            float edge = Math.Max(clip.BodyX, Math.Min(clip.BodyX + clip.BodyWidth, edgeInSegment));
+            return Math.Max(0f, Math.Min(HandleWidth, edge - handleX));
+        }
+
         /// <summary>One frame at <paramref name="fps"/> in microseconds (for the ±1 frame offset buttons).</summary>
         public static long FrameUs(int fps)
         {
@@ -247,6 +275,28 @@ namespace Ballverse.UI.Layout
         static float Clamp(float x)
         {
             return Math.Max(0f, Math.Min(TimelineGeometry.HandleWidth, x));
+        }
+    }
+
+    /// <summary>The drawn part of a timeline segment (see <see cref="TimelineGeometry.ClipToTrack"/>).</summary>
+    public readonly struct SegmentClip
+    {
+        /// <summary>Left of the drawn part, relative to the segment's left edge (&gt; 0 when the segment starts before the track).</summary>
+        public float BodyX { get; }
+        /// <summary>Width of the drawn part (0 when the segment lies entirely outside the track).</summary>
+        public float BodyWidth { get; }
+        /// <summary>The segment starts before the track: its start edge is not drawn.</summary>
+        public bool CutStart { get; }
+        /// <summary>The segment ends after the track: its end edge is not drawn.</summary>
+        public bool CutEnd { get; }
+        public bool Visible => BodyWidth > 0f;
+
+        public SegmentClip(float bodyX, float bodyWidth, bool cutStart, bool cutEnd)
+        {
+            BodyX = bodyX;
+            BodyWidth = bodyWidth;
+            CutStart = cutStart;
+            CutEnd = cutEnd;
         }
     }
 }

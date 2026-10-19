@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using Ballverse.Core;
+using Ballverse.Platform;
 using Ballverse.UI.Accessibility;
 using Ballverse.UI.Components;
 using Ballverse.UI.Gestures;
@@ -67,7 +68,12 @@ namespace Ballverse.UI
         public GlassSurfaces Glass => _ctx.Glass;
         public UiContext Context => _ctx;
 
-        public UiShell(VisualElement host, IBallverseViewModels viewModels, Localizer.ITableSource tables = null)
+        /// <param name="safeArea">
+        /// Device safe area from the platform layer (the app passes its <see cref="ISafeAreaProvider"/> service); null keeps
+        /// the safe-area spacers at zero (EditMode tests).
+        /// </param>
+        public UiShell(VisualElement host, IBallverseViewModels viewModels, ISafeAreaProvider safeArea = null,
+            Localizer.ITableSource tables = null)
         {
             if (host == null) throw new ArgumentNullException(nameof(host));
             _vms = viewModels ?? throw new ArgumentNullException(nameof(viewModels));
@@ -88,7 +94,7 @@ namespace Ballverse.UI
             _ctx = new UiContext(localizer, _vms, appRoot);
             _ctx.Binder.Bind(shell);
             _ctx.Glass = new GlassSurfaces(appRoot);
-            _ctx.SafeArea = new SafeAreaController(appRoot);
+            _ctx.SafeArea = new SafeAreaController(appRoot, safeArea);
             _ctx.Theme = new ThemeController(appRoot, _ctx.Glass);
             _ctx.Sheets = new SheetHost(UiAssets.Q<VisualElement>(appRoot, "sheet-layer"));
             _ctx.Dialogs = new DialogHost(_ctx, UiAssets.Q<VisualElement>(appRoot, "dialog-layer"));
@@ -291,7 +297,6 @@ namespace Ballverse.UI
         {
             if (_disposed) return;
             if (BackButtonInput.WasPressedThisFrame()) _ctx.Navigator.Back();
-            _ctx.SafeArea.Refresh();
             _ctx.Navigator.Tick(deltaTime);
             _questCelebration.Tick();
         }
@@ -368,6 +373,7 @@ namespace Ballverse.UI
             _ctx.Sheets.DismissAllImmediately();
             _ctx.Navigator.Dispose();
             _screenReader.Dispose();
+            _ctx.SafeArea.Dispose();
             _ctx.Glass.Dispose();
         }
     }

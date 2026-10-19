@@ -3,6 +3,7 @@
     "rootNamespace": "Ballverse.UI.Fakes",
     "references": [
         "Ballverse.Core",
+        "Ballverse.Platform",
         "Ballverse.UI"
     ],
     "includePlatforms": [],
