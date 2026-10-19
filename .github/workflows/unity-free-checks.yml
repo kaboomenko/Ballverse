@@ -2,7 +2,8 @@ name: Unity-free checks
 
 # Checks that run without Unity: the Android Java plugin compiled against the Android API 34 framework classes
 # (android-all from Maven Central) with -Xlint -Werror plus JVM unit checks, the Ballverse.Media EditMode tests, the
-# Ballverse.UI model tests and the Ballverse.Studio harness (compile check against Unity stand-ins + tests) under .NET 8.
+# Ballverse.UI model tests, the Ballverse.Studio harness and the App harness (compile checks of the whole App + Sim +
+# wired assemblies against Unity stand-ins, plus the App flow tests) under .NET 8. GameCI's Unity compile stays the authority.
 on:
   push:
     paths:
@@ -10,6 +11,11 @@ on:
       - "client/Assets/Ballverse/Media/**"
       - "client/Assets/Ballverse/UI/**"
       - "client/Assets/Ballverse/Studio/**"
+      - "client/Assets/Ballverse/App/**"
+      - "client/Assets/Ballverse/Sim/**"
+      - "client/Assets/Ballverse/Render/**"
+      - "client/Assets/Ballverse/Services/**"
+      - "client/Assets/Ballverse/Tests/**"
       - "client/Assets/Ballverse/Core/**"
       # The UI model tests compile Ballverse.Platform and assert on the package manifest.
       - "client/Assets/Ballverse/App/Platform/**"
@@ -22,6 +28,11 @@ on:
       - "client/Assets/Ballverse/Media/**"
       - "client/Assets/Ballverse/UI/**"
       - "client/Assets/Ballverse/Studio/**"
+      - "client/Assets/Ballverse/App/**"
+      - "client/Assets/Ballverse/Sim/**"
+      - "client/Assets/Ballverse/Render/**"
+      - "client/Assets/Ballverse/Services/**"
+      - "client/Assets/Ballverse/Tests/**"
       - "client/Assets/Ballverse/Core/**"
       - "client/Assets/Ballverse/App/Platform/**"
       - "client/Packages/manifest.json"
@@ -84,3 +95,13 @@ jobs:
           dotnet-version: "8.0.x"
       - name: Ballverse.Studio compile check and tests under .NET 8
         run: bash "client/Assets/Ballverse/Studio/Tests/DotNet~/run.sh" --blame-hang-timeout 5m
+
+  app-dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Ballverse.App compile check and flow tests under .NET 8
+        run: bash "client/Assets/Ballverse/Tests/AppHarness~/run.sh" --blame-hang-timeout 5m
