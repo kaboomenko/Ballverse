@@ -40,9 +40,10 @@ namespace Ballverse.Core.Studio
     /// <item>viewport (the renderer can draw a window of the arena): the target is the visible window at one texel per output
     /// pixel — the slot's resolution — and maps 1:1 into the slot's destination rect;</item>
     /// <item>whole arena (default): the renderer draws the full 9:16 arena and the compositor places it like the user video
-    /// (<see cref="ContentMapper"/>). The target is sized for zoom 1 (one texel per output pixel of the unzoomed slot): zooming
-    /// in magnifies that picture instead of growing the target, so a full-canvas slot never exceeds the canvas (≤ 8.3 MB at
-    /// 1080×1920, plus the renderer's own buffers at that size).</item>
+    /// (<see cref="ContentMapper"/>). The target grows with the zoom up to <c>maxZoomDensity</c> × the unzoomed slot (one texel
+    /// per output pixel up to that zoom); beyond it the picture is magnified. Preview passes 1 (a full-canvas slot never exceeds
+    /// the canvas: ≤ 8.3 MB at 1080×1920); export passes <see cref="ExportMaxZoomDensity"/> so a pinch-zoomed simulation stays
+    /// sharp in the file up to 2× (≤ 33 MB at 2160×3840 for a full 1080p slot) while no release-1 renderer draws viewports.</item>
     /// </list>
     /// Pure; the same inputs give the same result for preview and export of the same canvas.
     /// </summary>
@@ -55,6 +56,12 @@ namespace Ballverse.Core.Studio
         public const int MinSide = 16;
         /// <summary>Default cap of the longer side (4096 is supported by every GLES 3.1 / Metal / Vulkan device of tier C).</summary>
         public const int DefaultMaxSide = 4096;
+        /// <summary>
+        /// Export: the whole-arena target follows the zoom up to 2× the unzoomed slot (QA round 2: with the release-1 renderer, which
+        /// has no viewport, a 2× zoom otherwise left 2×2 output pixels per texel). Bounded so a full-canvas 1080p slot stays at most
+        /// 2160×3840 (§7.11).
+        /// </summary>
+        public const float ExportMaxZoomDensity = 2f;
 
         const int NominalScale = 1000;
 
@@ -63,11 +70,15 @@ namespace Ballverse.Core.Studio
         /// <param name="content">Simulation slot content (<see cref="ProjectComposition.BuildSimContent"/>).</param>
         /// <param name="maxSide">Cap of the target's longer side.</param>
         /// <param name="viewport">The renderer draws <see cref="SimSlotRender.Viewport"/> windows (see <c>ISimFrameRenderer.SupportsViewport</c>).</param>
-        public static SimSlotRender Compute(int slotWidth, int slotHeight, SlotContent content, int maxSide = DefaultMaxSide, bool viewport = false)
+        /// <param name="maxZoomDensity">Whole-arena mode: the zoom up to which the target grows to keep one texel per output pixel
+        /// (≥ 1; 1 = sized for the unzoomed slot). Ignored with a viewport (always the slot's resolution).</param>
+        public static SimSlotRender Compute(int slotWidth, int slotHeight, SlotContent content, int maxSide = DefaultMaxSide, bool viewport = false,
+            float maxZoomDensity = 1f)
         {
             if (slotWidth <= 0 || slotHeight <= 0) throw new ArgumentOutOfRangeException(nameof(slotWidth), "slot size must be > 0");
             if (content == null) throw new ArgumentNullException(nameof(content));
             if (maxSide < MinSide) throw new ArgumentOutOfRangeException(nameof(maxSide));
+            if (float.IsNaN(maxZoomDensity) || maxZoomDensity < 1f) maxZoomDensity = 1f;
             int srcW = AspectWidth * NominalScale, srcH = AspectHeight * NominalScale;
             if (viewport)
             {
@@ -81,8 +92,10 @@ namespace Ballverse.Core.Studio
                 if (!visible.HasLetterbox) place = place.WithFill(SlotFill.Cover); // even-pixel rounding then crops, never bars
                 return new SimSlotRender(size, ContentMapper.Map(size.X, size.Y, slotWidth, slotHeight, place), window);
             }
-            // Displayed pixels per arena unit at zoom 1 for a nominal 9 x 16 source; the target needs that many texels per unit.
-            ContentMapping nominal = ContentMapper.Map(srcW, srcH, slotWidth, slotHeight, content.WithZoom(SlotContent.MinZoom));
+            // Displayed pixels per arena unit at the sizing zoom (the zoom, at most maxZoomDensity) for a nominal 9 x 16 source; the
+            // target needs that many texels per unit.
+            float sizingZoom = Math.Max(SlotContent.MinZoom, Math.Min(content.Zoom, maxZoomDensity));
+            ContentMapping nominal = ContentMapper.Map(srcW, srcH, slotWidth, slotHeight, content.WithZoom(sizingZoom));
             double unitsPerSide = nominal.Scale * NominalScale;                // texels per 1/9 of the arena width
             double height = Math.Ceiling(unitsPerSide * AspectHeight);
             if (height > maxSide) height = maxSide;

@@ -39,6 +39,7 @@ namespace Ballverse.Studio
         long _token;
         bool _completionPending;
         bool _disposed;
+        int _importsInFlight;
 
         internal StudioProjectSession(StudioProjects owner, ProjectEditSession edit, IReadOnlyList<ValidationIssue> loadIssues, LoadSource source)
         {
@@ -153,11 +154,21 @@ namespace Ballverse.Studio
             if (write.IsCompleted) Complete(write);
         }
 
+        /// <summary>A gallery import into this project's <c>media/</c> folder started / ended (no media cleanup meanwhile).</summary>
+        internal void BeginImport() => _importsInFlight++;
+
+        internal void EndImport() => _importsInFlight--;
+
         public void Dispose()
         {
             if (_disposed) return;
             SaveNow();
             _disposed = true;
+            // The undo history ends here, so the saved document is the only one that can become current again: imported videos it
+            // does not reference (replaced or removed while editing) are deleted now, never during the session (QA round 2: Undo
+            // after a replace must find the previous copy). Skipped when the save failed (the file on disk may still reference an
+            // older copy) or while an import is still writing into media/.
+            if (!IsDirty && LastSaveError == null && _importsInFlight == 0) _owner.DeleteUnreferencedMedia(ProjectId, _edit.Document);
             _owner.OnSessionClosed(this);
         }
     }
@@ -231,6 +242,9 @@ namespace Ballverse.Studio
             }
             result = _library.Open(projectId);
             if (!result.Success) return null;
+            // Leftovers of a session that ended without a clean close (crash, failed save). Only from the main file: a document
+            // loaded from the backup may be older than the one the unreadable main file described.
+            if (result.Source == LoadSource.Main) DeleteUnreferencedMedia(projectId, result.Document);
             var session = new StudioProjectSession(this, _library.Edit(result.Document), result.Issues, result.Source);
             _open[projectId] = session;
             return session;
@@ -291,14 +305,24 @@ namespace Ballverse.Studio
 
         /// <summary>
         /// "Видео из галереи" (spec §3.2): system picker → copy into <c>media/</c> of the project (with progress) → probe → the project's
-        /// user video is set to the first ≤ 180 s (the previous imported file is deleted after the change is saved).
+        /// user video is set to the first ≤ 180 s. The change is undoable, so the previous imported copy stays on disk until the
+        /// session closes (then every copy the saved document does not reference is deleted, <see cref="DeleteUnreferencedMedia"/>).
         /// </summary>
         public async Task<UserVideoImport> ImportUserVideoAsync(StudioProjectSession session, IProgress<double> progress, CancellationToken ct)
         {
             if (session == null) throw new ArgumentNullException(nameof(session));
             string mediaDir = Path.Combine(session.Directory, ProjectPaths.MediaDir);
             long freeBefore = SafeFreeSpace();
-            PickResult pick = await _services.Media.PickVideoAsync(mediaDir, progress, ct);
+            session.BeginImport();
+            PickResult pick;
+            try
+            {
+                pick = await _services.Media.PickVideoAsync(mediaDir, progress, ct);
+            }
+            finally
+            {
+                session.EndImport();
+            }
             if (pick.Status != PickStatus.Picked) return new UserVideoImport { Status = pick.Status };
             string relative = ProjectPaths.MediaDir + "/" + Path.GetFileName(pick.Path);
             if (!ProjectPaths.IsSafeMediaPath(relative))
@@ -308,23 +332,10 @@ namespace Ballverse.Studio
                 File.Move(pick.Path, Path.Combine(session.Directory, safe.Replace('/', Path.DirectorySeparatorChar)));
                 relative = safe;
             }
-            string previous = session.Document.UserVideo?.File;
             double volume = session.Document.Audio?.User ?? 1.0;
             UserVideoSettings video = UserVideoDefaults.Create(relative, pick.Info.DurationUs, volume);
             session.Apply(d => d.UserVideo = video);
             session.SaveNow();
-            if (previous != null && previous != relative && ProjectPaths.IsSafeMediaPath(previous))
-            {
-                try
-                {
-                    string old = Path.Combine(session.Directory, previous.Replace('/', Path.DirectorySeparatorChar));
-                    if (File.Exists(old)) File.Delete(old);
-                }
-                catch (IOException)
-                {
-                    // an unreferenced file only costs space; the storage screen shows it under the project
-                }
-            }
             long freeAfter = SafeFreeSpace();
             return new UserVideoImport
             {
@@ -337,23 +348,15 @@ namespace Ballverse.Studio
             };
         }
 
-        /// <summary>Removes the user video from the project (the file is deleted after the change is saved).</summary>
+        /// <summary>
+        /// Removes the user video from the project (undoable: the file stays until the session closes, see
+        /// <see cref="DeleteUnreferencedMedia"/>).
+        /// </summary>
         public void RemoveUserVideo(StudioProjectSession session)
         {
             if (session == null) throw new ArgumentNullException(nameof(session));
-            string previous = session.Document.UserVideo?.File;
             session.Apply(d => d.UserVideo = null);
             session.SaveNow();
-            if (previous == null || !ProjectPaths.IsSafeMediaPath(previous)) return;
-            try
-            {
-                string old = Path.Combine(session.Directory, previous.Replace('/', Path.DirectorySeparatorChar));
-                if (File.Exists(old)) File.Delete(old);
-            }
-            catch (IOException)
-            {
-                // left for the storage screen
-            }
         }
 
         long SafeFreeSpace()
@@ -365,6 +368,48 @@ namespace Ballverse.Studio
             catch (Exception e) when (e is MediaException || e is InvalidOperationException)
             {
                 return -1;
+            }
+        }
+
+        /// <summary>
+        /// Deletes the files in the project's <c>media/</c> folder that <paramref name="document"/> does not reference
+        /// (<see cref="ProjectMediaCleanup"/>) nor any running or resumable export of the project (its job keeps a snapshot of the
+        /// document it exports). Call only when no undo / redo snapshot can bring another reference back: at open and at close of
+        /// the session.
+        /// </summary>
+        internal void DeleteUnreferencedMedia(string projectId, ProjectDocument document)
+        {
+            try
+            {
+                string projectDir = ProjectDirectory(projectId);
+                string mediaDir = Path.Combine(projectDir, ProjectPaths.MediaDir);
+                if (!Directory.Exists(mediaDir)) return;
+                var files = new List<string>();
+                foreach (string full in Directory.GetFiles(mediaDir)) files.Add(ProjectPaths.MediaDir + "/" + Path.GetFileName(full));
+                var documents = new List<ProjectDocument> { document };
+                IReadOnlyList<ExportResumeState> jobs = _services.Export?.ListResumable();
+                if (jobs != null)
+                {
+                    foreach (ExportResumeState job in jobs)
+                    {
+                        if (job?.Project != null && string.Equals(job.ProjectId, projectId, StringComparison.Ordinal)) documents.Add(job.Project);
+                    }
+                }
+                foreach (string relative in ProjectMediaCleanup.Unreferenced(documents, files))
+                {
+                    try
+                    {
+                        File.Delete(Path.Combine(projectDir, relative.Replace('/', Path.DirectorySeparatorChar)));
+                    }
+                    catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+                    {
+                        // an unreferenced file only costs space; the next open retries and the storage screen shows it
+                    }
+                }
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is ArgumentException)
+            {
+                Debug.LogWarning("[Studio] Media cleanup of project " + projectId + " failed: " + e.Message);
             }
         }
 

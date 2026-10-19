@@ -75,6 +75,7 @@ namespace Ballverse.Studio
         readonly ISimFrameRenderer _sim;
         readonly StudioRenderQuality _quality;
         readonly int _maxSimSide;
+        readonly float _maxSimZoomDensity;
         readonly bool _ownsSim;
         readonly List<TextDraw> _texts = new List<TextDraw>(8);
         readonly RenderTexture[] _simTargets = new RenderTexture[2];
@@ -91,9 +92,12 @@ namespace Ballverse.Studio
         /// <param name="sim">This frame renderer's own simulation renderer (one clip per instance: never share it with another user).</param>
         /// <param name="maxSimSide">Cap of the simulation render target's longer side (preview may use less than export).</param>
         /// <param name="ownsSimRenderer">Dispose <paramref name="sim"/> (when it is <see cref="IDisposable"/>) with this renderer.</param>
+        /// <param name="maxSimZoomDensity">Zoom up to which the whole-arena simulation target grows with a pinch zoom (1 for the
+        /// preview, <see cref="SimSlotSizing.ExportMaxZoomDensity"/> for export; see <see cref="SimSlotSizing.Compute"/>).</param>
         public StudioFrameRenderer(StudioCompositor compositor, ISimFrameRenderer sim, StudioRenderQuality quality, int maxSimSide = SimSlotSizing.DefaultMaxSide,
-            bool ownsSimRenderer = false)
+            bool ownsSimRenderer = false, float maxSimZoomDensity = 1f)
         {
+            _maxSimZoomDensity = Math.Max(1f, maxSimZoomDensity);
             _compositor = compositor ?? throw new ArgumentNullException(nameof(compositor));
             _sim = sim ?? throw new ArgumentNullException(nameof(sim));
             _quality = quality;
@@ -171,7 +175,7 @@ namespace Ballverse.Studio
             _lastTick = sim.Tick;
             IntRect slotRect = plan.Layout.Simulation.Rect;
             SimSlotRender sizing = SimSlotSizing.Compute(Math.Max(1, slotRect.Width), Math.Max(1, slotRect.Height), _simContent, _maxSimSide,
-                _sim.SupportsViewport);
+                _sim.SupportsViewport, _maxSimZoomDensity);
             RenderTexture simTarget = SimTarget(sizing.TargetSize);
             _sim.SetFrameTime(new SimFrameTime(sim.Tick, frozen, sim.Iteration, _discontinuity, outputUs, sizing.Viewport));
             _sim.Render(frame, _clip.Shapes, _clip.Labels, simTarget, _quality);

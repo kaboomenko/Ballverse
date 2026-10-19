@@ -46,6 +46,8 @@ namespace Ballverse.Studio.Tests
         public bool TryAppendVideoFrame(byte[] rgba, long ptsUs) => false;
         public void AppendVideoFrame(NativeArray<byte> rgba, long ptsUs) => throw new NotSupportedException();
         public void AppendVideoFrame(byte[] rgba, long ptsUs) => throw new NotSupportedException();
+        public Task Released => _inner.Released;
+        public Task ReleaseAsync() => _inner.ReleaseAsync();
         public void Dispose() => _inner.Dispose();
     }
 
@@ -80,9 +82,19 @@ namespace Ballverse.Studio.Tests
         public Task<PcmBuffer> DecodeAudioAsync(string path, AudioDecodeRange r, CancellationToken ct) => _inner.DecodeAudioAsync(path, r, ct);
         public Task<PcmFileInfo> DecodeAudioToFileAsync(string path, string o, AudioDecodeRange r, CancellationToken ct) => _inner.DecodeAudioToFileAsync(path, o, r, ct);
 
+        /// <summary>Every writer opened so far (to check the redo hand-over).</summary>
+        public readonly List<IVideoWriter> Opened = new List<IVideoWriter>();
+        /// <summary>Set when a writer was opened while an earlier one was still releasing its encoder.</summary>
+        public bool OpenedWhileReleasing;
+
         public IVideoWriter OpenWriter(string outputPath, VideoWriterOptions options)
         {
+            foreach (IVideoWriter earlier in Opened)
+            {
+                if (!earlier.IsFinalizing && !earlier.Released.IsCompleted) OpenedWhileReleasing = true;
+            }
             IVideoWriter w = _inner.OpenWriter(outputPath, options);
+            Opened.Add(w);
             return StuckWriters ? new StuckWriter(w) : w;
         }
 
@@ -195,6 +207,7 @@ namespace Ballverse.Studio.Tests
         readonly MainThreadPump _pump = new MainThreadPump();
         readonly StudioStorage _storage;
         readonly FaultyMediaBridge _media;
+        readonly FakeMediaOptions _mediaOptions = new FakeMediaOptions { PngFrameStride = 100000 };
         readonly TestGate _gate = new TestGate();
         readonly ProjectDocument _doc;
         readonly List<CpuFrameRenderer> _renderers = new List<CpuFrameRenderer>();
@@ -202,7 +215,7 @@ namespace Ballverse.Studio.Tests
         public ExportFailureTests()
         {
             _storage = new StudioStorage(_dir.Sub("data"), _dir.Sub("runs"), _dir.Sub("export"));
-            _media = new FaultyMediaBridge(MediaBridgeFactory.CreateFake(new FakeMediaOptions { PngFrameStride = 100000 }));
+            _media = new FaultyMediaBridge(MediaBridgeFactory.CreateFake(_mediaOptions));
             _doc = ProjectDefaults.NewProject("p1", "My Reel", "2026-10-18T12:00:00Z", "ring_escape", ClipTicks);
             _doc.Clip.SoundPack = "Pop";
             new ProjectRepository(_storage.Library).Create(_doc);
@@ -210,6 +223,7 @@ namespace Ballverse.Studio.Tests
 
         public void Dispose()
         {
+            _pump.SettleWriters(_dir.Path);
             _media.Dispose();
             _pump.Dispose();
             _dir.Dispose();
@@ -292,6 +306,35 @@ namespace Ballverse.Studio.Tests
             Assert.InRange(host.NowMs, 2 * ExportPipeline.DefaultStallTimeoutMs, 3 * ExportPipeline.DefaultStallTimeoutMs);
             Assert.False(_storage.Exports.DirectoryExists("job1"));
             Assert.Equal(new[] { ExportErrorCode.EncoderFailed }, _gate.Finished);
+        }
+
+        [Fact]
+        public void SegmentRedoOpensTheNextWriterOnlyAfterTheDisposedOneIsReleased()
+        {
+            // QA round 2: after a redo the next segment writer was opened synchronously one frame after Dispose; on Android the
+            // native open then waits (up to 3 s, on the main thread) for the codec of the disposed writer.
+            _mediaOptions.SimulatedReleaseDelayMs = 300;
+            var host = new TestExportHost(_pump);
+            bool paused = false;
+            host.OnFrame = h =>
+            {
+                if (!paused && _media.Opened.Count > 0 && _media.Opened[0].FramesAppended >= 10)
+                {
+                    paused = true;
+                    h.Paused = true;
+                    h.Pauses++;
+                }
+                else if (h.Paused)
+                {
+                    h.Paused = false; // back after one frame: far shorter than the encoder release
+                }
+            };
+            StudioExportResult r = Run(Pipeline(host), Request(), CancellationToken.None, host);
+            Assert.True(r.Succeeded, r.Error + ": " + r.Message);
+            Assert.True(paused);
+            Assert.True(_media.Opened.Count >= 2);
+            Assert.True(_media.Opened[0].Released.IsCompleted);
+            Assert.False(_media.OpenedWhileReleasing, "a segment writer was opened while the disposed one was still releasing");
         }
 
         [Fact]

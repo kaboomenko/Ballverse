@@ -22,7 +22,10 @@ namespace Ballverse.Core.Studio
     /// no listener, an interruption, audio focus lost, the end of the mix — which would otherwise pin the picture: when the
     /// audio cursor has not moved for <see cref="StallUs"/> while playing, the clock runs on the wall clock, and when the cursor
     /// moves again <see cref="NeedsAudioResync"/> asks the caller to seek the audio to the picture. After a start or seek the
-    /// picture is held (not moved back) until the new samples are audible, at most <see cref="MaxHoldUs"/>.
+    /// picture is held (not moved back) until the new samples are audible, at most <see cref="MaxHoldUs"/>. Once the cursor has
+    /// handed out the whole mix the picture runs on the wall clock to the end (never pinned at the last audible sample), and a
+    /// loop wrap of the clock (<see cref="PlaybackClock.Loop"/>) raises <see cref="NeedsAudioResync"/> so the caller restarts the
+    /// mix at the new position (QA round 2: every loop after the first one was silent).
     /// Pure, main thread; the cursor position is passed in as a value.
     /// </summary>
     public sealed class PreviewAudioSync
@@ -98,8 +101,10 @@ namespace Ballverse.Core.Studio
         /// <param name="audioAvailable">A mix is loaded and playing (not being rebuilt).</param>
         /// <param name="cursorUs">Audio cursor position (output µs following the last block handed to the device).</param>
         /// <param name="latencyUs">Device buffering between the cursor and the speaker.</param>
+        /// <param name="audioEndUs">Output time of the end of the loaded mix (the cursor stops there); the clock's duration when
+        /// omitted.</param>
         /// <returns>The clock position.</returns>
-        public long Advance(PlaybackClock clock, long realDeltaUs, bool audioAvailable, long cursorUs, long latencyUs)
+        public long Advance(PlaybackClock clock, long realDeltaUs, bool audioAvailable, long cursorUs, long latencyUs, long audioEndUs = long.MaxValue)
         {
             if (clock == null) throw new ArgumentNullException(nameof(clock));
             if (realDeltaUs < 0) realDeltaUs = 0;
@@ -115,6 +120,8 @@ namespace Ballverse.Core.Studio
                 Source = PreviewClockSource.WallClock;
                 return clock.Advance(realDeltaUs);
             }
+            // The cursor handed out the last sample: the rest is audible within the latency, the picture runs on to the end.
+            bool atEnd = cursorUs >= Math.Min(audioEndUs, clock.DurationUs);
             if (cursorUs != _lastCursorUs)
             {
                 _lastCursorUs = cursorUs;
@@ -131,10 +138,12 @@ namespace Ballverse.Core.Studio
                 _stalled = true;
                 _holding = false;
             }
-            if (_stalled || NeedsAudioResync)
+            if (_stalled || NeedsAudioResync || atEnd)
             {
+                _holding = false;
                 Source = PreviewClockSource.WallClock;
-                return clock.Advance(realDeltaUs);
+                // A stalled output (no listener, interruption) is resynced when it runs again; the end of the mix is not a stall.
+                return AdvanceClock(clock, realDeltaUs, null, atEnd || NeedsAudioResync);
             }
             long audible = Math.Max(0, cursorUs - Math.Max(0, latencyUs));
             if (_holding)
@@ -147,7 +156,16 @@ namespace Ballverse.Core.Studio
                 _holding = false;
             }
             Source = PreviewClockSource.Audio;
-            return clock.Advance(realDeltaUs, audible);
+            return AdvanceClock(clock, realDeltaUs, audible, true);
+        }
+
+        /// <summary>Advances the clock; a loop wrap restarts the audio at the new position (<see cref="NeedsAudioResync"/>).</summary>
+        long AdvanceClock(PlaybackClock clock, long realDeltaUs, long? audiblePositionUs, bool resyncOnWrap)
+        {
+            int before = clock.Discontinuity;
+            long position = clock.Advance(realDeltaUs, audiblePositionUs);
+            if (resyncOnWrap && clock.Discontinuity != before && clock.IsPlaying) NeedsAudioResync = true;
+            return position;
         }
     }
 }

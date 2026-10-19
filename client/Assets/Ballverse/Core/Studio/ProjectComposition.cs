@@ -139,8 +139,8 @@ namespace Ballverse.Core.Studio
 
         /// <summary>
         /// Identity of everything the studio mix of <paramref name="doc"/> on <paramref name="timeline"/> depends on: the audio block,
-        /// the clip's sounds and timing, the user video's file, trim, offset and volume, the output duration and the timeline's
-        /// fps and length. Geometry edits (pan, zoom, fill, rotation, layout, texts) leave it unchanged, so the preview does not
+        /// the clip's sounds and timing, the user video's file, trim, offset, volume and after-end behaviour (with the placement
+        /// the timeline resolved from them), the output duration and the timeline's fps and length. Geometry edits (pan, zoom, fill, rotation, layout, texts) leave it unchanged, so the preview does not
         /// remix while the user pinches or drags.
         /// </summary>
         public static string AudioMixKey(ProjectDocument doc, StudioTimeline timeline)
@@ -152,10 +152,15 @@ namespace Ballverse.Core.Studio
             UserVideoSettings v = doc.UserVideo;
             var inv = System.Globalization.CultureInfo.InvariantCulture;
             string video = v == null ? "-" : v.File + "|" + v.TrimInUs.ToString(inv) + "|" + v.TrimOutUs.ToString(inv) + "|" + v.OffsetUs.ToString(inv)
-                + "|" + v.Volume.ToString("R", inv);
+                + "|" + v.Volume.ToString("R", inv) + "|" + v.AfterEnd;
+            // Every input of UserAudioPlacement.ComputeRuns as the timeline resolved it (QA round 2: "if V is shorter than the
+            // reel" Loop places the audio again, Freeze/Black/ExpandSim are silent after the end).
+            UserVideoTiming vt = timeline.Spec.Video;
+            string placement = vt == null ? "-" : vt.TrimInUs.ToString(inv) + "|" + vt.TrimOutUs.ToString(inv) + "|" + vt.OffsetUs.ToString(inv)
+                + "|" + vt.AfterEnd + "|" + timeline.VideoStartUs.ToString(inv) + "|" + timeline.ContentStartUs.ToString(inv);
             return CoreJson.Serialize(doc.Audio, false) + "|" + c.Replay + "|" + c.SoundPack + "|" + c.Melody + "|" + c.TrimInTick.ToString(inv)
                 + "|" + c.TrimOutTick.ToString(inv) + "|" + c.Speed.ToString("R", inv) + "|" + CoreJson.Serialize(c.FinaleSlowMo, false) + "|" + c.AfterEnd
-                + "|" + video + "|" + o.DurationMode + "|" + (o.ManualDurationUs?.ToString(inv) ?? "-") + "|" + CoreJson.Serialize(o.Cover, false)
+                + "|" + video + "|" + placement + "|" + o.DurationMode + "|" + (o.ManualDurationUs?.ToString(inv) ?? "-") + "|" + CoreJson.Serialize(o.Cover, false)
                 + "|" + timeline.Fps.ToString(inv) + "|" + timeline.FrameCount.ToString(inv);
         }
 
