@@ -18,7 +18,7 @@
     <NoWarn>$(NoWarn);CS1591;NUnit2005;NUnit2007</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="UnityStubs.cs" />
+    <Compile Include="UnityStubs.cs;LogAssertStandIn.cs;LogScopeStandInTests.cs" />
     <Compile Include="../../Api/*.cs;../../Common/*.cs;../../Internal/*.cs;../../Fake/*.cs" />
     <Compile Include="../EditMode/*.cs" />
   </ItemGroup>

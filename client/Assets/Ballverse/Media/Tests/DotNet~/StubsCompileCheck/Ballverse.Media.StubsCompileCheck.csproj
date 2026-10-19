@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Compile-only check (run by ../run.sh): the Media harness's Unity stand-ins (UnityStubs.cs) and test pump
+    (EditMode/TestSupport.cs) together with the Media sources, with NO test framework referenced. Other harnesses compile
+    exactly these files into their own test projects (Ballverse.Studio's xunit harness), so a stand-in that starts to need
+    NUnit (or xunit) breaks this build here instead of breaking theirs after a merge. Nothing is run.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Ballverse.Media.StubsCompileCheck</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../UnityStubs.cs" />
+    <Compile Include="../../EditMode/TestSupport.cs" />
+    <Compile Include="../../../Api/*.cs;../../../Common/*.cs;../../../Internal/*.cs;../../../Fake/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../../../../core-tests/Ballverse.Core/Ballverse.Core.csproj" />
+    <!-- The only package the stand-ins may use (JsonUtility). Deliberately no NUnit / xunit / test SDK. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
+  </ItemGroup>
+</Project>

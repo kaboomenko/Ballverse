@@ -39,19 +39,32 @@ namespace Ballverse.Media.Internal
             public Action<long> CancelNative;
             public bool CancelRequested;
             public CancellationToken CancelToken;
+            /// <summary>Fallback timer of a forwarded cancel (cancelWaitsForNative), or null. Stopped when the op finishes.</summary>
+            public CancellationTokenSource CancelTimer;
         }
+
+        /// <summary>Default of <see cref="NativeCancelTimeoutMs"/>.</summary>
+        internal const int DefaultNativeCancelTimeoutMs = 20000;
 
         /// <summary>
         /// Upper bound for a <c>cancelWaitsForNative</c> operation to report after its cancel (a native call that never
-        /// returns). After it the task is cancelled anyway with an error log.
+        /// returns). After it the task is cancelled anyway with an error log. Read when the cancel is forwarded.
         /// </summary>
-        internal static int NativeCancelTimeoutMs = 20000;
+        internal static int NativeCancelTimeoutMs = DefaultNativeCancelTimeoutMs;
 
         long _nextId;
+        int _armedCancelTimers;
         readonly ConcurrentDictionary<long, Op> _ops = new ConcurrentDictionary<long, Op>();
 
         /// <summary>Number of operations not completed yet (diagnostics and tests).</summary>
         public int PendingCount => _ops.Count;
+
+        /// <summary>
+        /// Number of cancel fallback timers that are still running (diagnostics and tests). Every way an operation finishes
+        /// (native report, failure, cancel, <see cref="CancelAll"/>, the timeout itself) stops its timer, so this is never
+        /// larger than the number of pending cancelWaitsForNative operations whose cancel was forwarded.
+        /// </summary>
+        internal int ArmedCancelTimerCount => Volatile.Read(ref _armedCancelTimers);
 
         /// <summary>
         /// Starts a native operation: returns a cancelled task without calling <paramref name="start"/> if
@@ -123,9 +136,8 @@ namespace Ballverse.Media.Internal
                         RequestNativeCancel(id, op, ct);
                         return;
                     }
-                    if (_ops.TryRemove(id, out Op removed))
+                    if (TryFinish(id, out Op removed))
                     {
-                        removed.Registration.Dispose();
                         removed.Tcs.TrySetCanceled(ct);
                         if (cancelNative != null)
                         {
@@ -141,11 +153,18 @@ namespace Ballverse.Media.Internal
 
         /// <summary>
         /// cancelWaitsForNative: forwards the cancel once and keeps the operation pending until native reports (main
-        /// thread). A fallback timer cancels the task if native never reports.
+        /// thread). A fallback timer cancels the task if native never reports within <see cref="NativeCancelTimeoutMs"/>.
         /// </summary>
+        /// <remarks>
+        /// The timer belongs to the operation: whichever path finishes the operation first stops it (<see cref="TryFinish"/>),
+        /// so a native report in time leaves no timer behind. A timer that fires anyway (it raced with the finish) finds
+        /// the operation gone and does nothing — no post to the main thread, no log. Before this, a 20 s
+        /// <c>Task.Delay</c> outlived every operation whose native side reported in time and posted from the thread pool
+        /// long after its caller (in CI: an EditMode test) had finished.
+        /// </remarks>
         void RequestNativeCancel(long id, Op op, CancellationToken ct)
         {
-            if (op.CancelRequested || !_ops.TryGetValue(id, out Op current) || !ReferenceEquals(current, op)) return;
+            if (op.CancelRequested || !IsPending(id, op)) return;
             op.CancelRequested = true;
             op.CancelToken = ct;
             if (op.CancelNative != null)
@@ -153,25 +172,63 @@ namespace Ballverse.Media.Internal
                 try { op.CancelNative(id); }
                 catch (Exception e) { Debug.LogException(e); }
             }
+            // cancelNative may have completed the operation synchronously (Complete → posted; Fail → removed already).
+            if (!IsPending(id, op)) return;
             int timeoutMs = NativeCancelTimeoutMs;
-            Task.Delay(timeoutMs).ContinueWith(delay =>
+            if (timeoutMs < 0) return; // Timeout.Infinite: wait for native forever
+            var timer = new CancellationTokenSource();
+            op.CancelTimer = timer;
+            Interlocked.Increment(ref _armedCancelTimers);
+            CancellationToken timerToken = timer.Token;
+            Task.Delay(timeoutMs, timerToken).ContinueWith(
+                _ => OnCancelTimeout(id, op, timerToken, timeoutMs),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        /// <summary>The cancel fallback timer fired (thread pool). Does nothing unless the operation is still pending.</summary>
+        void OnCancelTimeout(long id, Op op, CancellationToken timerToken, int timeoutMs)
+        {
+            if (timerToken.IsCancellationRequested || !IsPending(id, op)) return;
+            MainThread.Post(() =>
             {
-                MainThread.Post(() =>
-                {
-                    if (!_ops.TryGetValue(id, out Op late) || !ReferenceEquals(late, op) || !_ops.TryRemove(id, out _)) return;
-                    Debug.LogError("[Media] native operation " + id + " did not stop within " + timeoutMs + " ms of its cancel; continuing");
-                    op.Registration.Dispose();
-                    op.Tcs.TrySetCanceled(op.CancelToken);
-                });
-            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                if (timerToken.IsCancellationRequested || !IsPending(id, op) || !TryFinish(id, out _)) return;
+                Debug.LogError("[Media] native operation " + id + " did not stop within " + timeoutMs + " ms of its cancel; continuing");
+                op.Tcs.TrySetCanceled(op.CancelToken);
+            });
+        }
+
+        bool IsPending(long id, Op op)
+        {
+            return _ops.TryGetValue(id, out Op current) && ReferenceEquals(current, op);
+        }
+
+        /// <summary>
+        /// Removes a pending operation and releases what it holds (token registration, cancel fallback timer). Every path
+        /// that completes an operation's task goes through here; false if it already finished.
+        /// </summary>
+        bool TryFinish(long id, out Op op)
+        {
+            if (!_ops.TryRemove(id, out op)) return false;
+            op.Registration.Dispose();
+            StopCancelTimer(op);
+            return true;
+        }
+
+        void StopCancelTimer(Op op)
+        {
+            CancellationTokenSource timer = Interlocked.Exchange(ref op.CancelTimer, null);
+            if (timer == null) return;
+            timer.Cancel(); // cancels the pending Task.Delay: its OnlyOnRanToCompletion continuation never runs
+            timer.Dispose();
+            Interlocked.Decrement(ref _armedCancelTimers);
         }
 
         /// <summary>Fails an operation synchronously (e.g. the native start call threw).</summary>
         public void Fail(long id, Exception error)
         {
-            if (_ops.TryRemove(id, out Op op))
+            if (TryFinish(id, out Op op))
             {
-                op.Registration.Dispose();
                 op.Tcs.TrySetException(error);
             }
         }
@@ -181,8 +238,7 @@ namespace Ballverse.Media.Internal
         {
             MainThread.Post(() =>
             {
-                if (!_ops.TryRemove(id, out Op op)) return;
-                op.Registration.Dispose();
+                if (!TryFinish(id, out Op op)) return;
                 if (op.CancelRequested)
                 {
                     // Cancelled by C#: native has stopped now; whatever it produced is discarded by the caller.
@@ -231,9 +287,8 @@ namespace Ballverse.Media.Internal
                     RequestNativeCancel(pair.Key, pair.Value, CancellationToken.None);
                     continue;
                 }
-                if (_ops.TryRemove(pair.Key, out Op op))
+                if (TryFinish(pair.Key, out Op op))
                 {
-                    op.Registration.Dispose();
                     op.Tcs.TrySetCanceled();
                 }
             }

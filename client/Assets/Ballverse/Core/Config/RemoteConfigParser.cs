@@ -777,7 +777,7 @@ namespace Ballverse.Core.Config
                 ctx.Warning(RemoteConfigIssueKind.InvalidEntry, "rect " + where + " has non-positive size, ignored");
                 return null;
             }
-            if (NormalizedRect.IsValid((float)x, (float)y, (float)w, (float)h))
+            if (NormalizedRect.IsInsideExactly((float)x, (float)y, (float)w, (float)h))
             {
                 // Already inside the frame at float precision: keep exactly (writer → parser round trip is lossless).
                 return new NormalizedRect((float)x, (float)y, (float)w, (float)h);
@@ -804,10 +804,14 @@ namespace Ballverse.Core.Config
             return new NormalizedRect(fx, fy, fw, fh);
         }
 
-        /// <summary>Shrinks <paramref name="size"/> by float ulps until origin + size ≤ 1 (guards float rounding).</summary>
+        /// <summary>
+        /// Shrinks <paramref name="size"/> by float ulps until origin + size ≤ 1 (guards float rounding). The sum is formed in
+        /// double and rounded to float explicitly, so Mono (which may keep <c>origin + size</c> at higher precision) gives the
+        /// same result as CoreCLR; see <see cref="NormalizedRect.EdgeTolerance"/>.
+        /// </summary>
         static float FitSize(float origin, float size)
         {
-            for (int i = 0; i < 8 && size > 0f && origin + size > 1f; i++)
+            for (int i = 0; i < 8 && size > 0f && (float)((double)origin + size) > 1f; i++)
             {
                 size = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(size) - 1);
             }

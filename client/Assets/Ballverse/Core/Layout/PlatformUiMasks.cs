@@ -159,12 +159,15 @@ namespace Ballverse.Core.Layout
             foreach (FloatRect r in rects)
             {
                 if (!IsFinite(r.X) || !IsFinite(r.Y) || !IsFinite(r.Width) || !IsFinite(r.Height)) continue;
+                // Edges rounded to float explicitly: Mono may keep r.X + r.Width at higher precision (0.85f + 0.15f =
+                // 1.0000000298 instead of 1f), which made the bit-exact check below fail for the built-in defaults.
+                float right = (float)((double)r.X + r.Width), bottom = (float)((double)r.Y + r.Height);
                 float l = PixelMath.ClampF(r.X, 0f, 1f);
                 float t = PixelMath.ClampF(r.Y, 0f, 1f);
-                float rr = PixelMath.ClampF(r.X + r.Width, 0f, 1f);
-                float b = PixelMath.ClampF(r.Y + r.Height, 0f, 1f);
+                float rr = PixelMath.ClampF(right, 0f, 1f);
+                float b = PixelMath.ClampF(bottom, 0f, 1f);
                 if (!(rr > l && b > t)) continue;
-                bool inside = l == r.X && t == r.Y && rr == r.X + r.Width && b == r.Y + r.Height;
+                bool inside = l == r.X && t == r.Y && rr == right && b == bottom;
                 list.Add(inside ? r : FloatRect.FromEdges(l, t, rr, b)); // keep in-range rects bit-exact
             }
             return list.ToArray();

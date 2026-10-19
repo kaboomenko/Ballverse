@@ -1,6 +1,9 @@
 // Minimal runtime stand-ins for the Unity APIs used by the pure-C# parts of Ballverse.Media, so that the EditMode tests
 // also run under plain .NET (see Ballverse.Media.DotNetTests.csproj). Behaviour mirrors Unity where the tests depend on
 // it (JsonUtility: public fields only; NativeArray: view over unmanaged memory). Not part of the Unity project.
+// This file is also compiled by other .NET harnesses (Ballverse.Studio's xunit harness), so it must not depend on any test
+// framework: the NUnit-side LogAssert stand-in lives in LogAssertStandIn.cs (Media harness only) and plugs in through
+// Debug.Sink. StubsCompileCheck/ (built by run.sh) compiles this file without a test framework to keep it that way.
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -9,12 +12,39 @@ using Newtonsoft.Json.Serialization;
 
 namespace UnityEngine
 {
+    public enum LogType
+    {
+        Error,
+        Assert,
+        Warning,
+        Log,
+        Exception,
+    }
+
     public static class Debug
     {
-        public static void Log(object message) => Console.WriteLine("[Log] " + message);
-        public static void LogWarning(object message) => Console.WriteLine("[Warning] " + message);
-        public static void LogError(object message) => Console.WriteLine("[Error] " + message);
-        public static void LogException(Exception exception) => Console.WriteLine("[Exception] " + exception);
+        /// <summary>
+        /// Optional receiver of every log, from any thread (type, message; for exceptions "TypeName: Message"). Null unless a
+        /// harness installs one (the Media harness's LogAssert stand-in does, per test); then nothing is retained here.
+        /// </summary>
+        internal static Action<LogType, string> Sink
+        {
+            get => s_sink;
+            set => s_sink = value;
+        }
+
+        static volatile Action<LogType, string> s_sink;
+
+        public static void Log(object message) => Write(LogType.Log, "" + message, null);
+        public static void LogWarning(object message) => Write(LogType.Warning, "" + message, null);
+        public static void LogError(object message) => Write(LogType.Error, "" + message, null);
+        public static void LogException(Exception exception) => Write(LogType.Exception, exception.GetType().Name + ": " + exception.Message, exception);
+
+        static void Write(LogType type, string message, Exception exception)
+        {
+            Console.WriteLine("[" + type + "] " + (exception != null ? exception.ToString() : message));
+            s_sink?.Invoke(type, message);
+        }
     }
 
     public static class Application
