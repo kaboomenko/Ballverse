@@ -34,8 +34,12 @@ namespace Ballverse.Studio
     /// </summary>
     public sealed class ExportPipeline
     {
-        /// <summary>A frame that cannot be rendered for this long (its video frame never arrives) fails the export, ms.</summary>
-        public const long StallTimeoutMs = 15000;
+        /// <summary>
+        /// No progress of any kind (a frame rendered, a frame accepted by the encoder, a segment finished) for this long while the
+        /// export should be running counts as a stall (hung encoder queue, a GPU readback that never completes, a video frame that
+        /// never decodes): the segment is restarted once like an encoder error, then the export fails. ms.
+        /// </summary>
+        public const long DefaultStallTimeoutMs = 15000;
 
         readonly IMediaBridge _media;
         readonly UnityFileStore _exports;
@@ -63,6 +67,9 @@ namespace Ballverse.Studio
             _audio = audio ?? throw new ArgumentNullException(nameof(audio));
             _gate = gate;
         }
+
+        /// <summary>Stall timeout of the frame loop, ms (<see cref="DefaultStallTimeoutMs"/>).</summary>
+        public long StallTimeoutMs { get; set; } = DefaultStallTimeoutMs;
 
         /// <summary>The rewarded gate (the App may connect it after construction).</summary>
         public IExportGate Gate
@@ -194,6 +201,7 @@ namespace Ballverse.Studio
             IExportFrameRenderer renderer = null;
             IVideoWriter writer = null;
             StudioExportResult result;
+            bool keepJob = false;
             using (_host.KeepAwake("export"))
             {
                 try
@@ -204,35 +212,42 @@ namespace Ballverse.Studio
                     {
                         progress.SetPhase(ExportPhase.Audio, 0);
                         Report(job, progress, false, false);
-                        state.MixFrames = await _audio.RenderMixAsync(job, mixPath, ct);
+                        state.MixFrames = await RenderMixAsync(job, mixPath, ct);
                         state.MixReady = true;
                         SaveState(state, startMs, elapsedBefore);
                     }
                     progress.SetPhase(ExportPhase.Audio, 1);
 
-                    // 2. Frames.
+                    // 2. Frames (skipped when every segment is already on disk: a resumed join).
                     int usable = ExportResumeStore.CountUsableSegments(_exports, state);
                     if (usable < state.Segments.Count)
                     {
                         state.Segments.RemoveRange(usable, state.Segments.Count - usable);
                         SaveState(state, startMs, elapsedBefore);
                     }
-                    renderer = _rendererFactory(job);
-                    CurrentRenderer = renderer;
-                    await renderer.PrepareAsync(job, ct);
-                    progress.SetPhase(ExportPhase.Frames);
-                    progress.ResetRate(state.Segments.Count * state.SegmentFrames);
-                    writer = await FrameLoopAsync(job, renderer, progress, startMs, elapsedBefore, ct);
-                    renderer.Dispose();
-                    renderer = null;
-                    CurrentRenderer = null;
+                    if (!new ExportFrameFlow(job.FrameCount, state.SegmentFrames, state.Segments.Count).IsDone)
+                    {
+                        renderer = _rendererFactory(job);
+                        CurrentRenderer = renderer;
+                        await renderer.PrepareAsync(job, ct);
+                        progress.SetPhase(ExportPhase.Frames);
+                        progress.ResetRate(state.Segments.Count * state.SegmentFrames);
+                        writer = await FrameLoopAsync(job, renderer, progress, startMs, elapsedBefore, ct);
+                        renderer.Dispose();
+                        renderer = null;
+                        CurrentRenderer = null;
+                    }
 
-                    // 3. Join, verify, place, save.
+                    // 3. Join, verify, place, save. From here on every frame is encoded: a failed join keeps the job.
                     progress.SetPhase(ExportPhase.Finalize, 0);
                     Report(job, progress, false, false);
-                    result = await FinalizeAsync(job, mixPath, startMs, elapsedBefore, ct);
-                    progress.SetPhase(ExportPhase.Done);
-                    Report(job, progress, false, false);
+                    result = await JoinWithRetryAsync(job, mixPath, startMs, elapsedBefore, ct);
+                    keepJob = result.Resumable;
+                    if (result.Succeeded)
+                    {
+                        progress.SetPhase(ExportPhase.Done);
+                        Report(job, progress, false, false);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -254,6 +269,12 @@ namespace Ballverse.Studio
                 {
                     result = StudioExportResult.Failure(ExportErrorCode.Io, e.Message, state.ProjectId, jobId);
                 }
+                catch (Exception e) when (!(e is OutOfMemoryException))
+                {
+                    // StartAsync / ResumeAsync never throw for export failures: anything unexpected still cleans up and tells the gate.
+                    UnityEngine.Debug.LogException(e);
+                    result = StudioExportResult.Failure(ExportErrorCode.Unknown, e.GetType().Name + ": " + e.Message, state.ProjectId, jobId);
+                }
                 finally
                 {
                     writer?.Dispose(); // an unfinished writer deletes its partial segment
@@ -264,7 +285,9 @@ namespace Ballverse.Studio
             result.Resolution = state.Resolution;
             result.Fps = state.Fps;
             if (result.ElapsedMs == 0) result.ElapsedMs = elapsedBefore + Math.Max(0, _host.NowMs - startMs);
-            if (!result.Succeeded) TryDeleteJob(jobId); // spec §3.8: temporary files go immediately after a cancel or failure
+            // Spec §3.8: temporary files go immediately after a cancel or failure — except a finished-but-unjoined job, which
+            // stays resumable (spec §3.8 background row: the export continues when the app returns).
+            if (!result.Succeeded && !keepJob) TryDeleteJob(jobId);
             try
             {
                 _gate?.OnExportFinished(state.ProjectId, result);
@@ -274,6 +297,91 @@ namespace Ballverse.Studio
                 UnityEngine.Debug.LogException(e);
             }
             return result;
+        }
+
+        /// <summary>The audio phase: failures of the replay read, the user audio decode or the mix map to export codes.</summary>
+        async Task<long> RenderMixAsync(ExportJob job, string mixPath, CancellationToken ct)
+        {
+            try
+            {
+                return await _audio.RenderMixAsync(job, mixPath, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (ExportFailureException)
+            {
+                throw;
+            }
+            catch (IOException e) when (ExportErrors.IsDiskFull(e))
+            {
+                throw new ExportFailureException(ExportErrorCode.InsufficientSpace, "audio mix: " + e.Message, e);
+            }
+            catch (InvalidDataException e)
+            {
+                // A corrupt or truncated clip.bvr / clip.bvs.
+                throw new ExportFailureException(ExportErrorCode.ClipDataMissing, "clip data cannot be read for the sound: " + e.Message, e);
+            }
+            catch (EndOfStreamException e)
+            {
+                throw new ExportFailureException(ExportErrorCode.ClipDataMissing, "clip data truncated: " + e.Message, e);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                throw new ExportFailureException(ExportErrorCode.AudioFailed, "audio mix failed: " + e.GetType().Name + ": " + e.Message, e);
+            }
+        }
+
+        /// <summary>
+        /// The final join (spec §3.8): on a muxer, timeout or file error — typically iOS suspending the app mid-join — it waits
+        /// until the app is in the foreground and retries once; if that fails too, the job (segments + mix) is kept and the result
+        /// is <see cref="StudioExportResult.Resumable"/>.
+        /// </summary>
+        async Task<StudioExportResult> JoinWithRetryAsync(ExportJob job, string mixPath, long startMs, long elapsedBefore, CancellationToken ct)
+        {
+            ExportResumeState state = job.State;
+            for (int attempt = 0; ; attempt++)
+            {
+                int pausesBefore = _host.PauseCount;
+                Exception failure;
+                try
+                {
+                    return await FinalizeAsync(job, mixPath, startMs, elapsedBefore, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (MediaException e) when (IsResumableJoinError(e.Code))
+                {
+                    failure = e;
+                }
+                catch (IOException e) when (!ExportErrors.IsDiskFull(e))
+                {
+                    failure = e;
+                }
+                bool interrupted = _host.IsPaused || _host.PauseCount != pausesBefore;
+                UnityEngine.Debug.LogWarning("[Studio] Join failed (attempt " + (attempt + 1) + (interrupted ? ", app was paused" : "") + "): " + failure.Message);
+                if (attempt >= 1 || ct.IsCancellationRequested)
+                {
+                    ExportErrorCode code = failure is MediaException m ? ExportErrors.FromMedia(m.Code) : ExportErrorCode.Io;
+                    StudioExportResult kept = StudioExportResult.Failure(code, "join failed, export can be resumed: " + failure.Message, state.ProjectId, state.JobId);
+                    kept.Resumable = true;
+                    return kept;
+                }
+                while (_host.IsPaused)
+                {
+                    await _host.NextFrame();
+                    ct.ThrowIfCancellationRequested();
+                }
+            }
+        }
+
+        static bool IsResumableJoinError(MediaErrorCode code)
+        {
+            return code == MediaErrorCode.MuxerFailed || code == MediaErrorCode.Timeout || code == MediaErrorCode.Io || code == MediaErrorCode.Unknown
+                || code == MediaErrorCode.EncoderFailed || code == MediaErrorCode.Busy;
         }
 
         /// <summary>Runs the frame loop until all segments are finished. Returns null (no open writer) on success.</summary>
@@ -286,7 +394,7 @@ namespace Ballverse.Studio
             int failedAttempts = 0;
             int pausesSeen = _host.PauseCount;
             long resumeAtMs = 0;
-            long stallSince = -1;
+            long lastProgressMs = _host.NowMs;
             double avgFrameMs = 0;
             int attemptSegment = -1;
             int attempt = 0;
@@ -310,13 +418,14 @@ namespace Ballverse.Studio
                             ct.ThrowIfCancellationRequested();
                         }
                         pausesSeen = _host.PauseCount;
-                        stallSince = -1;
+                        lastProgressMs = _host.NowMs;
                         continue;
                     }
                     if (_host.NowMs < resumeAtMs)
                     {
                         Report(job, progress, throttled, false);
                         await _host.NextFrame();
+                        lastProgressMs = _host.NowMs; // a thermal pause is not a stall
                         continue;
                     }
                     try
@@ -337,12 +446,13 @@ namespace Ballverse.Studio
                                 Directory.CreateDirectory(Path.GetDirectoryName(segPath));
                                 writer = _media.OpenWriter(segPath, VideoWriterOptions.ForSegment(job.Settings));
                             }
-                            if (writer != null) Drain(job, renderer, writer, flow);
+                            if (writer != null && Drain(job, renderer, writer, flow) > 0) lastProgressMs = _host.NowMs;
                             if (flow.SegmentComplete)
                             {
                                 IVideoWriter finishing = writer;
                                 writer = null;
                                 VideoWriterResult segment = await _media.FinalizeAsync(finishing, ct);
+                                lastProgressMs = _host.NowMs;
                                 int expected = flow.SegmentEnd - flow.SegmentStart;
                                 if (segment.FrameCount != expected)
                                     throw new MediaException(MediaErrorCode.EncoderFailed, "segment " + flow.Segment + " has " + segment.FrameCount + " frames, expected " + expected);
@@ -372,23 +482,29 @@ namespace Ballverse.Studio
                             double cost = Math.Max(0, _host.NowMs - t0);
                             avgFrameMs = avgFrameMs <= 0 ? cost : avgFrameMs + (cost - avgFrameMs) * 0.2;
                         }
-                        if (rendered || flow.InFlight > 0) stallSince = -1;
-                        else if (!flow.IsDone && _host.NowMs >= resumeAtMs)
+                        if (rendered) lastProgressMs = _host.NowMs;
+                        else if (!flow.IsDone && _host.NowMs - lastProgressMs > StallTimeoutMs)
                         {
-                            if (stallSince < 0) stallSince = _host.NowMs;
-                            else if (_host.NowMs - stallSince > StallTimeoutMs)
-                                throw new ExportFailureException(ExportErrorCode.Timeout, "frame " + flow.NextRender + " could not be rendered (video frame not decoded)");
+                            // Frames in flight that never drain: the encoder queue or the GPU readback hangs. None in flight:
+                            // the next frame cannot be rendered (its video frame is never decoded).
+                            if (flow.InFlight > 0)
+                                throw new ExportStallException(ExportErrorCode.EncoderFailed, "no frame accepted for " + StallTimeoutMs + " ms (encoder or readback stalled) at frame " + flow.NextAppend);
+                            throw new ExportStallException(ExportErrorCode.Timeout, "frame " + flow.NextRender + " could not be rendered for " + StallTimeoutMs + " ms (video frame not decoded)");
                         }
                     }
-                    catch (MediaException e) when (ExportErrors.IsRetryableEncoderError(e))
+                    catch (Exception e) when (e is ExportStallException || (e is MediaException me && ExportErrors.IsRetryableEncoderError(me)))
                     {
                         failedAttempts++;
                         DisposeWriter(ref writer);
                         renderer.DiscardInFlight();
                         flow.RestartSegment();
                         progress.ResetRate(flow.FramesAppendedTotal);
+                        lastProgressMs = _host.NowMs;
                         if (!ExportPolicy.CanRetrySegment(failedAttempts))
-                            throw new ExportFailureException(ExportErrorCode.EncoderFailed, "encoder failed twice on segment " + flow.Segment + ": " + e.Message, e);
+                        {
+                            ExportErrorCode code = e is ExportStallException stall ? stall.Code : ExportErrorCode.EncoderFailed;
+                            throw new ExportFailureException(code, "segment " + flow.Segment + " failed twice: " + e.Message, e);
+                        }
                         UnityEngine.Debug.LogWarning("[Studio] Encoder error on segment " + flow.Segment + ", retrying once: " + e.Message);
                     }
                     progress.OnFrames(flow.FramesAppendedTotal, _host.NowMs);
@@ -404,9 +520,10 @@ namespace Ballverse.Studio
             }
         }
 
-        /// <summary>Hands finished readbacks to the writer in frame order until it pushes back.</summary>
-        static void Drain(ExportJob job, IExportFrameRenderer renderer, IVideoWriter writer, ExportFrameFlow flow)
+        /// <summary>Hands finished readbacks to the writer in frame order until it pushes back; returns the frames appended.</summary>
+        static int Drain(ExportJob job, IExportFrameRenderer renderer, IVideoWriter writer, ExportFrameFlow flow)
         {
+            int appended = 0;
             long segmentStartPts = job.Plan.FramePtsUs(flow.SegmentStart);
             while (flow.InFlight > 0 && renderer.TryPeekCompleted(out NativeArray<byte> rgba, out int index))
             {
@@ -415,7 +532,9 @@ namespace Ballverse.Studio
                 if (!writer.TryAppendVideoFrame(rgba, pts)) break;
                 renderer.ReleaseCompleted();
                 flow.OnAppended();
+                appended++;
             }
+            return appended;
         }
 
         async Task<StudioExportResult> FinalizeAsync(ExportJob job, string mixPath, long startMs, long elapsedBefore, CancellationToken ct)
@@ -472,11 +591,13 @@ namespace Ballverse.Studio
                 Progress?.Invoke(progressPhase);
                 try
                 {
-                    GallerySaveResult g = await _media.SaveToGalleryAsync(destination, StudioFiles.GalleryAlbum, ct);
+                    // The file is verified and placed: a cancel now would only lose it from the history (an accepted gallery save
+                    // cannot be undone anyway), so the save runs to its end and the export counts as done.
+                    GallerySaveResult g = await _media.SaveToGalleryAsync(destination, StudioFiles.GalleryAlbum, CancellationToken.None);
                     result.Gallery = g.IsSaved ? ExportGalleryStatus.Saved : g.Status == GallerySaveStatus.PermissionDenied ? ExportGalleryStatus.PermissionDenied : ExportGalleryStatus.Failed;
                     result.GalleryLocation = g.Location;
                 }
-                catch (MediaException e)
+                catch (Exception e) when (!(e is OutOfMemoryException))
                 {
                     // The file exists and can still be shared: a gallery failure does not fail the export.
                     result.Gallery = ExportGalleryStatus.Failed;
@@ -510,6 +631,18 @@ namespace Ballverse.Studio
         void Report(ExportJob job, ExportProgressModel p, bool throttled, bool paused)
         {
             Progress?.Invoke(new ExportProgressInfo(job.State.JobId, p.Phase, p.Fraction, p.RemainingMs, p.FramesDone, p.FrameCount, throttled, paused));
+        }
+
+        /// <summary>The frame loop made no progress for <see cref="StallTimeoutMs"/>.</summary>
+        sealed class ExportStallException : Exception
+        {
+            public ExportStallException(ExportErrorCode code, string message)
+                : base(message)
+            {
+                Code = code;
+            }
+
+            public ExportErrorCode Code { get; }
         }
 
         static void DisposeWriter(ref IVideoWriter writer)

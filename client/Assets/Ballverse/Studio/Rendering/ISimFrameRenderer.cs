@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Ballverse.Core.Layout;
 using Ballverse.Core.RenderStream;
 using UnityEngine;
 
@@ -50,12 +51,18 @@ namespace Ballverse.Studio
     public readonly struct SimFrameTime
     {
         public SimFrameTime(int tick, bool frozen, int iteration, int discontinuity, long outputUs)
+            : this(tick, frozen, iteration, discontinuity, outputUs, new FloatRect(0f, 0f, 1f, 1f))
+        {
+        }
+
+        public SimFrameTime(int tick, bool frozen, int iteration, int discontinuity, long outputUs, FloatRect viewport)
         {
             Tick = tick;
             Frozen = frozen;
             Iteration = iteration;
             Discontinuity = discontinuity;
             OutputUs = outputUs;
+            Viewport = viewport;
         }
 
         /// <summary>Render-stream tick of the frame.</summary>
@@ -68,6 +75,11 @@ namespace Ballverse.Studio
         public int Discontinuity { get; }
         /// <summary>Output time of the frame, µs.</summary>
         public long OutputUs { get; }
+        /// <summary>
+        /// Window of the 9:16 arena picture to draw into the whole target, normalized with a top-left origin (y down):
+        /// (0, 0, 1, 1) = the whole arena. Other values only reach renderers whose <see cref="ISimFrameRenderer.SupportsViewport"/> is true.
+        /// </summary>
+        public FloatRect Viewport { get; }
     }
 
     /// <summary>
@@ -76,7 +88,10 @@ namespace Ballverse.Studio
     /// export call the same instance kind, so both draw identical simulation frames (spec §7.5 principle).
     /// <para>Call order per clip: <see cref="BeginClip"/> → for each frame <see cref="SetFrameTime"/> then <see cref="Render"/> →
     /// <see cref="EndClip"/>. Main thread only. <see cref="Render"/> draws the whole 9:16 arena into <c>target</c> (an sRGB
-    /// RGBA8 render texture sized by <c>SimSlotSizing</c>); the studio crops / letterboxes it into the slot.</para>
+    /// RGBA8 render texture sized by <c>SimSlotSizing</c>); the studio crops / letterboxes it into the slot. A renderer that
+    /// can draw a window of the arena (<see cref="SupportsViewport"/>) gets <see cref="SimFrameTime.Viewport"/> and a target of
+    /// the slot's resolution instead (spec §7.5 step a): pan and zoom then cost no extra pixels. Without it the target is sized
+    /// for zoom 1 and zooming in magnifies it.</para>
     /// <para>Determinism contract: the picture of a tick must not depend on which frames were drawn before it. The export
     /// redraws a segment from its first frame after a pause or an encoder retry, and a resumed export starts mid-clip; history
     /// effects (trails, event-seeded particles) must therefore be rebuilt from the stream for the shown tick — e.g. Ballverse.Render's
@@ -86,6 +101,12 @@ namespace Ballverse.Studio
     /// </summary>
     public interface ISimFrameRenderer
     {
+        /// <summary>
+        /// True when <see cref="Render"/> honours <see cref="SimFrameTime.Viewport"/> (draws that arena window stretched over the
+        /// whole target). Constant for an instance.
+        /// </summary>
+        bool SupportsViewport { get; }
+
         /// <summary>A clip is opened for preview or export (one clip per renderer instance at a time).</summary>
         void BeginClip(SimClipInfo clip);
 

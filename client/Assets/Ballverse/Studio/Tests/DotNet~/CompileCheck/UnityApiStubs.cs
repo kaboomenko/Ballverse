@@ -136,6 +136,7 @@ namespace UnityEngine
         public static void Destroy(Object obj) => throw null;
         public static void DestroyImmediate(Object obj) => throw null;
         public static void DontDestroyOnLoad(Object target) => throw null;
+        public static T FindAnyObjectByType<T>() where T : Object => throw null;
         public static implicit operator bool(Object exists) => throw null;
         public static bool operator ==(Object x, Object y) => throw null;
         public static bool operator !=(Object x, Object y) => throw null;
@@ -191,6 +192,7 @@ namespace UnityEngine
     public static class ImageConversion
     {
         public static byte[] EncodeToPNG(this Texture2D tex) => throw null;
+        public static bool LoadImage(this Texture2D tex, byte[] data, bool markNonReadable) => throw null;
     }
 
     public struct RenderTextureDescriptor
@@ -250,6 +252,12 @@ namespace UnityEngine
     {
         public static T Load<T>(string path) where T : Object => throw null;
         public static T GetBuiltinResource<T>(string path) where T : Object => throw null;
+        public static void UnloadAsset(Object assetToUnload) => throw null;
+    }
+
+    public class TextAsset : Object
+    {
+        public byte[] bytes => throw null;
     }
 
     public struct CharacterInfo
@@ -315,6 +323,10 @@ namespace UnityEngine
         public bool isPlaying => throw null;
         public void Play() => throw null;
         public void Stop() => throw null;
+    }
+
+    public sealed class AudioListener : Behaviour
+    {
     }
 
     public sealed class AudioSettings
@@ -391,6 +403,7 @@ namespace Unity.Collections
         public static void Copy(NativeArray<T> src, T[] dst, int length) => throw null;
         public static void Copy(NativeArray<T> src, int srcIndex, T[] dst, int dstIndex, int length) => throw null;
         public static void Copy(T[] src, int srcIndex, NativeArray<T> dst, int dstIndex, int length) => throw null;
+        public static void Copy(NativeArray<T> src, int srcIndex, NativeArray<T> dst, int dstIndex, int length) => throw null;
     }
 }
 

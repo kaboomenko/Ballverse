@@ -151,6 +151,11 @@ namespace Ballverse.Core.Studio
         public string GalleryLocation { get; set; }
         /// <summary>True when the file came from the fake media backend (editor): not a playable MP4.</summary>
         public bool IsSynthetic { get; set; }
+        /// <summary>
+        /// The job folder (finished segments, audio mix, resume state) was kept although this run failed — only the final join is
+        /// missing (e.g. the app was suspended while muxing): <c>ResumeAsync(JobId)</c> finishes it without a new ad.
+        /// </summary>
+        public bool Resumable { get; set; }
         /// <summary>Spec §3.8: after an encoder failure the UI offers "Экспорт в 720p/30".</summary>
         public bool SuggestLowerSettings => Error == ExportErrorCode.EncoderFailed;
 

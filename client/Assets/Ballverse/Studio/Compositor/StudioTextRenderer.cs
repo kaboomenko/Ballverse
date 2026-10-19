@@ -28,8 +28,9 @@ namespace Ballverse.Studio
     /// <see cref="TextBlockLayout"/> (the same boxes feed the watermark rule) and draws it on any canvas as glyph quads from the
     /// font's dynamic atlas, scaled by canvasWidth / 1080 — so preview and export show the same text, only sharper in the export
     /// (glyphs are rasterized at the drawn size). Stroke = the glyphs drawn around the outline radius, shadow = an offset copy,
-    /// plate = rounded rect (solid dark or glass). Colour emoji are not drawn (the dynamic font atlas has no colour glyphs; see
-    /// the Studio README). Main thread.
+    /// plate = rounded rect (solid dark or glass). Colour emoji (spec §3.5) come from the bundled Noto atlas
+    /// (<see cref="StudioEmojiAtlas"/>): Core layout places them as glyph-sized squares, they get the shadow and the stroke as a
+    /// silhouette and keep their own colours. Main thread.
     /// </summary>
     public sealed class StudioTextRenderer : IDisposable
     {
@@ -47,6 +48,8 @@ namespace Ballverse.Studio
         int[] _indices = new int[384];
         int _meshCursor;
         bool _atlasRebuilt;
+        StudioEmojiAtlas _emoji;
+        bool _emojiLoaded;
 
         sealed class CachedBlock
         {
@@ -67,6 +70,20 @@ namespace Ballverse.Studio
 
         public Font FontOf(TextLayer layer) => _fonts.GetFont(layer?.Font);
 
+        /// <summary>The bundled emoji atlas (loaded on first use), or null when unavailable.</summary>
+        public StudioEmojiAtlas Emoji
+        {
+            get
+            {
+                if (!_emojiLoaded)
+                {
+                    _emojiLoaded = true;
+                    _emoji = StudioEmojiAtlas.Load();
+                }
+                return _emoji;
+            }
+        }
+
         /// <summary>Forget cached layouts (the project changed).</summary>
         public void ClearCache()
         {
@@ -83,13 +100,13 @@ namespace Ballverse.Studio
             TextBlock block;
             if (font == null)
             {
-                block = TextBlockLayout.Layout(layer, string.Empty, new EmptyGlyphs());
+                block = TextBlockLayout.Layout(layer, text, new EmptyGlyphs(), Emoji?.Set);
             }
             else
             {
                 FontGlyphSource source = _sources.Get(font, Mathf.Clamp(layer.Size, ProjectLimits.MinTextSize, ProjectLimits.MaxTextSize));
                 source.Prepare(text);
-                block = TextBlockLayout.Layout(layer, text, source);
+                block = TextBlockLayout.Layout(layer, text, source, Emoji?.Set);
             }
             _blocks[layer] = new CachedBlock { Text = text, Block = block };
             return block;
@@ -169,16 +186,20 @@ namespace Ballverse.Studio
                 StudioColor pc = block.Plate == TextPlate.Glass ? GlassPlateColor : SolidPlateColor;
                 ctx.DrawShape(cmd, plate, block.PlateRadius * anim * scale, pc.WithAlpha(pc.A * state.Alpha), 0f, block.Plate == TextPlate.Glass);
             }
-            if (draw.Font == null || block.Glyphs.Count == 0) return;
-            Texture atlas = draw.Font.material != null ? draw.Font.material.mainTexture : null;
-            if (atlas == null) return;
+            if (block.Glyphs.Count == 0) return;
+            Texture atlas = draw.Font != null && draw.Font.material != null ? draw.Font.material.mainTexture : null;
             int size = RenderSize(block.FontSize, scale, anim);
-            Mesh mesh = BuildMesh(block, draw.Font, size, center, anim, offset, scale, state.VisibleCharacters);
-            if (mesh == null) return;
+            Mesh mesh = atlas != null ? BuildMesh(block, draw.Font, size, center, anim, offset, scale, state.VisibleCharacters) : null;
+            StudioEmojiAtlas emoji = Emoji;
+            Mesh emojiMesh = emoji != null ? BuildEmojiMesh(block, emoji, center, anim, offset, scale, state.VisibleCharacters) : null;
+            Texture emojiAtlas = emoji?.Texture;
+            if (mesh == null && emojiMesh == null) return;
             if (block.Shadow)
             {
                 Vector2 so = new Vector2(block.ShadowOffset.X, block.ShadowOffset.Y) * (anim * scale);
-                ctx.DrawGlyphs(cmd, mesh, atlas, so, ShadowColor.WithAlpha(ShadowColor.A * state.Alpha));
+                StudioColor shadow = ShadowColor.WithAlpha(ShadowColor.A * state.Alpha);
+                ctx.DrawGlyphs(cmd, mesh, atlas, so, shadow);
+                ctx.DrawGlyphs(cmd, emojiMesh, emojiAtlas, so, shadow);
             }
             float stroke = block.StrokePx * anim * scale;
             if (stroke > 0.25f)
@@ -191,11 +212,14 @@ namespace Ballverse.Studio
                     for (int k = 0; k < dirs; k++)
                     {
                         float a = k * (2f * Mathf.PI / dirs);
-                        ctx.DrawGlyphs(cmd, mesh, atlas, new Vector2(Mathf.Cos(a) * r, Mathf.Sin(a) * r), sc);
+                        var o = new Vector2(Mathf.Cos(a) * r, Mathf.Sin(a) * r);
+                        ctx.DrawGlyphs(cmd, mesh, atlas, o, sc);
+                        ctx.DrawGlyphs(cmd, emojiMesh, emojiAtlas, o, sc); // silhouette outline
                     }
                 }
             }
             ctx.DrawGlyphs(cmd, mesh, atlas, Vector2.zero, block.Fill.WithAlpha(block.Fill.A * state.Alpha));
+            ctx.DrawGlyphs(cmd, emojiMesh, emojiAtlas, Vector2.zero, StudioColor.White.WithAlpha(state.Alpha), colourGlyphs: true);
         }
 
         /// <summary>
@@ -259,14 +283,34 @@ namespace Ballverse.Studio
             {
                 PlacedGlyph g = block.Glyphs[i];
                 if (visibleChars >= 0 && g.CharIndex >= visibleChars) break;
-                if (!font.GetCharacterInfo(g.Character, out CharacterInfo ci, size, FontGlyphSource.Style)) continue;
+                if (g.IsEmoji || !font.GetCharacterInfo(g.Character, out CharacterInfo ci, size, FontGlyphSource.Style)) continue;
                 Rect r = Transform(g.Rect, center, anim, offset, scale);
                 AddQuad(ref n, r, ci);
             }
             return Upload(n);
         }
 
+        Mesh BuildEmojiMesh(TextBlock block, StudioEmojiAtlas emoji, Vector2 center, float anim, Vector2 offset, float scale, int visibleChars)
+        {
+            EnsureCapacity(block.Glyphs.Count * 4, block.Glyphs.Count * 6);
+            int n = 0;
+            for (int i = 0; i < block.Glyphs.Count; i++)
+            {
+                PlacedGlyph g = block.Glyphs[i];
+                if (visibleChars >= 0 && g.CharIndex >= visibleChars) break;
+                if (!g.IsEmoji) continue;
+                emoji.GetUv(g.EmojiId, out Vector2 tl, out Vector2 tr, out Vector2 br, out Vector2 bl);
+                AddQuad(ref n, Transform(g.Rect, center, anim, offset, scale), tl, tr, br, bl);
+            }
+            return Upload(n);
+        }
+
         void AddQuad(ref int n, Rect r, CharacterInfo ci)
+        {
+            AddQuad(ref n, r, ci.uvTopLeft, ci.uvTopRight, ci.uvBottomRight, ci.uvBottomLeft);
+        }
+
+        void AddQuad(ref int n, Rect r, Vector2 uvTopLeft, Vector2 uvTopRight, Vector2 uvBottomRight, Vector2 uvBottomLeft)
         {
             int v = n * 4;
             _positions[v] = new Vector3(r.xMin, r.yMin, 0f);
@@ -274,10 +318,10 @@ namespace Ballverse.Studio
             _positions[v + 2] = new Vector3(r.xMax, r.yMax, 0f);
             _positions[v + 3] = new Vector3(r.xMin, r.yMax, 0f);
             // Canvas y grows downward: the glyph's top edge is yMin.
-            _uvs[v] = ci.uvTopLeft;
-            _uvs[v + 1] = ci.uvTopRight;
-            _uvs[v + 2] = ci.uvBottomRight;
-            _uvs[v + 3] = ci.uvBottomLeft;
+            _uvs[v] = uvTopLeft;
+            _uvs[v + 1] = uvTopRight;
+            _uvs[v + 2] = uvBottomRight;
+            _uvs[v + 3] = uvBottomLeft;
             int t = n * 6;
             _indices[t] = v;
             _indices[t + 1] = v + 1;
@@ -320,6 +364,8 @@ namespace Ballverse.Studio
         public void Dispose()
         {
             Font.textureRebuilt -= OnFontTextureRebuilt;
+            _emoji?.Dispose();
+            _emoji = null;
             foreach (Mesh m in _meshes)
             {
                 StudioUnity.Destroy(m);

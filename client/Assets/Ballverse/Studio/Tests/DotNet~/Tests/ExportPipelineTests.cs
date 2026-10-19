@@ -245,6 +245,7 @@ namespace Ballverse.Studio.Tests
     public sealed class ExportPipelineTests : IDisposable
     {
         const int ClipTicks = 150; // 2.5 s → 75 frames at 30 fps → segments of 60 + 15
+        internal const long HarnessStallTimeoutMs = 24L * 3600 * 1000;
         readonly TempFolder _dir = new TempFolder();
         readonly MainThreadPump _pump = new MainThreadPump();
         readonly StudioStorage _storage;
@@ -279,7 +280,12 @@ namespace Ballverse.Studio.Tests
                     _renderers.Add(r);
                     return r;
                 },
-                new StudioExportAudio(mixer, _ => projectDir), _gate);
+                new StudioExportAudio(mixer, _ => projectDir), _gate)
+            {
+                // Harness time is simulated (16 ms per pumped frame, thousands of frames per real second) while the fake
+                // encoder runs on real threads: its push-back must not look like a stall. Stalls: ExportFailureTests.
+                StallTimeoutMs = HarnessStallTimeoutMs,
+            };
         }
 
         ExportJobRequest Request(bool keepInProject = false, string jobId = "job1")

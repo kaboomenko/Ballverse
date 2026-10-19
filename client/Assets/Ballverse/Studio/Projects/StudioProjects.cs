@@ -74,6 +74,14 @@ namespace Ballverse.Studio
             return issues;
         }
 
+        /// <summary>Applies a non-undoable metadata change (see <see cref="ProjectEditSession.ApplyMetadata"/>).</summary>
+        public void ApplyMetadata(Action<ProjectDocument> change)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(StudioProjectSession));
+            _edit.ApplyMetadata(change);
+            Changed?.Invoke(_edit.Document);
+        }
+
         public bool Undo()
         {
             if (!_edit.Undo()) return false;
@@ -177,22 +185,48 @@ namespace Ballverse.Studio
 
         public ProjectListResult List() => _library.List();
 
-        public ProjectDocument CreateFromRun(string runId, string name = null) => _library.CreateFromRun(runId, name);
+        /// <summary>Whether "В видео" can be offered for a recent run (its render stream may have been evicted, spec §3.1).</summary>
+        public ClipReadiness RunReadiness(string runId) => _services.StreamRepair.Readiness(_library.Clips.GetRun(runId));
 
-        public ProjectDocument CreateFromClip(string clipId, string name = null) => _library.CreateFromClip(clipId, name);
+        /// <summary>Whether "В видео" can be offered for a saved clip.</summary>
+        public ClipReadiness SavedClipReadiness(string clipId) => _services.StreamRepair.Readiness(_library.Clips.GetClip(clipId));
+
+        /// <summary>
+        /// "В видео" from a recent run. A run whose render stream was evicted is accepted when it can be rebuilt (the preview
+        /// rebuilds it on open); otherwise <see cref="RenderStreamUnavailableException"/> instead of a project that cannot be drawn.
+        /// </summary>
+        public ProjectDocument CreateFromRun(string runId, string name = null)
+        {
+            RequireDrawable(RunReadiness(runId), "run " + runId);
+            return _library.CreateFromRun(runId, name);
+        }
+
+        /// <summary>"В видео" from a saved clip (same rule as <see cref="CreateFromRun"/>).</summary>
+        public ProjectDocument CreateFromClip(string clipId, string name = null)
+        {
+            RequireDrawable(SavedClipReadiness(clipId), "clip " + clipId);
+            return _library.CreateFromClip(clipId, name);
+        }
+
+        static void RequireDrawable(ClipReadiness readiness, string what)
+        {
+            if (readiness == ClipReadiness.Missing) throw new InvalidOperationException("No such " + what);
+            if (readiness == ClipReadiness.Unavailable)
+                throw new RenderStreamUnavailableException("The " + what + " has no render stream and it cannot be rebuilt from its replay");
+        }
 
         /// <summary>Absolute folder of a project.</summary>
         public string ProjectDirectory(string projectId) => _services.Storage.Library.FullPath(_library.Repository.ProjectDir(projectId));
 
         /// <summary>
-        /// Opens a project for editing; returns the same session while it is open. Null when it cannot be loaded (see
-        /// <paramref name="result"/>: too new, unavailable, corrupt).
+        /// Opens a project for editing; returns the same session while it is open (then <paramref name="result"/> describes that
+        /// session's load). Null when it cannot be loaded (see <paramref name="result"/>: too new, unavailable, corrupt).
         /// </summary>
         public StudioProjectSession Open(string projectId, out LoadResult result)
         {
             if (_open.TryGetValue(projectId, out StudioProjectSession existing))
             {
-                result = null;
+                result = new LoadResult(LoadStatus.Ok, existing.Document, existing.LoadedFrom, existing.Document.SchemaVersion, existing.LoadIssues);
                 return existing;
             }
             result = _library.Open(projectId);
@@ -249,7 +283,8 @@ namespace Ballverse.Studio
             StudioProjectSession open = GetOpen(projectId);
             if (open == null) return _library.RecordExport(projectId, result);
             string at = _library.Clock.NowIso();
-            open.Apply(d => ExportHistory.Add(d, new ExportRecord { At = at, Res = result.Resolution, Fps = result.Fps, Ms = Math.Max(0, result.ElapsedMs), File = result.ProjectFile }));
+            // Not an undoable edit: Undo after an export must not drop the history entry ("Экспортировать снова", spec §3.9).
+            open.ApplyMetadata(d => ExportHistory.Add(d, new ExportRecord { At = at, Res = result.Resolution, Fps = result.Fps, Ms = Math.Max(0, result.ElapsedMs), File = result.ProjectFile }));
             open.SaveNow();
             return open.Document;
         }
@@ -262,6 +297,7 @@ namespace Ballverse.Studio
         {
             if (session == null) throw new ArgumentNullException(nameof(session));
             string mediaDir = Path.Combine(session.Directory, ProjectPaths.MediaDir);
+            long freeBefore = SafeFreeSpace();
             PickResult pick = await _services.Media.PickVideoAsync(mediaDir, progress, ct);
             if (pick.Status != PickStatus.Picked) return new UserVideoImport { Status = pick.Status };
             string relative = ProjectPaths.MediaDir + "/" + Path.GetFileName(pick.Path);
@@ -289,13 +325,13 @@ namespace Ballverse.Studio
                     // an unreferenced file only costs space; the storage screen shows it under the project
                 }
             }
-            long free = SafeFreeSpace();
+            long freeAfter = SafeFreeSpace();
             return new UserVideoImport
             {
                 Status = PickStatus.Picked,
                 Info = pick.Info,
                 File = relative,
-                LargeFileWarning = free > 0 && pick.Info.FileSizeBytes > free / 4,
+                LargeFileWarning = ImportPolicy.IsLargeFile(pick.Info.FileSizeBytes, freeBefore, freeAfter),
                 IsHdr = pick.Info.IsHdr,
                 Trimmed = pick.Info.DurationUs > ProjectLimits.MaxDurationUs,
             };

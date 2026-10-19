@@ -49,13 +49,21 @@ namespace Ballverse.Studio
     /// media bridge (to a PCM file, cached per video + trim), music from <see cref="IStudioSoundProvider"/>, mixed and mastered by
     /// Core <see cref="StudioMixBuilder"/> on a worker thread (−14 LUFS, −1 dBTP). Preview plays the buffer, export writes it to
     /// the job's PCM file — the same samples. Start calls on the main thread; the heavy part runs on the thread pool.
+    /// <para>Concurrency: one mix runs at a time (a request waits for the running one; a cancelled waiter gives up at once), the
+    /// running mix stops within about a second of its token being cancelled, and overlapping requests for the same user audio share
+    /// one decode (each decode writes a file of its own and is renamed into the cache), so a superseded preview remix and an export
+    /// can overlap safely.</para>
     /// </summary>
     public sealed class StudioAudioMixer
     {
         readonly IMediaBridge _bridge;
         readonly IStudioSoundProvider _sounds;
         readonly string _cacheDir;
+        readonly object _gate = new object();
         readonly Dictionary<string, string> _decoded = new Dictionary<string, string>(StringComparer.Ordinal);
+        readonly Dictionary<string, Task<string>> _decoding = new Dictionary<string, Task<string>>(StringComparer.Ordinal);
+        readonly SemaphoreSlim _mixSlot = new SemaphoreSlim(1, 1);
+        int _attempt;
 
         /// <param name="bridge">Media bridge (user audio decode).</param>
         /// <param name="sounds">Sound pack and music provider; null = no simulation sounds, no music.</param>
@@ -99,7 +107,15 @@ namespace Ballverse.Studio
             ct.ThrowIfCancellationRequested();
             string replayPath = Path.Combine(clipDir, doc.Clip?.Replay ?? ProjectPaths.ClipReplayFile);
             string streamPath = Path.Combine(clipDir, ProjectPaths.ClipRenderFile);
-            return await Task.Run(() => Mix(timeline, settings, sounds, music, replayPath, streamPath, userPcm, ct), ct);
+            await _mixSlot.WaitAsync(ct);
+            try
+            {
+                return await Task.Run(() => Mix(timeline, settings, sounds, music, replayPath, streamPath, userPcm, ct), ct);
+            }
+            finally
+            {
+                _mixSlot.Release();
+            }
         }
 
         /// <summary>Renders the mix and writes it to <paramref name="pcmPath"/> (Media <see cref="PcmFile"/> format); returns its frame count.</summary>
@@ -113,7 +129,13 @@ namespace Ballverse.Studio
         /// <summary>Deletes the cached decoded user audio files.</summary>
         public void ClearCache()
         {
-            foreach (string path in _decoded.Values)
+            List<string> paths;
+            lock (_gate)
+            {
+                paths = new List<string>(_decoded.Values);
+                _decoded.Clear();
+            }
+            foreach (string path in paths)
             {
                 try
                 {
@@ -124,7 +146,6 @@ namespace Ballverse.Studio
                     // removed with the export scratch at the next start
                 }
             }
-            _decoded.Clear();
         }
 
         async Task<string> DecodeUserAudioAsync(string videoPath, UserVideoTiming video, CancellationToken ct)
@@ -132,13 +153,66 @@ namespace Ballverse.Studio
             if (!File.Exists(videoPath)) return null;
             var info = new FileInfo(videoPath);
             string key = videoPath + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks + "|" + video.TrimInUs + "|" + video.LengthUs;
-            if (_decoded.TryGetValue(key, out string cached) && File.Exists(cached)) return cached;
-            Directory.CreateDirectory(_cacheDir);
-            string path = Path.Combine(_cacheDir, "user_" + StableHash(key) + ".pcm");
-            PcmFileInfo decoded = await _bridge.DecodeAudioToFileAsync(videoPath, path, new AudioDecodeRange(video.TrimInUs, video.LengthUs), ct);
-            if (decoded == null || decoded.FrameCount <= 0) return null;
-            _decoded[key] = decoded.Path ?? path;
-            return _decoded[key];
+            Task<string> decode;
+            lock (_gate)
+            {
+                if (_decoded.TryGetValue(key, out string cached) && File.Exists(cached)) return cached;
+                if (!_decoding.TryGetValue(key, out decode))
+                {
+                    // Not cancelled by any one caller: others may be waiting for it, and the result is cached for the next remix.
+                    decode = DecodeToCacheAsync(key, videoPath, video);
+                    _decoding[key] = decode;
+                }
+            }
+            return await WithCancellation(decode, ct);
+        }
+
+        async Task<string> DecodeToCacheAsync(string key, string videoPath, UserVideoTiming video)
+        {
+            try
+            {
+                Directory.CreateDirectory(_cacheDir);
+                string final = Path.Combine(_cacheDir, "user_" + StableHash(key) + ".pcm");
+                string attempt = Path.Combine(_cacheDir, "user_" + StableHash(key) + "_" + Interlocked.Increment(ref _attempt) + StudioFiles.TempSuffix + ".pcm");
+                PcmFileInfo decoded = await _bridge.DecodeAudioToFileAsync(videoPath, attempt, new AudioDecodeRange(video.TrimInUs, video.LengthUs), CancellationToken.None);
+                if (decoded == null || decoded.FrameCount <= 0)
+                {
+                    TryDelete(decoded?.Path ?? attempt);
+                    return null;
+                }
+                string written = decoded.Path ?? attempt;
+                if (File.Exists(final)) File.Delete(final);
+                File.Move(written, final);
+                lock (_gate) _decoded[key] = final;
+                return final;
+            }
+            finally
+            {
+                lock (_gate) _decoding.Remove(key);
+            }
+        }
+
+        static async Task<T> WithCancellation<T>(Task<T> task, CancellationToken ct)
+        {
+            if (!ct.CanBeCanceled || task.IsCompleted) return await task;
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (ct.Register(() => cancelled.TrySetResult(true)))
+            {
+                if (await Task.WhenAny(task, cancelled.Task) != task) ct.ThrowIfCancellationRequested();
+            }
+            return await task;
+        }
+
+        static void TryDelete(string path)
+        {
+            try
+            {
+                if (path != null && File.Exists(path)) File.Delete(path);
+            }
+            catch (IOException)
+            {
+                // export scratch is cleared at startup
+            }
         }
 
         static StudioMixResult Mix(StudioTimeline timeline, Ballverse.Core.Audio.Mastering.TrackMixSettings settings, StudioSoundAssets sounds,
@@ -180,7 +254,7 @@ namespace Ballverse.Studio
                     UserAudio = user,
                     Music = music,
                     Settings = settings,
-                });
+                }, ct);
             }
             finally
             {

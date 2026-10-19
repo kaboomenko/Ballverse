@@ -21,8 +21,18 @@ namespace Ballverse.Studio
         public IAppPaths Paths { get; set; }
         /// <summary>Media bridge (<c>MediaBridgeFactory.Create()</c>). Required; not disposed by the studio.</summary>
         public IMediaBridge Media { get; set; }
-        /// <summary>Simulation renderer adapter over Ballverse.Render. Required.</summary>
-        public ISimFrameRenderer SimRenderer { get; set; }
+        /// <summary>
+        /// Creates a simulation renderer adapter over Ballverse.Render. Required. Called once per drawing user (the preview, each
+        /// export, each cover render), because a renderer holds one clip at a time (<see cref="ISimFrameRenderer.BeginClip"/>): an
+        /// export started while the preview is open gets its own instance. Instances that implement <see cref="IDisposable"/> are
+        /// disposed by their user.
+        /// </summary>
+        public Func<ISimFrameRenderer> SimRendererFactory { get; set; }
+        /// <summary>
+        /// Rebuilds evicted render streams from the replay (Core.Sim re-simulation + hash check). Optional, but without it a run whose
+        /// stream was evicted cannot be opened or exported (<see cref="StudioProjects.RunReadiness"/> reports Unavailable).
+        /// </summary>
+        public IRenderStreamRebuilder StreamRebuilder { get; set; }
         /// <summary>App lifecycle (autosave on pause, export pause/resume). Optional.</summary>
         public IAppLifecycle Lifecycle { get; set; }
         /// <summary>Keeps the screen on during export. Optional.</summary>
@@ -81,8 +91,18 @@ namespace Ballverse.Studio
         public StudioAudioMixer AudioMixer { get; private set; }
         public ExportPipeline Export { get; private set; }
         public IMediaBridge Media { get; private set; }
-        public ISimFrameRenderer SimRenderer { get; private set; }
+        /// <summary>Creates a new simulation renderer (one per preview / export / cover; see <see cref="StudioServicesOptions.SimRendererFactory"/>).</summary>
+        public ISimFrameRenderer CreateSimRenderer()
+        {
+            ISimFrameRenderer r = _simFactory();
+            if (r == null) throw new InvalidOperationException("SimRendererFactory returned null");
+            return r;
+        }
+
+        Func<ISimFrameRenderer> _simFactory;
         public IAppLifecycle Lifecycle { get; private set; }
+        /// <summary>Rebuilds missing render streams before a clip is drawn (spec §7.5 step 2).</summary>
+        public RenderStreamRepair StreamRepair { get; private set; }
         public IIdSource Ids { get; private set; }
         public DeviceTier Tier { get; set; }
         public StudioColor ThemeBackground { get; set; }
@@ -98,12 +118,13 @@ namespace Ballverse.Studio
             if (o == null) throw new ArgumentNullException(nameof(o));
             if (o.Paths == null) throw new ArgumentException("Paths required", nameof(o));
             if (o.Media == null) throw new ArgumentException("Media required", nameof(o));
-            if (o.SimRenderer == null) throw new ArgumentException("SimRenderer required", nameof(o));
+            if (o.SimRendererFactory == null) throw new ArgumentException("SimRendererFactory required", nameof(o));
             var s = new StudioServices
             {
                 Media = o.Media,
-                SimRenderer = o.SimRenderer,
+                _simFactory = o.SimRendererFactory,
                 Lifecycle = o.Lifecycle,
+                StreamRepair = new RenderStreamRepair(o.StreamRebuilder),
                 Tier = o.Tier,
                 ThemeBackground = o.ThemeBackground,
                 WatermarkTexture = o.WatermarkTexture,
@@ -123,8 +144,23 @@ namespace Ballverse.Studio
             return s;
         }
 
-        /// <summary>Opens the preview of an open project (the caller disposes it when leaving the studio).</summary>
-        /// <exception cref="FileNotFoundException">The clip has no render stream (rebuild it from the replay first).</exception>
+        /// <summary>
+        /// Opens the preview of an open project, first rebuilding an evicted render stream from the replay (spec §7.5 step 2;
+        /// <paramref name="progress"/> 0..1 for a "Подготовка клипа" indicator). The caller disposes the player.
+        /// </summary>
+        /// <exception cref="RenderStreamUnavailableException">No render stream and it cannot be rebuilt.</exception>
+        /// <exception cref="InvalidDataException">The replay is corrupt or the rebuild failed its hash check.</exception>
+        public async Task<StudioPreviewPlayer> OpenPreviewAsync(StudioProjectSession session, int? exportFps, IProgress<double> progress, CancellationToken ct)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (!await StreamRepair.EnsureAsync(session.Directory, progress, ct))
+                throw new RenderStreamUnavailableException("the clip's render stream is missing and cannot be rebuilt from its replay");
+            ct.ThrowIfCancellationRequested();
+            return OpenPreview(session, exportFps);
+        }
+
+        /// <summary>Opens the preview of an open project whose render stream is present (see <see cref="OpenPreviewAsync"/>).</summary>
+        /// <exception cref="FileNotFoundException">The clip has no render stream (use <see cref="OpenPreviewAsync"/>, which rebuilds it).</exception>
         public StudioPreviewPlayer OpenPreview(StudioProjectSession session, int? exportFps = null)
         {
             if (session == null) throw new ArgumentNullException(nameof(session));
@@ -134,6 +170,27 @@ namespace Ballverse.Studio
             try
             {
                 return new StudioPreviewPlayer(this, clip, session.Directory, doc, fps, Tier);
+            }
+            catch
+            {
+                clip.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Starts the background thumbnails of the timeline tracks S and V for an open project (spec §3.4); feed it the session's
+        /// edits with <see cref="TimelineThumbnails.SetProject"/> and dispose it when leaving the studio. Call after
+        /// <see cref="OpenPreviewAsync"/> (which rebuilds a missing render stream).
+        /// </summary>
+        /// <exception cref="FileNotFoundException">The clip has no render stream.</exception>
+        public TimelineThumbnails OpenThumbnails(StudioProjectSession session, int count = ThumbnailPlan.DefaultCount, int width = ThumbnailPlan.DefaultWidth)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            ClipSource clip = ClipSource.Open(session.Directory);
+            try
+            {
+                return new TimelineThumbnails(this, clip, session.Directory, session.Document, count, width);
             }
             catch
             {
@@ -175,7 +232,13 @@ namespace Ballverse.Studio
             int ticks;
             try
             {
+                if (!await StreamRepair.EnsureAsync(dir, null, ct))
+                    return StudioExportResult.Failure(ExportErrorCode.ClipDataMissing, "render stream missing and cannot be rebuilt", projectId, null);
                 using (ClipSource clip = ClipSource.Open(dir)) ticks = clip.TickCount;
+            }
+            catch (OperationCanceledException)
+            {
+                return StudioExportResult.Failure(ExportErrorCode.Cancelled, "cancelled", projectId, null);
             }
             catch (Exception e) when (e is IOException || e is InvalidDataException || e is UnauthorizedAccessException)
             {
@@ -257,7 +320,7 @@ namespace Ballverse.Studio
             RenderTexture canvas = StudioCompositor.CreateCanvas(w, h, "StudioCover");
             RenderTexture readback = StudioCompositor.CreateReadbackTarget(w, h, "StudioCoverReadback");
             var cpu = new Texture2D(w, h, TextureFormat.RGBA32, false, true) { hideFlags = HideFlags.HideAndDontSave };
-            var frames = new StudioFrameRenderer(Compositor, SimRenderer, StudioRenderQuality.Preview, 1024);
+            var frames = new StudioFrameRenderer(Compositor, CreateSimRenderer(), StudioRenderQuality.Preview, 1024, ownsSimRenderer: true);
             try
             {
                 frames.OpenClip(clip);

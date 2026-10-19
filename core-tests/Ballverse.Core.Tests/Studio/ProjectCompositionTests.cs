@@ -162,14 +162,47 @@ namespace Ballverse.Core.Tests.Studio
         }
 
         [Fact]
-        public void ZoomIsCappedAndTinySlotsKeepMinimum()
+        public void ZoomNeverGrowsTheWholeArenaTargetAndTinySlotsKeepMinimum()
         {
-            SimSlotRender zoomed = SimSlotSizing.Compute(1080, 1920, new SlotContent(0, false, SlotFill.Cover, FloatVec2.Zero, 8f), 4096);
-            Assert.Equal(4096, zoomed.TargetSize.Y);
-            Assert.Equal(0, zoomed.TargetSize.X & 1);
+            // QA round 1: zoom 3 rendered 2304x4096 (37.7 MB + the renderer's MSAA scene at that size).
+            foreach (float z in new[] { 1f, 2f, 3f, 8f })
+            {
+                SimSlotRender zoomed = SimSlotSizing.Compute(1080, 1920, new SlotContent(0, false, SlotFill.Cover, FloatVec2.Zero, z), 4096);
+                Assert.Equal(new IntVec2(1080, 1920), zoomed.TargetSize);
+                Assert.False(zoomed.IsViewport);
+                Assert.Equal(1080f / z, zoomed.Mapping.SourceCrop.Width, 1); // the zoom magnifies the picture
+            }
+            SimSlotRender capped = SimSlotSizing.Compute(1080, 1920, SlotContent.Default, 1024);
+            Assert.Equal(1024, capped.TargetSize.Y);
             SimSlotRender tiny = SimSlotSizing.Compute(2, 2, SlotContent.Default);
             Assert.True(tiny.TargetSize.X >= SimSlotSizing.MinSide && tiny.TargetSize.Y >= SimSlotSizing.MinSide);
             Assert.Throws<ArgumentOutOfRangeException>(() => SimSlotSizing.Compute(0, 10, SlotContent.Default));
+        }
+
+        [Fact]
+        public void ViewportRendersOnlyTheVisibleWindowAtSlotResolution()
+        {
+            var zoom2 = new SlotContent(0, false, SlotFill.Cover, new FloatVec2(1f, 0f), 2f);
+            SimSlotRender r = SimSlotSizing.Compute(1080, 1920, zoom2, 4096, viewport: true);
+            Assert.Equal(new IntVec2(1080, 1920), r.TargetSize);
+            Assert.True(r.IsViewport);
+            Assert.Equal(0.5f, r.Viewport.Width, 3);
+            Assert.Equal(0.5f, r.Viewport.Height, 3);
+            Assert.Equal(0f, r.Viewport.X, 3); // pan +1 moves the picture right: the left half shows
+            Assert.Equal(0.25f, r.Viewport.Y, 3);
+            Assert.False(r.Mapping.HasLetterbox);
+            Assert.Equal(1f, r.Mapping.Scale, 3); // one texel per output pixel
+
+            SimSlotRender band = SimSlotSizing.Compute(1080, 960, SlotContent.Default, 4096, viewport: true); // L1 half
+            Assert.Equal(new IntVec2(1080, 960), band.TargetSize);
+            Assert.Equal(0.5f, band.Viewport.Height, 3);
+
+            var fit = new SlotContent(0, true, SlotFill.Fit, FloatVec2.Zero, 1f);
+            SimSlotRender letterbox = SimSlotSizing.Compute(1080, 960, fit, 4096, viewport: true);
+            Assert.False(letterbox.IsViewport);
+            Assert.True(letterbox.Mapping.HasLetterbox);
+            Assert.Equal(SimSlotSizing.Compute(1080, 960, fit).Mapping.Destination, letterbox.Mapping.Destination);
+            Assert.Equal(960, letterbox.TargetSize.Y);
         }
     }
 

@@ -12,9 +12,13 @@
 //                  opaque unless _StParams.z > 0.5 (keeps the texture alpha: watermark artwork).
 // Pass 1 Shape   : solid rounded rect (_StShape, softness _StParams.x px for shadows and glow) in _StColor; glass look when
 //                  _StParams.y > 0.5 (vertical sheen and a light rim).
-// Pass 2 Glyph   : font-atlas glyph quads (mesh positions in canvas px, offset by _StOffset.xy); alpha from _MainTex.a.
+// Pass 2 Glyph   : font-atlas glyph quads (mesh positions in canvas px, offset by _StOffset.xy); alpha from _MainTex.a;
+//                  colour from _StColor, or from the texture times _StColor when _StParams.x > 0.5 (emoji atlas).
 // Pass 3 Readback: full-screen copy of _MainTex flipped vertically (rows top-down, as the encoder wants them) and encoded
 //                  to sRGB when _StParams.x > 0.5 (linear colour space: the target is a UNorm texture).
+// Passes 0-2 blend colour with SrcAlpha/OneMinusSrcAlpha but alpha with One/OneMinusSrcAlpha, so the opaque canvas keeps
+// alpha 1 under translucent elements: the preview texture (shown by UI Toolkit with alpha) looks like the exported file.
+// Target 3.5 everywhere: the readback pass uses SV_VertexID (Unity: shader model 3.5 / ES 3.0 and up).
 Shader "Hidden/Ballverse/StudioComposite"
 {
     Properties
@@ -127,9 +131,9 @@ Shader "Hidden/Ballverse/StudioComposite"
         Pass
         {
             Name "StudioImage"
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
             HLSLPROGRAM
-            #pragma target 3.0
+            #pragma target 3.5
             #pragma vertex QuadVert
             #pragma fragment frag
 
@@ -176,9 +180,9 @@ Shader "Hidden/Ballverse/StudioComposite"
         Pass
         {
             Name "StudioShape"
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
             HLSLPROGRAM
-            #pragma target 3.0
+            #pragma target 3.5
             #pragma vertex QuadVert
             #pragma fragment frag
 
@@ -206,9 +210,9 @@ Shader "Hidden/Ballverse/StudioComposite"
         Pass
         {
             Name "StudioGlyph"
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
             HLSLPROGRAM
-            #pragma target 3.0
+            #pragma target 3.5
             #pragma vertex vert
             #pragma fragment frag
 
@@ -234,9 +238,12 @@ Shader "Hidden/Ballverse/StudioComposite"
 
             half4 frag(GlyphVaryings i) : SV_Target
             {
-                float a = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv).a * _StColor.a;
+                float4 t = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv);
+                float a = t.a * _StColor.a;
                 if (a <= 0.0) discard;
-                return float4(_StColor.rgb, a);
+                // _StParams.x > 0.5: colour glyphs (emoji atlas) keep the texture colour, tinted; else the font atlas is a mask.
+                float3 rgb = _StParams.x > 0.5 ? t.rgb * _StColor.rgb : _StColor.rgb;
+                return float4(rgb, a);
             }
             ENDHLSL
         }
@@ -246,7 +253,7 @@ Shader "Hidden/Ballverse/StudioComposite"
             Name "StudioReadback"
             Blend Off
             HLSLPROGRAM
-            #pragma target 3.0
+            #pragma target 3.5
             #pragma vertex FullVert
             #pragma fragment frag
 

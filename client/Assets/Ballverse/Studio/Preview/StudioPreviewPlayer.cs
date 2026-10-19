@@ -18,13 +18,18 @@ namespace Ballverse.Studio
     /// the same frame renderer and compositor as the export. The simulation comes from the clip's render stream (random access,
     /// scrubbing within one decoded 1-second block), the user video from a realtime decoder (frame by pts; late frames are dropped:
     /// the last decoded frame stays until the requested one arrives), the sound from the offline mix played through
-    /// <see cref="PreviewAudioOutput"/>, which is also the master clock while it plays. Edits are applied with
-    /// <see cref="SetProject"/> (≤ 1 frame: geometry is recomposed, the video is not re-decoded). When frames are missed the internal
+    /// <see cref="PreviewAudioOutput"/>, which is also the master clock while it runs (Core <see cref="PreviewAudioSync"/>: the
+    /// picture is held during the DSP latency after a start and runs on the frame clock when the audio thread stops). Edits are
+    /// applied with <see cref="SetProject"/> (≤ 1 frame: geometry is recomposed, the video is not re-decoded; audio edits remix
+    /// after <see cref="RemixDebounceUs"/> of quiet, one mix at a time). When frames are missed the internal
     /// resolution drops, never the frame rate (<see cref="PreviewQualityGovernor"/>). Main thread; driven by
     /// <see cref="StudioRunner.Tick"/>; dispose to release the decoder, the clip and the render textures.
     /// </summary>
     public sealed class StudioPreviewPlayer : IDisposable
     {
+        /// <summary>An audio edit remixes after this long without further audio edits (a volume drag remixes once), µs.</summary>
+        public const long RemixDebounceUs = 300_000;
+
         readonly StudioServices _services;
         readonly StudioFrameRenderer _frames;
         readonly VideoTextureUploader _video = new VideoTextureUploader();
@@ -37,10 +42,16 @@ namespace Ballverse.Studio
         PlaybackClock _clock;
         PreviewQualityGovernor _governor;
         IVideoReader _reader;
-        Task<IVideoReader> _readerOpening;
+        IntVec2 _readerBox;
+        Task<OpenedReader> _readerOpening;
+        IntVec2 _openingBox;
+        IntVec2 _displaySize;
         CancellationTokenSource _readerCts;
         CancellationTokenSource _mixCts;
-        string _videoKey;
+        PreviewAudioSync _sync;
+        long _nowUs;
+        long _remixDueUs = -1;
+        string _videoPath;
         string _audioKey;
         IntVec2 _videoSize;
         IntVec2 _baseCanvas = new IntVec2(540, 960);
@@ -61,10 +72,12 @@ namespace Ballverse.Studio
             _services = services;
             _clip = clip;
             _projectDir = projectDir;
-            _frames = new StudioFrameRenderer(services.Compositor, services.SimRenderer, StudioRenderQuality.Preview, 2048);
+            _frames = new StudioFrameRenderer(services.Compositor, services.CreateSimRenderer(), StudioRenderQuality.Preview, 2048, ownsSimRenderer: true);
             _frames.OpenClip(clip);
             _audio = PreviewAudioOutput.Create(services.Runner.transform);
             _exportFps = OutputFps.IsValid(exportFps) ? exportFps : OutputFps.Fps60;
+            RebuildSync();
+            _audio.ConfigurationChanged += OnAudioConfigurationChanged;
             _governor = new PreviewQualityGovernor(PreviewPolicy.TargetFps(_exportFps), PreviewPolicy.ShouldReduceInternalResolution(tier, ExportResolution.P1080, _exportFps));
             SetProject(doc);
             services.Runner.Tick += OnTick;
@@ -101,7 +114,10 @@ namespace Ballverse.Studio
         }
         bool _showMasks;
 
-        /// <summary>True while the offline mix is being (re)built.</summary>
+        /// <summary>What drives the clock now (audio, held picture, or the frame clock when the audio output does not run).</summary>
+        public PreviewClockSource ClockSource => _sync.Source;
+
+        /// <summary>True while the offline mix is being (re)built or waits for the edit debounce.</summary>
         public bool AudioPending { get; private set; }
 
         /// <summary>Last audio mix error (the preview then plays silent).</summary>
@@ -144,6 +160,7 @@ namespace Ballverse.Studio
         {
             if (!OutputFps.IsValid(fps) || fps == _exportFps) return;
             _exportFps = fps;
+            RebuildSync();
             SetProject(_doc);
         }
 
@@ -173,7 +190,7 @@ namespace Ballverse.Studio
         public void Play()
         {
             _clock.Play();
-            if (_audio.HasBuffer && !AudioPending) _audio.Play(_clock.PositionUs);
+            StartAudioAtClock();
             _dirty = true;
         }
 
@@ -188,17 +205,45 @@ namespace Ballverse.Studio
         {
             _clock.Seek(outputUs);
             _audio.Seek(_clock.PositionUs);
+            if (_clock.IsPlaying && AudioAvailable) _sync.Start(_clock.PositionUs, _audio.CursorUs);
             _frames.ResetHistory();
             _dirty = true;
+        }
+
+        bool AudioAvailable => _audio.HasBuffer && !AudioPending;
+
+        /// <summary>Starts the mix at the clock position (play, a new mix while playing, audio resync) and holds the picture for the latency.</summary>
+        void StartAudioAtClock()
+        {
+            if (_clock == null || _sync == null || !_clock.IsPlaying || !AudioAvailable) return;
+            _audio.Play(_clock.PositionUs);
+            _sync.Start(_clock.PositionUs, _audio.CursorUs);
+        }
+
+        void RebuildSync()
+        {
+            _sync = PreviewAudioSync.ForOutput(_exportFps, _audio.BlockUs, _audio.LatencyUs);
+            StartAudioAtClock();
+        }
+
+        void OnAudioConfigurationChanged()
+        {
+            if (!_disposed && _clock != null) RebuildSync();
         }
 
         void OnTick(float dt)
         {
             if (_disposed) return;
             long dtUs = (long)(Math.Max(0f, dt) * 1e6f);
+            _nowUs += dtUs;
+            if (_remixDueUs >= 0 && _nowUs >= _remixDueUs)
+            {
+                _remixDueUs = -1;
+                StartRemix();
+            }
             bool wasPlaying = _clock.IsPlaying;
-            long? audible = wasPlaying && _audio.HasBuffer && !AudioPending ? _audio.AudibleUs : (long?)null;
-            _clock.Advance(dtUs, audible);
+            _sync.Advance(_clock, dtUs, AudioAvailable, _audio.CursorUs, _audio.LatencyUs);
+            if (_sync.NeedsAudioResync) StartAudioAtClock(); // the audio output runs again: continue it at the picture
             if (wasPlaying && !_clock.IsPlaying) _audio.Pause();
             if (wasPlaying && _governor.OnFrame(dtUs)) RebuildPlans();
             PollReader();
@@ -288,44 +333,84 @@ namespace Ballverse.Studio
             _dirty = true;
         }
 
+        /// <summary>A reader with the box it was opened for and the source's display size.</summary>
+        sealed class OpenedReader
+        {
+            public IVideoReader Reader;
+            public IntVec2 Box;
+            public IntVec2 DisplaySize;
+        }
+
+        /// <summary>
+        /// Keeps a realtime reader for the user video. Only a new file reopens it from scratch; a zoom that needs more decoded pixels
+        /// than the open reader gives (<see cref="VideoDecodeSizing.PreviewBox"/>, zoom rounded up to a power of two) opens a larger
+        /// one in the background while the current one keeps drawing, and swaps on completion — the slot never goes blank, and
+        /// pinching back out never reopens.
+        /// </summary>
         void EnsureVideoReader()
         {
             UserVideoSettings uv = _doc.UserVideo;
             string path = uv != null && _projectDir != null ? Path.Combine(_projectDir, uv.File.Replace('/', Path.DirectorySeparatorChar)) : null;
-            // Only what changes the decoded size reopens the decoder (layout edits such as a ratio drag do not).
-            string key = path == null ? null : path + "|" + uv.Rotation + "|" + uv.Fill + "|" + uv.Zoom.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            if (key == _videoKey) return;
-            _videoKey = key;
-            CloseReader();
-            _video.Invalidate();
-            _deliveredRequestUs = long.MinValue;
-            _videoSize = default(IntVec2);
-            if (path == null || !File.Exists(path)) return;
-            _readerCts = new CancellationTokenSource();
-            _readerOpening = OpenReaderAsync(path, uv, _readerCts.Token);
+            if (path != _videoPath)
+            {
+                _videoPath = path;
+                CloseReader();
+                _video.Invalidate();
+                _deliveredRequestUs = long.MinValue;
+                _videoSize = default(IntVec2);
+                _readerBox = default(IntVec2);
+                _displaySize = default(IntVec2);
+                if (path == null || !File.Exists(path)) return;
+                StartOpening(path, ProjectComposition.BuildVideoContent(uv));
+                return;
+            }
+            if (path == null || _displaySize.X <= 0) return; // first open still probing
+            IntVec2 needed = VideoDecodeSizing.PreviewBox(_displaySize.X, _displaySize.Y, ProjectComposition.BuildVideoContent(uv));
+            IntVec2 have = _readerOpening != null ? _openingBox : _readerBox;
+            if (VideoDecodeSizing.Covers(have, needed)) return;
+            CancelOpening();
+            StartOpening(path, ProjectComposition.BuildVideoContent(uv));
         }
 
-        async Task<IVideoReader> OpenReaderAsync(string path, UserVideoSettings uv, CancellationToken ct)
+        void StartOpening(string path, SlotContent content)
         {
-            MediaInfo info = await _services.Media.ProbeAsync(path, ct);
-            // Decode box: what a full 1080×1920 frame would need, halved (a phone preview area is ≤ ~540 px wide), so slot
-            // and canvas changes never reopen the decoder.
-            IntVec2 box = VideoDecodeSizing.Compute(info.DisplayWidth, info.DisplayHeight, 1080, 1920, ProjectComposition.BuildVideoContent(uv));
-            box = new IntVec2(Math.Max(VideoDecodeSizing.MinSide, (box.X / 2) & ~1), Math.Max(VideoDecodeSizing.MinSide, (box.Y / 2) & ~1));
-            return await _services.Media.OpenVideoReaderAsync(path, new VideoReaderOptions(box.X, box.Y), ct);
+            _readerCts = new CancellationTokenSource();
+            _openingBox = _displaySize.X > 0 ? VideoDecodeSizing.PreviewBox(_displaySize.X, _displaySize.Y, content) : new IntVec2(int.MaxValue, int.MaxValue);
+            _readerOpening = OpenReaderAsync(path, content, _displaySize, _readerCts.Token);
+        }
+
+        async Task<OpenedReader> OpenReaderAsync(string path, SlotContent content, IntVec2 knownDisplay, CancellationToken ct)
+        {
+            IntVec2 display = knownDisplay;
+            if (display.X <= 0)
+            {
+                MediaInfo info = await _services.Media.ProbeAsync(path, ct);
+                display = new IntVec2(info.DisplayWidth, info.DisplayHeight);
+            }
+            IntVec2 box = VideoDecodeSizing.PreviewBox(display.X, display.Y, content);
+            IVideoReader reader = await _services.Media.OpenVideoReaderAsync(path, new VideoReaderOptions(box.X, box.Y), ct);
+            return new OpenedReader { Reader = reader, Box = box, DisplaySize = display };
         }
 
         void PollReader()
         {
-            Task<IVideoReader> opening = _readerOpening;
+            Task<OpenedReader> opening = _readerOpening;
             if (opening == null || !opening.IsCompleted) return;
             _readerOpening = null;
+            _readerCts?.Dispose();
+            _readerCts = null;
             if (opening.Status == TaskStatus.RanToCompletion)
             {
-                _reader = opening.Result;
+                OpenedReader opened = opening.Result;
+                _reader?.Dispose(); // the replaced reader drew until now; the texture keeps its last frame until the new one uploads
+                _reader = opened.Reader;
+                _readerBox = opened.Box;
+                _displaySize = opened.DisplaySize;
+                _deliveredRequestUs = long.MinValue;
                 _videoSize = new IntVec2(_reader.Width, _reader.Height);
                 VideoError = null;
                 RebuildPlans();
+                EnsureVideoReader(); // the zoom may have grown again while opening
             }
             else if (opening.IsFaulted)
             {
@@ -334,23 +419,39 @@ namespace Ballverse.Studio
             }
         }
 
-        void CloseReader()
+        void CancelOpening()
         {
             _readerCts?.Cancel();
             _readerCts?.Dispose();
             _readerCts = null;
-            Task<IVideoReader> opening = _readerOpening;
+            Task<OpenedReader> opening = _readerOpening;
             _readerOpening = null;
-            if (opening != null) opening.ContinueWith(t => { if (t.Status == TaskStatus.RanToCompletion) t.Result.Dispose(); }, TaskScheduler.FromCurrentSynchronizationContext());
+            if (opening != null) opening.ContinueWith(t => { if (t.Status == TaskStatus.RanToCompletion) t.Result.Reader.Dispose(); }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        void CloseReader()
+        {
+            CancelOpening();
             _reader?.Dispose();
             _reader = null;
         }
 
         void RemixIfNeeded()
         {
-            string key = AudioKey(_doc, _timeline);
+            string key = ProjectComposition.AudioMixKey(_doc, _timeline);
             if (key == _audioKey) return;
+            bool first = _audioKey == null;
             _audioKey = key;
+            AudioPending = true;
+            _mixCts?.Cancel(); // the running mix stops within ~1 s (StudioMixBuilder checks between chunks)
+            _mixCts?.Dispose();
+            _mixCts = null;
+            if (first) StartRemix();
+            else _remixDueUs = _nowUs + RemixDebounceUs;
+        }
+
+        void StartRemix()
+        {
             _mixCts?.Cancel();
             _mixCts?.Dispose();
             _mixCts = new CancellationTokenSource();
@@ -366,7 +467,8 @@ namespace Ballverse.Studio
                 if (ct.IsCancellationRequested || _disposed) return;
                 _audio.SetMix(mix.Samples);
                 AudioError = null;
-                if (_clock.IsPlaying) _audio.Play(_clock.PositionUs);
+                AudioPending = false;
+                StartAudioAtClock();
             }
             catch (OperationCanceledException)
             {
@@ -374,25 +476,15 @@ namespace Ballverse.Studio
             }
             catch (Exception e)
             {
-                if (ct.IsCancellationRequested) return;
+                if (ct.IsCancellationRequested || _disposed) return;
                 AudioError = e;
                 _audio.SetMix(Array.Empty<float>());
                 Debug.LogWarning("[Studio] Preview audio failed: " + e.Message);
             }
             finally
             {
-                if (!ct.IsCancellationRequested) AudioPending = false;
+                if (!ct.IsCancellationRequested && _remixDueUs < 0) AudioPending = false;
             }
-        }
-
-        /// <summary>Everything the mix depends on: timeline length and mapping, audio block, clip sounds, user video trim.</summary>
-        static string AudioKey(ProjectDocument doc, StudioTimeline t)
-        {
-            var c = doc.Clip ?? new ClipSettings();
-            var o = doc.Output ?? new OutputSettings(); // export settings and history do not change the sound
-            return CoreJson.Serialize(doc.Audio, false) + "|" + c.SoundPack + "|" + c.Melody + "|" + c.TrimInTick + "|" + c.TrimOutTick + "|" + c.Speed
-                + "|" + CoreJson.Serialize(c.FinaleSlowMo, false) + "|" + c.AfterEnd + "|" + CoreJson.Serialize(doc.UserVideo, false)
-                + "|" + o.DurationMode + "|" + o.ManualDurationUs + "|" + CoreJson.Serialize(o.Cover, false) + "|" + t.Fps + "|" + t.FrameCount;
         }
 
         public void Dispose()
@@ -400,6 +492,7 @@ namespace Ballverse.Studio
             if (_disposed) return;
             _disposed = true;
             _services.Runner.Tick -= OnTick;
+            _audio.ConfigurationChanged -= OnAudioConfigurationChanged;
             _mixCts?.Cancel();
             _mixCts?.Dispose();
             CloseReader();

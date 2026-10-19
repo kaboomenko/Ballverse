@@ -276,6 +276,29 @@ namespace Ballverse.Core.Tests.Studio
         }
 
         [Fact]
+        public void ExportHistoryIsNotAnUndoStep()
+        {
+            ProjectEditSession s = _lib.Edit(_lib.CreateFromRun("run1"));
+            s.Apply(d => d.Name = "Edited");
+            _clock.Ms = 5000;
+            s.Apply(d => d.Layout.Swap = true);
+            s.ApplyMetadata(d => ExportHistory.Add(d, new ExportRecord { At = _clock.NowIso(), Res = 720, Fps = 30, Ms = 10 }));
+            Assert.True(s.IsDirty);
+            Assert.Single(s.Document.Exports);
+            Assert.True(s.Undo()); // takes back the swap, keeps the export
+            Assert.False(s.Document.Layout.Swap);
+            Assert.Single(s.Document.Exports);
+            Assert.Equal(720, s.Document.Output.Resolution);
+            Assert.True(s.Undo());
+            Assert.Single(s.Document.Exports);
+            Assert.True(s.Redo());
+            Assert.True(s.Redo());
+            Assert.True(s.Document.Layout.Swap);
+            Assert.Single(s.Document.Exports);
+            Assert.Throws<ArgumentNullException>(() => s.ApplyMetadata(null));
+        }
+
+        [Fact]
         public void UndoDepthIsBounded()
         {
             ProjectEditSession s = _lib.Edit(_lib.CreateFromRun("run1"));

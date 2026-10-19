@@ -46,13 +46,23 @@ namespace Ballverse.Core.Studio
         public int CharIndex { get; }
         /// <summary>Quad of the glyph's ink box.</summary>
         public FloatRect Rect { get; }
+        /// <summary>Cell of the bundled colour emoji (<see cref="EmojiSet"/>) drawn here instead of a font glyph, or −1.</summary>
+        public int EmojiId { get; }
 
         public PlacedGlyph(char character, int charIndex, FloatRect rect)
+            : this(character, charIndex, rect, -1)
+        {
+        }
+
+        public PlacedGlyph(char character, int charIndex, FloatRect rect, int emojiId)
         {
             Character = character;
             CharIndex = charIndex;
             Rect = rect;
+            EmojiId = emojiId;
         }
+
+        public bool IsEmoji => EmojiId >= 0;
     }
 
     /// <summary>An RGBA color with components 0..1 (straight alpha).</summary>
@@ -168,7 +178,8 @@ namespace Ballverse.Core.Studio
         public const int CounterMeasureValue = 888;
 
         /// <summary>Lays out <paramref name="layer"/> with the displayed text <paramref name="text"/> (counter already resolved).</summary>
-        public static TextBlock Layout(TextLayer layer, string text, IGlyphSource font)
+        /// <param name="emoji">Colour emoji drawn from the bundled atlas (spec §3.5), or null (emoji are then skipped like any glyph the font lacks).</param>
+        public static TextBlock Layout(TextLayer layer, string text, IGlyphSource font, EmojiSet emoji = null)
         {
             if (layer == null) throw new ArgumentNullException(nameof(layer));
             if (font == null) throw new ArgumentNullException(nameof(font));
@@ -195,7 +206,7 @@ namespace Ballverse.Core.Studio
             {
                 if (i == text.Length || text[i] == '\n')
                 {
-                    Wrap(text, start, i, font, k, maxWidth, lines);
+                    Wrap(text, start, i, font, emoji, k, size, maxWidth, lines);
                     start = i + 1;
                 }
             }
@@ -214,15 +225,19 @@ namespace Ballverse.Core.Studio
                 Line line = lines[li];
                 float x = layer.Align == TextAlign.Left ? left : layer.Align == TextAlign.Right ? left + blockWidth - line.Width : left + (blockWidth - line.Width) * 0.5f;
                 float baseline = top + li * lineHeight + ascent;
-                for (int i = line.Start; i < line.End; i++)
+                for (int i = line.Start; i < line.End;)
                 {
-                    if (!font.TryGetGlyph(text[i], out GlyphMetrics g)) continue;
-                    if (g.MaxX > g.MinX && g.MaxY > g.MinY)
+                    int n = Step(text, i, font, emoji, k, size, out bool has, out GlyphMetrics g, out int emojiId);
+                    if (has)
                     {
-                        var rect = FloatRect.FromEdges(x + g.MinX * k, baseline - g.MaxY * k, x + g.MaxX * k, baseline - g.MinY * k);
-                        glyphs.Add(new PlacedGlyph(text[i], i, rect));
+                        if (g.MaxX > g.MinX && g.MaxY > g.MinY)
+                        {
+                            var rect = FloatRect.FromEdges(x + g.MinX, baseline - g.MaxY, x + g.MaxX, baseline - g.MinY);
+                            glyphs.Add(new PlacedGlyph(text[i], i, rect, emojiId));
+                        }
+                        x += g.Advance;
                     }
-                    x += g.Advance * k;
+                    i += n;
                 }
             }
 
@@ -246,7 +261,7 @@ namespace Ballverse.Core.Studio
             }
             if (dx != 0f || dy != 0f)
             {
-                for (int i = 0; i < glyphs.Count; i++) glyphs[i] = new PlacedGlyph(glyphs[i].Character, glyphs[i].CharIndex, Offset(glyphs[i].Rect, dx, dy));
+                for (int i = 0; i < glyphs.Count; i++) glyphs[i] = new PlacedGlyph(glyphs[i].Character, glyphs[i].CharIndex, Offset(glyphs[i].Rect, dx, dy), glyphs[i].EmojiId);
                 textRect = Offset(textRect, dx, dy);
                 if (plate) plateRect = Offset(plateRect, dx, dy);
                 bounds = Offset(bounds, dx, dy);
@@ -265,7 +280,7 @@ namespace Ballverse.Core.Studio
         }
 
         /// <summary>Normalized boxes of all layers (any show time) for <see cref="FrameRequest.TextBounds"/>; empty texts are skipped.</summary>
-        public static IReadOnlyList<FloatRect> MeasureAll(IReadOnlyList<TextLayer> layers, Func<TextLayer, IGlyphSource> fontOf)
+        public static IReadOnlyList<FloatRect> MeasureAll(IReadOnlyList<TextLayer> layers, Func<TextLayer, IGlyphSource> fontOf, EmojiSet emoji = null)
         {
             if (fontOf == null) throw new ArgumentNullException(nameof(fontOf));
             var list = new List<FloatRect>();
@@ -275,7 +290,7 @@ namespace Ballverse.Core.Studio
                 if (layer == null || string.IsNullOrEmpty(layer.Text)) continue;
                 IGlyphSource font = fontOf(layer);
                 if (font == null) continue;
-                TextBlock block = Layout(layer, MeasureText(layer), font);
+                TextBlock block = Layout(layer, MeasureText(layer), font, emoji);
                 if (!block.Bounds.IsEmpty) list.Add(block.NormalizedBounds);
             }
             return list;
@@ -295,15 +310,47 @@ namespace Ballverse.Core.Studio
             }
         }
 
-        static void Wrap(string text, int start, int end, IGlyphSource font, float k, float maxWidth, List<Line> lines)
+        /// <summary>
+        /// One layout step at <paramref name="i"/>: a bundled colour emoji (with its variation selector / skin tone) or one UTF-16
+        /// unit of the font. Returns the units consumed (≥ 1); <paramref name="metrics"/> are in reference px.
+        /// </summary>
+        static int Step(string text, int i, IGlyphSource font, EmojiSet emoji, float k, float size, out bool has, out GlyphMetrics metrics, out int emojiId)
+        {
+            if (emoji != null)
+            {
+                int n = emoji.Match(text, i, out emojiId);
+                if (n > 0)
+                {
+                    has = true;
+                    metrics = EmojiSet.Metrics(size);
+                    return n;
+                }
+            }
+            emojiId = -1;
+            if (font.TryGetGlyph(text[i], out GlyphMetrics g))
+            {
+                has = true;
+                metrics = new GlyphMetrics(g.Advance * k, g.MinX * k, g.MaxX * k, g.MinY * k, g.MaxY * k);
+            }
+            else
+            {
+                has = false;
+                metrics = default(GlyphMetrics);
+            }
+            return 1;
+        }
+
+        static void Wrap(string text, int start, int end, IGlyphSource font, EmojiSet emoji, float k, float size, float maxWidth, List<Line> lines)
         {
             int lineStart = start;
             float width = 0f;
             int lastSpace = -1;
             float widthAtSpace = 0f;
-            for (int i = start; i < end; i++)
+            for (int i = start; i < end;)
             {
-                float adv = font.TryGetGlyph(text[i], out GlyphMetrics g) ? g.Advance * k : 0f;
+                int n = Step(text, i, font, emoji, k, size, out bool has, out GlyphMetrics g, out _);
+                if (i + n > end) n = end - i;
+                float adv = has ? g.Advance : 0f;
                 if (text[i] == ' ')
                 {
                     lastSpace = i;
@@ -315,7 +362,7 @@ namespace Ballverse.Core.Studio
                     {
                         lines.Add(new Line(lineStart, lastSpace, widthAtSpace));
                         lineStart = lastSpace + 1;
-                        width = Measure(text, lineStart, i, font, k);
+                        width = Measure(text, lineStart, i, font, emoji, k, size);
                     }
                     else
                     {
@@ -326,16 +373,18 @@ namespace Ballverse.Core.Studio
                     lastSpace = -1;
                 }
                 width += adv;
+                i += n;
             }
-            lines.Add(new Line(lineStart, end, Measure(text, lineStart, end, font, k)));
+            lines.Add(new Line(lineStart, end, Measure(text, lineStart, end, font, emoji, k, size)));
         }
 
-        static float Measure(string text, int start, int end, IGlyphSource font, float k)
+        static float Measure(string text, int start, int end, IGlyphSource font, EmojiSet emoji, float k, float size)
         {
             float w = 0f;
-            for (int i = start; i < end; i++)
+            for (int i = start; i < end;)
             {
-                if (font.TryGetGlyph(text[i], out GlyphMetrics g)) w += g.Advance * k;
+                i += Step(text, i, font, emoji, k, size, out bool has, out GlyphMetrics g, out _);
+                if (has) w += g.Advance;
             }
             return w;
         }
