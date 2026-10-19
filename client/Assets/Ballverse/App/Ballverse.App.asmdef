@@ -3,7 +3,13 @@
     "rootNamespace": "Ballverse.App",
     "references": [
         "Ballverse.Core",
-        "Ballverse.Platform"
+        "Ballverse.Platform",
+        "Ballverse.UI",
+        "Ballverse.Services",
+        "Ballverse.Studio",
+        "Ballverse.Media",
+        "Ballverse.Render",
+        "Ballverse.Sim"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -12,6 +18,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.modules.accessibility",
+            "expression": "1.0.0",
+            "define": "BALLVERSE_ACCESSIBILITY"
+        }
+    ],
     "noEngineReferences": false
 }

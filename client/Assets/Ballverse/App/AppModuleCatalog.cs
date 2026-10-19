@@ -12,17 +12,26 @@ namespace Ballverse.App
     /// assembly's services and starts it);</item>
     /// <item>append one line below, at the position that matches its init order.</item>
     /// </list>
-    /// Intended order once the assemblies exist: Platform → Crash → LocalSettings/Entitlements cache → Render →
-    /// Audio → Media → Sim → Studio → UI (all <see cref="AppStartPhase.Immediate"/>), then RemoteConfig → IAP →
-    /// Consent → Ads (<see cref="AppStartPhase.AfterFirstFrame"/>).
+    /// Order: Platform → Services (frame 0: crash reporter, cached rights, ad policy; the services phase Remote Config → IAP →
+    /// consent → ads after the first frame themselves) → Media → Modes → Studio → Experience (view models, UI shell, live
+    /// simulation, first-run flow; all <see cref="AppStartPhase.Immediate"/>), then the export resume offer
+    /// (<see cref="AppStartPhase.AfterFirstFrame"/>). Engine and SDK pieces come from the <see cref="AppEnvironment"/>:
+    /// <see cref="DeviceEnvironment.Create"/> on device, fakes in EditMode tests.
     /// </summary>
-    public static class AppModuleCatalog
+    public static partial class AppModuleCatalog
     {
-        public static IReadOnlyList<IAppModule> Create(AppPlatform platform)
+        /// <summary>The modules over <paramref name="environment"/> (device: <c>Create(AppPlatform)</c> in Unity/DeviceEnvironment.cs).</summary>
+        public static IReadOnlyList<IAppModule> Create(AppPlatform platform, AppEnvironment environment)
         {
             return new List<IAppModule>
             {
                 new PlatformModule(platform),
+                new ServicesModule(environment),
+                new MediaModule(environment),
+                new ModesModule(environment),
+                new StudioModule(environment),
+                new ExperienceModule(environment),
+                new DeferredStartModule(),
             };
         }
     }

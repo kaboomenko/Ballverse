@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Runs the App EditMode tests (../../EditMode/App/*.cs, NUnit) under plain .NET without Unity. Compiles the same sources as
+    ../CompileCheck (App, Sim, Studio, Media fake bridge, Services, Render runtime, UI view models and model) against the Unity
+    stand-ins in ../Stubs, whose bodies are benign (no GPU work happens: the tests use the App's fake ports for the surface,
+    previews, UI and studio backend; everything else - Core modes, ModeSession, replays, clip library, project files, Services in
+    fake mode, the view models - is the real code). The folder ends in "~" so Unity ignores it. Usage: ../run.sh (.NET 8 SDK).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>Ballverse.App.Tests</AssemblyName>
+    <RootNamespace>Ballverse.App.Tests</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591;CS0618;NUnit2005;NUnit2007</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Stubs/*.cs" />
+    <Compile Include="../../../App/**/*.cs" />
+    <Compile Include="../../../Sim/**/*.cs" />
+    <Compile Include="../../../Studio/**/*.cs" Exclude="../../../Studio/Tests/**" />
+    <Compile Include="../../../Media/Api/*.cs;../../../Media/Common/*.cs;../../../Media/Internal/*.cs;../../../Media/Fake/*.cs" />
+    <Compile Include="../../../Services/**/*.cs" Exclude="../../../Services/Tests/**;../../../Services/Editor/**" />
+    <Compile Include="../../../Render/Runtime/*.cs" />
+    <Compile Include="../../../UI/ViewModels/*.cs;../../../UI/Model/**/*.cs" />
+    <Compile Include="../../EditMode/App/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../../../core-tests/Ballverse.Core/Ballverse.Core.csproj" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+</Project>
