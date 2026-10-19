@@ -326,6 +326,15 @@ namespace Ballverse.Core.Sim
                 case ColliderKind.Polyline:
                 {
                     int edges = c.Closed ? c.VertexCount : c.VertexCount - 1;
+                    if (EdgeFramesValid(ci, s))
+                    {
+                        for (int k = 0; k < edges; k++)
+                        {
+                            ref EdgeFrame e = ref _edgeFrames[c.VertexStart + k];
+                            if (!GatherCapsuleCore(bi, ci, q, qStart, e.A, e.B, e.D, e.L2, e.N, true, rt, k, h)) return false;
+                        }
+                        return true;
+                    }
                     for (int k = 0; k < edges; k++)
                     {
                         Vec2 a = _vertices[c.VertexStart + k] * s;
@@ -360,6 +369,15 @@ namespace Ballverse.Core.Sim
         {
             Vec2 d = b - a;
             float l2 = d.LengthSquared;
+            return GatherCapsuleCore(bi, ci, q, qStart, a, b, d, l2, default, false, rt, feature, h);
+        }
+
+        /// <summary>
+        /// <see cref="GatherCapsule"/> with d = b − a and l2 = |d|² given; with <paramref name="hasNormal"/>, <paramref name="ln"/> is
+        /// the precomputed face normal d⊥ / |d| (otherwise computed here the same way).
+        /// </summary>
+        bool GatherCapsuleCore(int bi, int ci, Vec2 q, Vec2 qStart, Vec2 a, Vec2 b, Vec2 d, float l2, Vec2 ln, bool hasNormal, float rt, int feature, float h)
+        {
             float u = 0f;
             if (l2 > 1e-14f) u = Vec2.Dot(q - a, d) / l2;
             float uc = u < 0f ? 0f : (u > 1f ? 1f : u);
@@ -372,7 +390,7 @@ namespace Ballverse.Core.Sim
             if (l2 > 1e-14f && (face || dist2 <= NormalEpsilon * NormalEpsilon))
             {
                 // Face: the side the centre is on now (legal after the sweep); exactly on the line — the side it came from.
-                Vec2 ln = d.Perp / MathF.Sqrt(l2);
+                if (!hasNormal) ln = d.Perp / MathF.Sqrt(l2);
                 float side = Vec2.Dot(q - a, ln);
                 if (side > -SideEpsilon && side < SideEpsilon) side = Vec2.Dot(qStart - a, ln);
                 n = side >= 0f ? ln : -ln;

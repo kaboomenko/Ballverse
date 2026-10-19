@@ -97,6 +97,18 @@ namespace Ballverse.Core.Sim
             Array.Resize(ref _wallMark, size);
             Array.Resize(ref _wallRejected, size);
             Array.Resize(ref _wallCandidates, size);
+            EnsureRadialCapacity(size);
+        }
+
+        void EnsureEdgeFrameCapacity()
+        {
+            if (_edgeScale.Length < _colliderCount)
+            {
+                int old = _edgeScale.Length;
+                Array.Resize(ref _edgeScale, Math.Max(_colliderCount, old * 2));
+                for (int i = old; i < _edgeScale.Length; i++) _edgeScale[i] = float.NaN;
+            }
+            if (_edgeFrames.Length < _vertexCount) Array.Resize(ref _edgeFrames, Math.Max(_vertexCount, _edgeFrames.Length * 2));
         }
 
         void CollideBallWithWalls(int bi, float h)
@@ -208,6 +220,8 @@ namespace Ballverse.Core.Sim
             ref BallState b = ref _balls[bi];
             float r = b.Radius;
             float rCap = BridgeReach(r);
+            // Radial index (PhysicsWorld.Broadphase.cs): culls only colliders the bounds test below would reject.
+            if (_wallIndex.Usable && RadialRange(from, to, rCap, out float ra, out float rb)) return GatherWallCandidatesIndexed(bi, from, to, n, rCap, ra, rb);
             for (int c = 0; c < _colliderCount; c++)
             {
                 if (_wallMark[c] == _wallStamp) continue;
@@ -290,6 +304,15 @@ namespace Ballverse.Core.Sim
                 {
                     bool found = false;
                     int edges = c.Closed ? c.VertexCount : c.VertexCount - 1;
+                    if (EdgeFramesValid(ci, s))
+                    {
+                        for (int k = 0; k < edges; k++)
+                        {
+                            ref EdgeFrame e = ref _edgeFrames[c.VertexStart + k];
+                            if (SweepCapsuleCore(q0, q1, e.A, e.B, e.D, e.L2, e.N, rt, k, ref best)) found = true;
+                        }
+                        return found;
+                    }
                     for (int k = 0; k < edges; k++)
                     {
                         Vec2 a = _vertices[c.VertexStart + k] * s;
@@ -333,14 +356,19 @@ namespace Ballverse.Core.Sim
         /// <summary>Sweep of the centre q0→q1 against a capsule (a, b, radius rt); keeps the earliest candidate in <paramref name="best"/>.</summary>
         static bool SweepCapsule(Vec2 q0, Vec2 q1, Vec2 a, Vec2 b, float rt, int feature, ref SweepHit best)
         {
-            Vec2 motion = q1 - q0;
             Vec2 d = b - a;
             float l2 = d.LengthSquared;
+            Vec2 n = l2 > 1e-14f ? d.Perp / MathF.Sqrt(l2) : default;
+            return SweepCapsuleCore(q0, q1, a, b, d, l2, n, rt, feature, ref best);
+        }
+
+        /// <summary><see cref="SweepCapsule"/> with the edge data precomputed: d = b − a, l2 = |d|², n = d⊥ / |d| (when l2 &gt; 1e-14).</summary>
+        static bool SweepCapsuleCore(Vec2 q0, Vec2 q1, Vec2 a, Vec2 b, Vec2 d, float l2, Vec2 n, float rt, int feature, ref SweepHit best)
+        {
+            Vec2 motion = q1 - q0;
             bool found = false;
             if (l2 > 1e-14f)
             {
-                float len = MathF.Sqrt(l2);
-                Vec2 n = d.Perp / len;
                 float s0 = Vec2.Dot(q0 - a, n);
                 float s1 = Vec2.Dot(q1 - a, n);
                 // The whole chord stays farther than rt from the capsule's line on one side: neither the face nor the end

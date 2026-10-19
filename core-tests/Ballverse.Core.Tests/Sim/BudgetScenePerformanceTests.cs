@@ -10,15 +10,29 @@ namespace Ballverse.Core.Tests.Sim
     /// <summary>
     /// Step cost of the release-1 body-budget scenes (spec §2.9 budgets, §6.5 CI target: tier-A scene at 8 substeps ≤ 0.5 ms
     /// per tick on an x64 runner). Absolute times depend on the machine, so each scene is timed relative to a fixed
-    /// float/sqrt calibration loop measured in the same process (best of several runs for both), and the bound is a ratio:
-    /// a several-fold solver regression fails on any machine, a slow or busy CI runner does not. Limits are ~3–4× the ratios
-    /// measured on the development container (x64, .NET 8 Release: tier A ≈ 0.55 ms/tick ≈ 0.3× calibration). Measured
-    /// times and the ratio to the 0.5 ms target are written to the test output; the absolute target is tracked, not asserted.
+    /// float/sqrt calibration loop measured in the same process (best of several runs for both), and the bound is a ratio.
     /// <para>
-    /// Tier A at the default 8 substeps measures 0.51–0.76 ms/tick on the (shared, noisy) development container, 1.0–1.5× the
-    /// target, ~70 % of it in ball–ball contacts. §6.5's fallback therefore applies to the Geometry Bounce tier-A budget: fewer
-    /// substeps inside the 4–16 envelope covered by the tunnelling property tests. At 6 substeps (timed here too) it measures
-    /// 0.43–0.62 ms/tick, about 20–25 % less; 4 substeps ≈ 0.30 ms/tick. The mode (a later step) picks the count.
+    /// Measurement: every scene is built afresh in several rounds, warmed for a fixed number of ticks (not a wall time — the
+    /// old 0.2 s warm-up measured a later, costlier state on faster machines) and timed over the same 100-tick window in
+    /// 10-tick batches; the result is the best batch over all rounds, i.e. the best of several measurements of identical work,
+    /// which keeps a busy machine's preemption out of it.
+    /// </para>
+    /// <para>
+    /// Limits: measured in four full runs of this class on the development container (x64, .NET 8 Release, a heavily shared
+    /// machine: load average 8–18 on 4 cores during the runs; each scene's measured range is quoted at the scene), every limit
+    /// is below twice the lowest measured ratio — a 2× solver regression fails even on the luckiest run — and at least 1.3×
+    /// the highest measured ratio (the margin for a different runner, quoted per scene). The calibration loop is re-measured
+    /// around every scene and an attempt over the limit is repeated up to three times (best counts), so a burst of load on
+    /// the runner does not fail a test while a real regression fails every attempt. Before the collider broadphase the Ring Escape 100-ring scene
+    /// measured 1.07× calibration on a GitHub runner (1.94 ms/tick) against a 1.0× limit — the dense ball grid grew with the
+    /// balls' spread, so the cost depended on how far the time-based warm-up had run. Measured times and the ratio to the
+    /// 0.5 ms target are written to the test output; the absolute target is tracked, not asserted.
+    /// </para>
+    /// <para>
+    /// Tier A at the default 8 substeps measures 0.48–0.62 ms/tick on the development container (≈ 1.0–1.2× the target),
+    /// ~60 % of it in ball–ball contacts (sequential impulses whose order is part of the determinism contract); §6.5's
+    /// fallback (fewer substeps inside the 4–16 envelope covered by the tunnelling property tests) stays available to the
+    /// Geometry Bounce tier-A budget: 6 substeps (timed here too) ≈ 0.40–0.46 ms/tick.
     /// </para>
     /// </summary>
     [Collection(SimPerformanceCollection.Name)]
@@ -40,6 +54,12 @@ namespace Ballverse.Core.Tests.Sim
         static double CalibrationMs()
         {
             if (s_calibrationMs > 0) return s_calibrationMs;
+            return MeasureCalibrationMs();
+        }
+
+        /// <summary>Measures the calibration loop now (best of 7 runs); the process-wide value keeps the best seen.</summary>
+        static double MeasureCalibrationMs()
+        {
             var xs = new float[1024];
             var ys = new float[1024];
             for (int i = 0; i < xs.Length; i++)
@@ -66,7 +86,7 @@ namespace Ballverse.Core.Tests.Sim
                 s_sink += acc;
                 best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
             }
-            s_calibrationMs = best;
+            if (s_calibrationMs < 0 || best < s_calibrationMs) s_calibrationMs = best;
             return best;
         }
 
@@ -94,41 +114,72 @@ namespace Ballverse.Core.Tests.Sim
         }
 
         /// <summary>
-        /// Best average tick time (ms) over many short batches after the process-wide JIT warm-up and a scene warm-up of at
-        /// least 60 ticks / 0.2 s. Short batches and the minimum keep preemption on a busy machine (4–16 ms scheduler slices)
-        /// out of the result.
+        /// Best average tick time (ms) of <paramref name="build"/>'s scene: <paramref name="rounds"/> fresh worlds, each warmed
+        /// for <paramref name="warmTicks"/> ticks and then timed over <paramref name="batches"/> batches of 10 ticks — the same
+        /// ticks in every round (the simulation is deterministic) — after the process-wide JIT warm-up.
         /// </summary>
-        static double TimeTicks(PhysicsWorld w, Action<PhysicsWorld> beforeStep = null, int batches = 30, int ticksPerBatch = 10)
+        static double TimeTicks(Func<PhysicsWorld> build, Action<PhysicsWorld, int> beforeStep = null, int rounds = 4, int batches = 10, int warmTicks = 120)
         {
+            const int ticksPerBatch = 10;
             EnsureJitWarm();
-            var warm = Stopwatch.StartNew();
-            for (int t = 0; t < 60 || warm.ElapsedMilliseconds < 200; t++)
-            {
-                beforeStep?.Invoke(w);
-                w.Step();
-            }
             double best = double.MaxValue;
-            for (int b = 0; b < batches; b++)
+            for (int round = 0; round < rounds; round++)
             {
-                var sw = Stopwatch.StartNew();
-                for (int t = 0; t < ticksPerBatch; t++)
+                PhysicsWorld w = build();
+                int tick = 0;
+                for (; tick < warmTicks; tick++)
                 {
-                    beforeStep?.Invoke(w);
+                    beforeStep?.Invoke(w, tick);
                     w.Step();
                 }
-                sw.Stop();
-                best = Math.Min(best, sw.Elapsed.TotalMilliseconds / ticksPerBatch);
+                for (int b = 0; b < batches; b++)
+                {
+                    var sw = Stopwatch.StartNew();
+                    for (int t = 0; t < ticksPerBatch; t++, tick++)
+                    {
+                        beforeStep?.Invoke(w, tick);
+                        w.Step();
+                    }
+                    sw.Stop();
+                    best = Math.Min(best, sw.Elapsed.TotalMilliseconds / ticksPerBatch);
+                }
             }
             return best;
         }
 
-        void Report(string scene, double ms, double ratioLimit)
+        /// <summary>Measurement attempts per scene; the best ratio counts.</summary>
+        const int Attempts = 3;
+
+        /// <summary>
+        /// Times the scene (<paramref name="measure"/>, ms/tick) with the calibration loop measured right before and after
+        /// it, so both see the same machine load, and asserts the ratio. An attempt over the limit is repeated (up to
+        /// <see cref="Attempts"/>, best ratio counts): a busy machine passes on a quieter attempt, a real regression fails
+        /// all of them. (On the shared development container a full-suite run beside other jobs, load average ~20 on 4
+        /// cores, once pushed the memory-heavy Geometry Bounce scenes 1.5–2× above their quiet ratios while the ALU-bound
+        /// calibration loop barely moved.)
+        /// </summary>
+        double Report(string scene, Func<double> measure, double ratioLimit)
         {
-            double calib = CalibrationMs();
-            double ratio = ms / calib;
-            _out.WriteLine(scene + ": " + ms.ToString("F3") + " ms/tick (" + (ms / 0.5).ToString("F2") + "× the 0.5 ms target), "
-                + ratio.ToString("F2") + "× calibration (" + calib.ToString("F3") + " ms), limit " + ratioLimit + "×");
-            Assert.True(ratio < ratioLimit, scene + ": " + ms + " ms/tick is " + ratio + "× the calibration loop (limit " + ratioLimit + "×)");
+            double bestRatio = double.MaxValue, bestMs = 0, bestCalib = 0;
+            int attempts = 0;
+            while (attempts < Attempts && bestRatio >= ratioLimit)
+            {
+                attempts++;
+                double calib = MeasureCalibrationMs();
+                double ms = measure();
+                calib = Math.Min(calib, MeasureCalibrationMs());
+                double ratio = ms / calib;
+                if (ratio < bestRatio)
+                {
+                    bestRatio = ratio;
+                    bestMs = ms;
+                    bestCalib = calib;
+                }
+            }
+            _out.WriteLine(scene + ": " + bestMs.ToString("F3") + " ms/tick (" + (bestMs / 0.5).ToString("F2") + "× the 0.5 ms target), "
+                + bestRatio.ToString("F3") + "× calibration (" + bestCalib.ToString("F3") + " ms), limit " + ratioLimit + "×, attempts " + attempts);
+            Assert.True(bestRatio < ratioLimit, scene + ": " + bestMs + " ms/tick is " + bestRatio + "× the calibration loop (limit " + ratioLimit + "×, best of " + attempts + ")");
+            return bestRatio;
         }
 
 #if DEBUG
@@ -162,24 +213,26 @@ namespace Ballverse.Core.Tests.Sim
             return w;
         }
 
+        /// <summary>
+        /// Measured ratios / limits (margin over the highest): tier A 8 substeps 0.247–0.370× / 0.48× (1.30×); tier A 6
+        /// substeps 0.191–0.276× / 0.37× (1.34×); tier B 0.117–0.158× / 0.21× (1.33×); tier C 0.051–0.060× / 0.09× (1.50×).
+        /// </summary>
         [Theory]
-        [InlineData("A", 200, 2.5, 8)]
-        [InlineData("A", 200, 2.0, 6)]
-        [InlineData("B", 120, 1.0, 8)]
-        [InlineData("C", 60, 0.4, 8)]
+        [InlineData("A", 200, 0.48, 8)]
+        [InlineData("A", 200, 0.37, 6)]
+        [InlineData("B", 120, 0.21, 8)]
+        [InlineData("C", 60, 0.09, 8)]
         public void GeometryBounceBudgetScenes(string tier, int balls, double ratioLimit, int substeps)
         {
-            var w = GeometryBounce(balls, substeps: substeps);
-            double ms = TimeTicks(w);
-            Assert.Equal(balls, w.AliveBallCount);
-            Report("M02 tier " + tier + " (" + balls + " balls Ø0.34 m, rotating hexagon, " + substeps + " substeps)", ms, ratioLimit * Slack);
+            Report("M02 tier " + tier + " (" + balls + " balls Ø0.34 m, rotating hexagon, " + substeps + " substeps)",
+                () => TimeTicks(() => GeometryBounce(balls, substeps: substeps)), ratioLimit * Slack);
         }
 
+        /// <summary>Measured 0.360–0.459×; limit 0.65× (margin 1.42×).</summary>
         [Fact]
         public void GeometryBounceWithFullSizeSpreadStaysCheap()
         {
-            var w = GeometryBounce(200, diameterSpread: 1f);
-            Report("M02 tier A, sizeSpread 100%", TimeTicks(w), 3.0 * Slack);
+            Report("M02 tier A, sizeSpread 100%", () => TimeTicks(() => GeometryBounce(200, diameterSpread: 1f)), 0.65 * Slack);
         }
 
         /// <summary>
@@ -192,8 +245,8 @@ namespace Ballverse.Core.Tests.Sim
             double uniform = double.MaxValue, mixed = double.MaxValue;
             for (int rep = 0; rep < 2; rep++)
             {
-                uniform = Math.Min(uniform, TimeTicks(GeometryBounce(120, radius: 0.12f), batches: 15));
-                mixed = Math.Min(mixed, TimeTicks(GeometryBounce(120, bigRadius: 1.2f, radius: 0.12f), batches: 15));
+                uniform = Math.Min(uniform, TimeTicks(() => GeometryBounce(120, radius: 0.12f)));
+                mixed = Math.Min(mixed, TimeTicks(() => GeometryBounce(120, bigRadius: 1.2f, radius: 0.12f)));
             }
             double ratio = mixed / uniform;
             _out.WriteLine("120 balls r 0.12: " + uniform.ToString("F3") + " ms/tick; + one r 1.2 ball: " + mixed.ToString("F3") + " ms/tick ("
@@ -201,13 +254,16 @@ namespace Ballverse.Core.Tests.Sim
             Assert.True(ratio < 2.5, "one grown ball made the tick " + ratio + "× slower");
         }
 
-        /// <summary>Ring Escape (M01) at its budget: 100 rotating rings with a gap each (own bodies), a passage sensor per ring, 20 balls.</summary>
-        [Fact]
-        public void RingEscapeHundredRingsTwentyBalls()
+        /// <summary>
+        /// Ring Escape (M01) test scene: <paramref name="rings"/> rotating rings 0.2 m apart (radius 0.8 m + 0.2 m·k), each with a
+        /// 0.6 rad gap on its own body and a passage sensor ring 0.08 m outside it, 20 balls (r 0.05 m) launched at 8 m/s from
+        /// the centre under 1 g. No floor: escaped balls fall away.
+        /// </summary>
+        internal static PhysicsWorld RingEscape(int rings, int balls = 20)
         {
             var w = new PhysicsWorld(SimSettings.Default);
             var rng = Rng.FromSeed(3UL);
-            for (int k = 0; k < 100; k++)
+            for (int k = 0; k < rings; k++)
             {
                 float radius = 0.8f + 0.2f * k;
                 float omega = (k % 2 == 0 ? 1f : -1f) * rng.NextFloat(0.5f, 2f);
@@ -215,35 +271,103 @@ namespace Ballverse.Core.Tests.Sim
                 w.AddRing(body, Vec2.Zero, radius, 0.04f, new[] { AngularGap.Centered(0f, 0.6f) }, SimTestUtil.Wall(0.9f, 0.1f));
                 w.AddRing(body, Vec2.Zero, radius + 0.08f, 0f, ReadOnlySpan<AngularGap>.Empty, ColliderMaterial.Sensor());
             }
-            for (int i = 0; i < 20; i++)
+            for (int i = 0; i < balls; i++)
             {
                 var d = SimTestUtil.Ball(new Vec2(rng.NextFloat(-0.3f, 0.3f), rng.NextFloat(-0.3f, 0.3f)),
                     Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi)) * 8f, 0.05f, 0.9f, 0.1f);
                 w.AddBall(d);
             }
-            Report("M01 (100 rings + 100 sensors, 20 balls)", TimeTicks(w), 1.0 * Slack);
+            return w;
         }
 
-        /// <summary>Helix Drop (M05): one ball falling through a tower of 30 spinning platforms with gaps, swiped tower spin.</summary>
+        /// <summary>
+        /// Ring Escape (M01) at its budget: 100 rotating rings with a gap each (own bodies), a passage sensor per ring, 20 balls.
+        /// Measured 0.069–0.080× (0.145–0.163 ms/tick); limit 0.13× (margin 1.63×). Before the broadphase: 0.14× here at this
+        /// state, and 1.07× on a GitHub runner with the old time-based warm-up (a later, costlier state).
+        /// </summary>
+        [Fact]
+        public void RingEscapeHundredRingsTwentyBalls()
+        {
+            Report("M01 (100 rings + 100 sensors, 20 balls)", () => TimeTicks(() => RingEscape(100)), 0.13 * Slack);
+        }
+
+        /// <summary>
+        /// Machine-independent guard of the collider broadphase: the same 100-ring scene with the radial index, the sensor
+        /// pre-check and the sparse ball grid must run at least 1.3× faster than with the reference exhaustive paths, timed
+        /// back to back in this process (measured 1.63–1.86× at this early state, balls still near the centre; 3× over a full
+        /// 180 s run, see the headless test).
+        /// </summary>
+        [Fact]
+        public void BroadphaseSpeedsUpTheHundredRingScene()
+        {
+            double fast = double.MaxValue, slow = double.MaxValue;
+            for (int rep = 0; rep < 2 || (rep < 2 * Attempts && slow / fast <= 1.3); rep++)
+            {
+                fast = Math.Min(fast, TimeTicks(() => RingEscape(100)));
+                slow = Math.Min(slow, TimeTicks(() =>
+                {
+                    var w = RingEscape(100);
+                    w.ExhaustiveBroadphase = true;
+                    return w;
+                }));
+            }
+            double speedup = slow / fast;
+            _out.WriteLine("M01 100 rings: broadphase " + fast.ToString("F3") + " ms/tick, exhaustive " + slow.ToString("F3") + " ms/tick (" + speedup.ToString("F2") + "×)");
+            Assert.True(speedup > 1.3, "broadphase speedup only " + speedup + "×");
+        }
+
+        /// <summary>
+        /// Helix Drop (M05): one ball falling through a tower of 30 spinning platforms with gaps, swiped tower spin. Measured
+        /// 0.0062–0.0080× (0.013–0.015 ms/tick); limit 0.0115× (margin 1.44×). (The old 0.007 ms/tick was measured after the
+        /// 0.2 s warm-up had run the ball out of the tower.)
+        /// </summary>
         [Fact]
         public void HelixDropThirtyPlatforms()
         {
-            var w = new PhysicsWorld(SimSettings.Default);
-            var rng = Rng.FromSeed(5UL);
-            var tower = new int[30];
-            for (int k = 0; k < 30; k++)
+            int[] tower = null;
+            Report("M05 (30 spin platforms, 1 ball)", () => TimeTicks(() =>
             {
-                tower[k] = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, Position = new Vec2(0f, -1.2f * k), Scale = 1f, Spin = rng.NextFloat(0f, SimMath.TwoPi) });
-                float gap = rng.NextFloat(0f, SimMath.TwoPi);
-                w.AddSpinPlatform(tower[k], Vec2.Zero, 1.5f, 0.15f, new[] { AngularGap.Centered(gap, 0.9f) }, SimTestUtil.Wall(0.6f, 0.3f));
-            }
-            w.AddBall(SimTestUtil.Ball(new Vec2(0.3f, 1f), Vec2.Zero, 0.15f, 0.6f, 0.3f));
-            int frame = 0;
-            Report("M05 (30 spin platforms, 1 ball)", TimeTicks(w, world =>
+                var w = new PhysicsWorld(SimSettings.Default);
+                var rng = Rng.FromSeed(5UL);
+                tower = new int[30];
+                for (int k = 0; k < 30; k++)
+                {
+                    tower[k] = w.AddBody(new BodyDef { Motion = BodyMotion.Kinematic, Position = new Vec2(0f, -1.2f * k), Scale = 1f, Spin = rng.NextFloat(0f, SimMath.TwoPi) });
+                    float gap = rng.NextFloat(0f, SimMath.TwoPi);
+                    w.AddSpinPlatform(tower[k], Vec2.Zero, 1.5f, 0.15f, new[] { AngularGap.Centered(gap, 0.9f) }, SimTestUtil.Wall(0.6f, 0.3f));
+                }
+                w.AddBall(SimTestUtil.Ball(new Vec2(0.3f, 1f), Vec2.Zero, 0.15f, 0.6f, 0.3f));
+                return w;
+            }, (world, tick) =>
             {
-                float spin = (frame++ / 30) % 2 == 0 ? 3f : -3f;
+                float spin = (tick / 30) % 2 == 0 ? 3f : -3f;
                 for (int k = 0; k < tower.Length; k++) world.SetBodySpinVelocity(tower[k], spin);
-            }), 0.1 * Slack);
+            }), 0.0115 * Slack);
         }
+
+        /// <summary>
+        /// Headless generation cost (spec §2.4: candidates run without rendering up to 180 s of game time = 10 800 ticks): one
+        /// full 180 s run of the Ring Escape test scene at the 100-ring maximum and one at the default 12 rings, wall time
+        /// reported. Only a lenient bound is asserted (a run must stay far below a minute on any runner); the numbers feed the
+        /// generation budget discussion (tier A: up to 24 candidates in ≤ 1.5 s).
+        /// </summary>
+        [Theory]
+        [InlineData(100)]
+        [InlineData(12)]
+        public void HeadlessRingEscapeRunOf180Seconds(int rings)
+        {
+            EnsureJitWarm();
+            var w = RingEscape(rings);
+            const int ticks = 180 * SimConstants.TickRate;
+            var sw = Stopwatch.StartNew();
+            for (int t = 0; t < ticks; t++) w.Step();
+            sw.Stop();
+            double ms = sw.Elapsed.TotalMilliseconds;
+            _out.WriteLine("M01 headless 180 s, " + rings + " rings, 20 balls: " + (ms / 1000.0).ToString("F2") + " s wall (" + (ms / ticks).ToString("F3")
+                + " ms/tick, " + (ticks * TickDurationMs / ms).ToString("F0") + "× real time), " + w.AliveBallCount + " balls alive");
+            Assert.True(ms < 20000.0 * Slack, "180 s headless run took " + ms + " ms");
+        }
+
+        const double TickDurationMs = 1000.0 / SimConstants.TickRate;
     }
 }

@@ -21,9 +21,10 @@ namespace Ballverse.Core.Sim
         /// <summary>
         /// Advances the world by one tick (1/60 s) in <see cref="SimSettings.Substeps"/> substeps: kinematic bodies move,
         /// balls integrate gravity, ball–ball contacts are solved (uniform grid; bottom-up along gravity, otherwise ascending
-        /// id), then every ball (ascending id) is swept against all colliders at once and resolved (time of impact order, then
-        /// one joint projection out of every wall it still overlaps), so walls win over ball pushes; then spin-platform
-        /// transits are released. Afterwards <see cref="Events"/> holds this tick's sorted events.
+        /// id), then every ball (ascending id) is swept against all the colliders its path can reach at once (radial broadphase,
+        /// PhysicsWorld.Broadphase.cs) and resolved (time of impact order, then one joint projection out of every wall it still
+        /// overlaps), so walls win over ball pushes; then spin-platform transits are released. Afterwards
+        /// <see cref="Events"/> holds this tick's sorted events.
         /// </summary>
         public void Step()
         {
@@ -43,6 +44,7 @@ namespace Ballverse.Core.Sim
         {
             BeginTickEvents();
             EnsureColliderScratch();
+            EnsureEdgeFrameCapacity();
             float dt = TickDuration;
             for (int i = 0; i < _bodyCount; i++)
             {
@@ -203,13 +205,30 @@ namespace Ballverse.Core.Sim
         void UpdateColliderBounds(float h)
         {
             _capExtent = -1f;
+            // Radial index inputs (PhysicsWorld.Broadphase.cs): active walls / sensors and the pivot (largest bounds).
+            int walls = 0, sensors = 0, pivot = -1;
+            float pivotOuter = 0f;
             for (int c = 0; c < _colliderCount; c++)
             {
                 ref ColliderData cd = ref _colliders[c];
                 ref ColliderBounds cb = ref _colliderBounds[c];
                 ref PhysicsBodyState b = ref _bodies[cd.Body];
                 cb.Active = cd.Enabled && b.Enabled;
-                if (!cb.Active) continue;
+                if (!cb.Active)
+                {
+                    cb.Member = RadialNone;
+                    continue;
+                }
+                if (cd.Material.IsSensor)
+                {
+                    cb.Member = RadialSensor;
+                    sensors++;
+                }
+                else
+                {
+                    cb.Member = RadialWall;
+                    walls++;
+                }
                 if (!cd.Material.IsSensor && HasFreeCaps(ref cd))
                 {
                     float extent = cd.Kind == ColliderKind.Circle ? cd.Radius * b.Scale : cd.HalfThickness;
@@ -217,11 +236,12 @@ namespace Ballverse.Core.Sim
                 }
                 ref BodyFrame f = ref _frames[cd.Body];
                 float s = b.Scale;
+                if (cd.Kind == ColliderKind.Polyline && _edgeScale[c] != s && !ExhaustiveBroadphase) RefreshEdgeFrames(c, s);
                 cb.Centre = b.Position + Vec2.Rotate(cd.BoundCentre * s, f.Cos, f.Sin);
                 // Margin covers the body's own translation, rotation of an off-centre bound and scale change within the substep.
                 float margin = (b.Position - f.PrevPosition).Length
-                    + MathF.Abs(s - f.PrevScale) * (cd.BoundRadius + cd.BoundCentre.Length)
-                    + cd.BoundCentre.Length * s * MathF.Abs(b.AngularVelocity) * h;
+                    + MathF.Abs(s - f.PrevScale) * (cd.BoundRadius + cd.BoundCentreLength)
+                    + cd.BoundCentreLength * s * MathF.Abs(b.AngularVelocity) * h;
                 float geom = cd.BoundRadius * s;
                 if (cd.Kind == ColliderKind.Circle)
                 {
@@ -233,7 +253,13 @@ namespace Ballverse.Core.Sim
                     cb.Outer = geom + cd.HalfThickness + margin;
                     cb.Inner = cd.Kind == ColliderKind.Ring ? geom - cd.HalfThickness - margin : -1f;
                 }
+                if (pivot < 0 || cb.Outer > pivotOuter)
+                {
+                    pivot = c;
+                    pivotOuter = cb.Outer;
+                }
             }
+            BuildRadialIndexes(walls, sensors, pivot);
         }
 
         /// <summary>Cheap reject: the ball's path in this substep against the collider's bounding circle (and a ring's empty interior).</summary>
