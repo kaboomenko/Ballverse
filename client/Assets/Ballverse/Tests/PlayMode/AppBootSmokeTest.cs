@@ -175,7 +175,9 @@ namespace Ballverse.PlayModeTests
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<AppRunner>(), "AppRunner (per-frame Tick / LateTick)");
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<ServicesRunner>(), "ServicesRunner");
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<LiveAudioOutput>(), "LiveAudioOutput");
-            Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<AudioListener>(), "an AudioListener (LiveAudioOutput adds one to the camera-less boot scene)");
+            // DeviceAudio adds the app's only listener to the camera-less boot scene, on an object of its own.
+            string audioPlacement = DeviceAudio.FindPlacementProblem();
+            Assert.IsNull(audioPlacement, audioPlacement);
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<BallverseUIRoot>(), "BallverseUIRoot");
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<StudioRunner>(), "StudioRunner (export / preview loop)");
             _notices = ctx.Notices;
@@ -242,6 +244,10 @@ namespace Ballverse.PlayModeTests
             long budgetMs = ctx.Remote.Budgets.Get(ctx.Tier).TimeMs;
             LiveRunSnapshot beforeDice = LiveRunSnapshot.Of(sim, ctx);
             int noticesBeforeDice = _shownNotices.Count;
+            // A session seed proven to select a candidate: with a random one, "nothing found" is a legitimate outcome on a slow
+            // runner, and this step checks the wiring, not luck. Everything else (budget, worker, posting back) stays real.
+            var pinnedSeeds = new List<ulong>();
+            sim.SessionSeedSource = SmokeChecks.ViableSessionSeedSource(sim, ctx, pinnedSeeds);
             sim.Generate();
             Assert.IsTrue(sim.IsGenerating, "🎲 started (the result is posted back to the main thread on a later frame)");
             double generationTimeout = Math.Max(FrameStepTimeoutS, 20.0 * budgetMs / 1000.0);
@@ -258,7 +264,7 @@ namespace Ballverse.PlayModeTests
                 return !sim.IsGenerating && !sim.AwaitingWinnerDecision;
             }, generationTimeout);
             LiveRunSnapshot afterDice = LiveRunSnapshot.Of(sim, ctx);
-            Info("generation took " + generating.ElapsedMilliseconds + " ms; style " + sim.LastGenerationStyle + ", phase " + sim.Phase
+            Info("generation took " + generating.ElapsedMilliseconds + " ms; session seed " + string.Join(", ", pinnedSeeds) + ", style " + sim.LastGenerationStyle + ", phase " + sim.Phase
                  + ", " + beforeDice + " → " + afterDice + (declinedChoice ? " (winner choice closed)" : "") + ", toasts so far: " + string.Join(", ", _toasts));
             Assert.IsTrue(ctx.Live.HasRun, "a run is shown after 🎲");
             string diceFailure = SmokeChecks.DiceFailure(beforeDice, afterDice, declinedChoice,

@@ -59,6 +59,9 @@ namespace Ballverse.PlayModeTests.LogicTests
         {
             var notices = new List<LocalizedText>();
             TestApp app = BootOnRingEscape(notices);
+            // As AppBootSmokeTest step 5: a session seed proven to select a candidate.
+            var pinned = new List<ulong>();
+            app.Sim.SessionSeedSource = SmokeChecks.ViableSessionSeedSource(app.Sim, app.Context, pinned);
             LiveRunSnapshot before = LiveRunSnapshot.Of(app.Sim, app.Context);
             int start = notices.Count;
             app.Sim.Generate();
@@ -68,6 +71,7 @@ namespace Ballverse.PlayModeTests.LogicTests
             string failure = SmokeChecks.DiceFailure(before, after, false, notices.Skip(start).ToList(), k => app.Context.Notices.TextOf(k));
             Assert.IsNull(failure, failure + "; errors: " + string.Join("; ", app.Errors));
             Assert.AreEqual(PresetsViewModel.CustomId, after.PresetId);
+            Assert.AreEqual(1, pinned.Count, "the 🎲 took the pinned session seed");
         }
 
         /// <summary>QA's probe: 🎲 then cancel ends with no run applied; the old post-condition passed, the new one must not.</summary>

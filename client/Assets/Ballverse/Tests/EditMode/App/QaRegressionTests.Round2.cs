@@ -65,6 +65,7 @@ namespace Ballverse.App.Tests
             app.RunToEnd();
             for (int i = 0; i < 3; i++) app.Context.Ads.OnRunEnded(GameRunSummary.FinishedRegular(600));
             Assert.IsNotNull(app.Sim.Result, "result card");
+            app.PinViableSessionSeeds(); // the generated run must start (a random seed may find nothing)
             ulong before = app.Context.Live.Seed;
 
             app.Sim.Generate();

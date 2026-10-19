@@ -143,6 +143,9 @@ namespace Ballverse.App.Tests
         public void LastSecondChoiceWithoutColoursFallsBackToTenseFinaleWithoutAGoal()
         {
             TestApp app = BootTinyBudgets();
+            // Every 🎲 below must start a run: a random session seed sometimes gets no acceptable candidate from the 2-candidate
+            // budget («Couldn't find a working variant», flaky on a GitHub runner).
+            app.PinViableSessionSeeds();
             Assert.IsTrue(app.Context.Modes.TryGet("ring_escape", out IModeDefinition mode));
             Assert.IsTrue(app.Sim.OpenWith(mode, ColorRace(mode, app.Context.Tier)));
             app.Sim.SetScreenActive(true);
@@ -179,6 +182,7 @@ namespace Ballverse.App.Tests
             app.Sim.Generate("chaos", "auto");
             WaitUntil(app, () => !app.Sim.IsGenerating, "chaos generation done");
             Assert.AreEqual("chaos", app.Context.Settings.Data.GenerationStyle);
+            Assert.AreEqual(4, app.PinnedSessionSeeds.Count, "every 🎲 got a proven session seed");
             Assert.IsEmpty(app.Errors, Errors(app));
         }
 
@@ -200,6 +204,7 @@ namespace Ballverse.App.Tests
         {
             var tracking = new FakeTrackingAuthorization { Answer = TrackingAuthorizationStatus.Denied };
             TestApp app = BootAtResultCardWithAttPending(tracking);
+            app.PinViableSessionSeeds(); // the generated run must start (a random seed may find nothing)
             ulong before = app.Context.Live.Seed;
 
             app.Sim.Generate();

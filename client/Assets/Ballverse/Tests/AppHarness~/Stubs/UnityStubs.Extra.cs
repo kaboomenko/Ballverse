@@ -78,6 +78,8 @@ namespace UnityEngine
         public static void Save() { }
     }
 
+    public enum FindObjectsSortMode { None = 0, InstanceID = 1 }
+
     public sealed class AudioListener : Behaviour
     {
         public static bool pause { get; set; }

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using Ballverse.App;
+using Ballverse.Core.Generation;
+using Ballverse.Core.Modes;
 using Ballverse.Core.Params;
 using Ballverse.UI.Localization;
 using AppContext = Ballverse.App.AppContext;
@@ -81,6 +83,60 @@ namespace Ballverse.PlayModeTests
             if (after.PresetId != PresetsViewModel.CustomId)
                 return "a generated run selects the «" + PresetsViewModel.CustomId + "» preset, got " + after.PresetId;
             return null;
+        }
+
+        /// <summary>
+        /// A <see cref="SimulationViewModel.SessionSeedSource"/> that gives every 🎲 a session seed proven to select a candidate,
+        /// instead of a random one. The smoke test checks that a 🎲 applies a run; with a random seed and a budget cut short by a
+        /// slow runner, no viable candidate is a legitimate outcome (QA: a flaky App test). The source runs on the main thread
+        /// when the generation starts, after the view model set <see cref="SimulationViewModel.LastGenerationStyle"/> and
+        /// <see cref="SimulationViewModel.LastGenerationGoal"/>, so the search uses the request the view model is about to send.
+        /// Each seed handed out is added to <paramref name="pinned"/>.
+        /// </summary>
+        public static Func<ulong> ViableSessionSeedSource(SimulationViewModel sim, AppContext ctx, List<ulong> pinned)
+        {
+            return () =>
+            {
+                IModeDefinition mode = sim.Mode;
+                ParamSet values = sim.CurrentValues;
+                string duration = sim.SelectedDurationId;
+                if (duration != "auto" && mode.Schema.Contains(CommonParams.TargetDuration))
+                    values = values.With(CommonParams.TargetDuration, ParamValue.Int(int.Parse(duration, System.Globalization.CultureInfo.InvariantCulture)));
+                DirectorGoal goal = sim.LastGenerationGoal;
+                // As SimulationViewModel.StartGeneration: the LastSecond goal keeps the user's colours.
+                IModeDefinition generator = goal == DirectorGoal.LastSecond ? new ParticipantsKeepingMode(mode) : mode;
+                ulong seed = ViableSessionSeed(generator, values, ctx.Tier, ctx.Remote.Budgets, ctx.Remote.Profiles, sim.LastGenerationStyle, goal);
+                pinned?.Add(seed);
+                return seed;
+            };
+        }
+
+        /// <summary>
+        /// The first session seed whose candidate 0 is viable: not rejected, and with the forced winner if one is set. Candidate 0
+        /// always runs (GenerationSession.NextRequest hands it out before any time check), so the 🎲 selects a candidate (Success
+        /// or BelowThreshold) whatever the candidate and time budgets cut. Deterministic: one candidate budget, no clock.
+        /// </summary>
+        public static ulong ViableSessionSeed(IModeDefinition generator, ParamSet values, Ballverse.Core.DeviceTier tier,
+            GenerationBudgetTable budgets, SpectacleProfileTable profiles, GenerationStyle style, DirectorGoal goal)
+        {
+            for (ulong seed = 1; seed <= 64; seed++)
+            {
+                ModeGenerationResult r = ModeGenerator.Generate(generator, new ModeGenerationRequest
+                {
+                    BaseValues = values,
+                    Tier = tier,
+                    SessionSeed = seed,
+                    Style = style,
+                    Goal = goal,
+                    Budgets = budgets,
+                    Profiles = profiles,
+                    Budget = new GenerationBudget(1, 600_000),
+                    AutoTakeNearest = false,
+                });
+                IReadOnlyList<CandidateEvaluation> evaluations = r.Session.Evaluations;
+                if (evaluations.Count > 0 && !evaluations[0].IsRejected && evaluations[0].MatchesWinner) return seed;
+            }
+            throw new InvalidOperationException("No session seed in 1..64 gives a viable first candidate for style " + style + ", goal " + goal);
         }
     }
 }

@@ -24,7 +24,8 @@ namespace Ballverse.App
     /// <summary>
     /// The real engine and SDK pieces of the app (device and Play Mode): Services installer with the release-1 catalog preset,
     /// the platform media bridge, Ballverse.Studio's runtime with the App's renderer adapter over Ballverse.Render, the live
-    /// simulation view / gallery previews / audio output / haptics of Ballverse.Sim, the UI Toolkit shell and the Unity runner.
+    /// simulation view / gallery previews / audio output / haptics of Ballverse.Sim, the app's one AudioListener
+    /// (<see cref="DeviceAudio"/>), the UI Toolkit shell and the Unity runner.
     /// One <see cref="RenderResources"/> set is shared by the live view, the previews and the studio renderer.
     /// </summary>
     public static class DeviceEnvironment
@@ -53,6 +54,8 @@ namespace Ballverse.App
                 CreateMedia = () => MediaBridgeFactory.Create(),
                 CreateStudio = studio =>
                 {
+                    // StudioPreviewPlayer's PreviewAudioOutput is mixed only while an enabled AudioListener exists.
+                    DeviceAudio.EnsureListener();
                     DeviceTier tier = studio.Tier;
                     StudioServices services = StudioServices.Create(new StudioServicesOptions
                     {
@@ -71,16 +74,8 @@ namespace Ballverse.App
                 },
                 CreateSurface = () => new UnitySimSurface(new LiveSimView(Resources())),
                 CreatePreviews = () => new UnityGalleryPreviews(new GalleryPreviewRenderer(Resources(), report)),
-                CreateAudioOutput = engine =>
-                {
-                    LiveAudioOutput output = LiveAudioOutput.Create(engine);
-                    return new ActionDisposable(() =>
-                    {
-                        if (output == null) return;
-                        if (Application.isPlaying) UnityEngine.Object.Destroy(output.gameObject);
-                        else UnityEngine.Object.DestroyImmediate(output.gameObject);
-                    });
-                },
+                // The live output and the studio preview output never add listeners: DeviceAudio owns the app's only one.
+                CreateAudioOutput = DeviceAudio.CreateLiveOutput,
                 Haptics = new UnityHapticsDevice(),
                 Device = new UnityDeviceInfo(),
                 Platform = new UnityPlatformActions(),
@@ -92,6 +87,7 @@ namespace Ballverse.App
                 {
                     resources?.Dispose();
                     resources = null;
+                    DeviceAudio.ReleaseListener();
                 },
             };
             return env;

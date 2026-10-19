@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using Ballverse.Core;
+using Ballverse.Core.Generation;
 using Ballverse.Core.Modes;
 using Ballverse.Core.Monetization;
 using Ballverse.Core.Params;
@@ -161,6 +162,66 @@ namespace Ballverse.App.Tests
                 .With("ringCount", ParamValue.Int(100))
                 .With("gapSize", ParamValue.Float(26));
             return ModeParams.Prepare(mode, s, tier).Values;
+        }
+
+        /// <summary>Session seeds handed out by <see cref="PinViableSessionSeeds"/>, in 🎲 order.</summary>
+        public readonly List<ulong> PinnedSessionSeeds = new List<ulong>();
+
+        /// <summary>
+        /// Every later 🎲 of this app gets a session seed that is proven to select a candidate, instead of the random default
+        /// <see cref="SimulationViewModel.SessionSeedSource"/>. QA: with a 2-candidate budget some random seeds found no
+        /// acceptable Ring Escape candidate («Couldn't find a working variant»), so tests that need a generated run were flaky.
+        /// The source runs on the main thread when the generation starts, after the view model set
+        /// <see cref="SimulationViewModel.LastGenerationStyle"/> / <see cref="SimulationViewModel.LastGenerationGoal"/>, so the
+        /// search uses exactly the request the view model is about to send. A test that needs a failing seed pins its own.
+        /// </summary>
+        public void PinViableSessionSeeds()
+        {
+            Sim.SessionSeedSource = () =>
+            {
+                IModeDefinition mode = Sim.Mode;
+                ParamSet values = Sim.CurrentValues;
+                string duration = Sim.SelectedDurationId;
+                if (duration != "auto" && mode.Schema.Contains(CommonParams.TargetDuration))
+                    values = values.With(CommonParams.TargetDuration, ParamValue.Int(int.Parse(duration, System.Globalization.CultureInfo.InvariantCulture)));
+                DirectorGoal goal = Sim.LastGenerationGoal;
+                // As SimulationViewModel.StartGeneration: the LastSecond goal keeps the user's colours.
+                IModeDefinition generator = goal == DirectorGoal.LastSecond ? new ParticipantsKeepingMode(mode) : mode;
+                ulong seed = ViableSessionSeed(generator, values, Context.Tier, Context.Remote.Budgets, Context.Remote.Profiles,
+                    Sim.LastGenerationStyle, goal);
+                PinnedSessionSeeds.Add(seed);
+                return seed;
+            };
+        }
+
+        /// <summary>
+        /// The first session seed whose candidate 0 is viable for the request: not rejected, and with the forced winner if one is
+        /// set. Candidate 0 is always run (GenerationSession.NextRequest hands it out before any time check), so a 🎲 with this
+        /// seed selects a candidate (Success or BelowThreshold) whatever the candidate and time budgets cut. Deterministic: one
+        /// candidate budget, no clock.
+        /// </summary>
+        public static ulong ViableSessionSeed(IModeDefinition generator, ParamSet values, DeviceTier tier, GenerationBudgetTable budgets,
+            SpectacleProfileTable profiles, GenerationStyle style, DirectorGoal goal)
+        {
+            for (ulong seed = 1; seed <= 64; seed++)
+            {
+                ModeGenerationResult r = ModeGenerator.Generate(generator, new ModeGenerationRequest
+                {
+                    BaseValues = values,
+                    Tier = tier,
+                    SessionSeed = seed,
+                    Style = style,
+                    Goal = goal,
+                    Budgets = budgets,
+                    Profiles = profiles,
+                    Budget = new GenerationBudget(1, 600_000),
+                    AutoTakeNearest = false,
+                });
+                IReadOnlyList<CandidateEvaluation> evaluations = r.Session.Evaluations;
+                if (evaluations.Count > 0 && !evaluations[0].IsRejected && evaluations[0].MatchesWinner) return seed;
+            }
+            Assert.Fail("no session seed in 1..64 gives a viable first candidate for style " + style + ", goal " + goal);
+            return 0;
         }
 
         /// <summary>Opens Ring Escape with <see cref="QuickRingEscape"/> on the simulation screen.</summary>

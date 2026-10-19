@@ -6,10 +6,13 @@ namespace Ballverse.Sim
     /// Plays <see cref="LiveAudioEngine"/> on the Unity audio thread: an <see cref="AudioSource"/> loops a silent clip so Unity
     /// calls <see cref="OnAudioFilterRead"/>, where the engine renders the event mixer (spec §7.8, latency ≤ 50 ms). The
     /// engine's latency follows the DSP buffer size. Survives scene loads.
-    /// <para>Two device rules (Unity mixes nothing otherwise): the source must NOT set <c>bypassEffects</c> — that also
-    /// bypasses this component's <c>OnAudioFilterRead</c>, which is inserted as a custom filter in the source's DSP chain —
-    /// and an enabled <see cref="AudioListener"/> must exist for the whole app. The boot scene has no camera, so this
-    /// component adds a listener to its own (persistent) object when none is active; Studio's preview output then reuses it.</para>
+    /// <para>Device rules: the source must NOT set <c>bypassEffects</c>. That also bypasses this component's
+    /// <c>OnAudioFilterRead</c>, which Unity inserts as a custom filter into the DSP chain of the AudioSource on the same
+    /// object. Unity mixes nothing without an enabled <see cref="AudioListener"/>, but this object must never carry one. With
+    /// both, Unity attaches the filter to whichever component comes first and logs "GameObject has multiple AudioSources
+    /// and/or AudioListeners attached" when the other one tries. On a listener the filter would also overwrite the final mix.
+    /// The app's composition root owns the only listener, on its own object (Ballverse.App <c>DeviceAudio</c>), and creates it
+    /// before this output.</para>
     /// </summary>
     [RequireComponent(typeof(AudioSource))]
     public sealed class LiveAudioOutput : MonoBehaviour
@@ -50,17 +53,6 @@ namespace Ballverse.Sim
             _source.bypassListenerEffects = true;
             _source.bypassReverbZones = true;
             AudioSettings.OnAudioConfigurationChanged += OnAudioConfigurationChanged;
-            EnsureListener();
-        }
-
-        /// <summary>The app-wide listener: added to this persistent object unless an enabled one already exists.</summary>
-        void EnsureListener()
-        {
-            AudioListener existing = Object.FindAnyObjectByType<AudioListener>();
-            if (existing != null && existing.isActiveAndEnabled) return;
-            AudioListener own = GetComponent<AudioListener>();
-            if (own == null) own = gameObject.AddComponent<AudioListener>();
-            own.enabled = true;
         }
 
         void OnEnable()

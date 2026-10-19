@@ -4,7 +4,8 @@
     container; Unity compiles them in GameCI). Compiles App + Sim together with the REAL sources of every assembly they wire
     (Studio, Media, Services, Render runtime, UI view models and model, Platform) against Core and Unity API stand-ins
     (../Stubs). Only the UI Toolkit shell types the App calls are signature stubs (../Stubs/UiRuntimeStubs.cs, copied from
-    UI/Runtime). The App EditMode tests are type-checked too. GameCI's Unity compile remains the authority.
+    UI/Runtime). The App EditMode tests are type-checked too, including Tests/EditMode/App/Unity (scene tests that only GameCI
+    runs; editor / Test Framework stand-ins in EditorTestStubs.cs). GameCI's Unity compile remains the authority.
   -->
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
@@ -26,6 +27,9 @@
     <Compile Include="../../../Render/Runtime/*.cs" />
     <Compile Include="../../../UI/ViewModels/*.cs;../../../UI/Model/**/*.cs" />
     <Compile Include="../../EditMode/App/*.cs" />
+    <!-- EditMode tests that need a real scene: compile-checked here only (GameCI runs them; ../Runtime has no scene). -->
+    <Compile Include="../../EditMode/App/Unity/*.cs" />
+    <Compile Include="EditorTestStubs.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../../../../../core-tests/Ballverse.Core/Ballverse.Core.csproj" />
