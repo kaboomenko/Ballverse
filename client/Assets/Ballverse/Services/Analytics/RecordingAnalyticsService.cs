@@ -1,10 +1,13 @@
+#if !BALLVERSE_STORE
 using System.Collections.Generic;
 
 namespace Ballverse.Services
 {
     /// <summary>
-    /// Fake analytics for the editor, tests and builds without Firebase: keeps what would have been sent and writes it to
-    /// the service log. Behaves like the real service (sanitizing, consent buffering).
+    /// Fake analytics for tests and the fake services mode (<see cref="ServicesMode.Fake"/>, the editor default): keeps the
+    /// last <see cref="MaxRetained"/> sent events for inspection (<see cref="Sent"/>, <see cref="EventsNamed"/>) and writes
+    /// them to the service log. Behaves like the real service (sanitizing, consent buffering). Not compiled into Store
+    /// builds; builds without Firebase use <see cref="LogAnalyticsService"/>.
     /// </summary>
     public sealed class RecordingAnalyticsService : AnalyticsServiceBase
     {
@@ -96,3 +99,4 @@ namespace Ballverse.Services
         }
     }
 }
+#endif

@@ -102,6 +102,31 @@ namespace Ballverse.Services.Tests
         }
 
         [Test]
+        public void LogAnalyticsLogsOnlyWhenVerboseAndKeepsNothing()
+        {
+            var quietLog = new MemoryServiceLog();
+            var quiet = new LogAnalyticsService(quietLog, verbose: false);
+            quiet.SetCollectionEnabled(true);
+            quiet.SetUserProperty(AnalyticsUserProperties.HasNoExportAds, "true");
+            quiet.LogEvent(AnalyticsEvents.StudioOpen, AnalyticsParam.Bool(AnalyticsParams.HasUserVideo, true));
+            Assert.AreEqual(0, quietLog.Lines.Count, "release builds write nothing");
+            Assert.AreEqual(0, quiet.BufferedCount, "sent events are not kept");
+
+            var log = new MemoryServiceLog();
+            var verbose = new LogAnalyticsService(log, verbose: true);
+            verbose.LogEvent(AnalyticsEvents.StudioOpen);
+            Assert.AreEqual(1, verbose.BufferedCount, "buffered until the consent decision, like the Firebase service");
+            Assert.IsFalse(new List<string>(log.Lines).Exists(l => l.Contains(AnalyticsEvents.StudioOpen + "(")));
+            verbose.SetCollectionEnabled(true);
+            Assert.AreEqual(0, verbose.BufferedCount);
+            CollectionAssert.Contains(log.Lines, "I [Analytics] " + AnalyticsEvents.StudioOpen + "()");
+            verbose.LogEvent(AnalyticsEvents.ShareTap, AnalyticsParam.Str(AnalyticsParams.Target, "tiktok"));
+            CollectionAssert.Contains(log.Lines, "I [Analytics] " + AnalyticsEvents.ShareTap + "("
+                                                 + AnalyticsParam.Str(AnalyticsParams.Target, "tiktok") + ")");
+            Assert.AreEqual(0, verbose.BufferedCount);
+        }
+
+        [Test]
         public void ExportsTotalBuckets()
         {
             Assert.AreEqual("0", AnalyticsUserProperties.ExportsTotalBucket(0));

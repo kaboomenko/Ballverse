@@ -35,7 +35,10 @@ namespace Ballverse.Services
         /// <summary>The fake store instead of Unity IAP.</summary>
         public bool FakeStore { get; }
 
-        /// <summary>Log-based analytics / crash reporting and build-default Remote Config instead of Firebase.</summary>
+        /// <summary>
+        /// Recording analytics (events kept for inspection), log-based crash reporting and build-default Remote Config instead
+        /// of Firebase. When false and Firebase is not compiled in, analytics is <c>LogAnalyticsService</c> (keeps nothing).
+        /// </summary>
         public bool FakeFirebase { get; }
 
         /// <summary>Dev and OwnerTest always use Google's test ad units, whatever is configured (spec §7.9, §8 "Реклама").</summary>

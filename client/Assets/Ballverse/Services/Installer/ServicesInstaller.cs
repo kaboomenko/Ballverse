@@ -109,8 +109,13 @@ namespace Ballverse.Services
 #endif
             {
                 // Without Firebase (release 1, every variant): log-based crash reports and analytics, build-default Remote Config.
+                // The fake services mode (editor, tests) keeps sent events for inspection; real builds keep nothing.
                 crash = new LogCrashReporter(log);
-                analytics = new RecordingAnalyticsService(log);
+#if !BALLVERSE_STORE
+                if (plan.FakeFirebase) analytics = new RecordingAnalyticsService(log);
+                else
+#endif
+                    analytics = new LogAnalyticsService(log, developer);
                 remoteConfig = new BuildDefaultsRemoteConfigService(log, options.InitialRemoteConfig);
             }
 

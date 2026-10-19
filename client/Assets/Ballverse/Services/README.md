@@ -49,13 +49,14 @@ turns the variant into what gets wired:
 |---|---|---|---|---|
 | `Dev` (`BALLVERSE_DEV`, or no symbol: editor, players built without the script) | Google Mobile Ads with Google's **test** units | UMP; EEA test geography / test devices from `ServicesConfig` allowed | fake store (account persisted, see below); `ServicesConfig.testBuildStore = Sandbox` → Unity IAP sandbox | yes |
 | `OwnerTest` (`BALLVERSE_OWNERTEST`, release IL2CPP) | same as Dev | same as Dev | same as Dev | yes |
-| `Store` (`BALLVERSE_STORE`) | real AdMob units from `ServicesConfig`; missing, malformed or test units → ads off (exports without ads, Р14), never test ads | UMP, no debug settings | Unity IAP (StoreKit 2 / Play Billing) | no: `FakeStoreBackend`, `FakeAdNetwork`, `FakeConsentService`, the other `Fake*` helpers and the Google test unit / app id constants are under `#if !BALLVERSE_STORE`; a requested `ServicesMode.Fake` is ignored with an error |
+| `Store` (`BALLVERSE_STORE`) | real AdMob units from `ServicesConfig`; missing, malformed or test units → ads off (exports without ads, Р14), never test ads | UMP, no debug settings | Unity IAP (StoreKit 2 / Play Billing) | no: `FakeStoreBackend`, `FakeAdNetwork`, `FakeConsentService`, `RecordingAnalyticsService`, the other `Fake*` helpers and the Google test unit / app id constants are under `#if !BALLVERSE_STORE`; a requested `ServicesMode.Fake` is ignored with an error |
 
 `ServicesMode.Fake` (all fakes) and `Real` (real store too) override the defaults in Dev and OwnerTest; the editor follows
 `ServicesConfig.editorMode` (fakes). Dev and OwnerTest ignore configured real ad units. Store builds keep only the Google test
-publisher prefix, to refuse test units (`AdUnitIds.AnyTestId`). The log-based analytics / crash reporter and the build-default
-Remote Config (`BuildDefaultsRemoteConfigService`: `RemoteConfigValues.Defaults`, no test values) are the release-1 production
-path while Firebase is off, not test fakes.
+publisher prefix, to refuse test units (`AdUnitIds.AnyTestId`). The log-based analytics (`LogAnalyticsService`: logs events
+only in development builds, keeps nothing) / crash reporter and the build-default Remote Config (`BuildDefaultsRemoteConfigService`:
+`RemoteConfigValues.Defaults`, no test values) are the release-1 production path while Firebase is off, not test fakes. Only the
+fake services mode (editor, tests) wires `RecordingAnalyticsService`, which keeps sent events for inspection.
 
 The fake store keeps its account — owned products, deferred and paid-but-unconfirmed orders — in the app's key-value store
 (PlayerPrefs, key `ballverse.fake_store.account.v1`) after every change, so purchases made in a Dev / OwnerTest build survive
@@ -66,8 +67,10 @@ in-memory account unless `PersistFakeStore = true`.
 `Editor/StoreBuildCheck.cs` fails a Store build whose `ServicesConfig` lacks real units. It takes the variant from the symbols
 the player compiles with: the build's `extraScriptingDefines`, which the bootstrap build script sets for CI, menu builds and its
 defaults alike (recorded when the build starts by `BuildDefinesRecorder`, a `BuildPlayerProcessor`), and the Player Settings
-defines. Without a variant symbol it falls back to `-ballverseVariant` on the command line, and an Android App Bundle counts as
-Store (the bootstrap default), so a default Store AAB with missing or test units is refused instead of shipping with ads off.
+defines. Without a variant symbol it falls back to `-ballverseVariant` on the command line, and an Android App Bundle started by
+the build script (`-executeMethod Ballverse.Editor.BuildScript.…`) counts as Store (its default), so a default Store AAB with
+missing or test units is refused instead of shipping with ads off. An App Bundle with no variant symbol from Unity's own build
+windows would compile as a Dev player (test ads, fake store) and is refused with a message pointing to the Ballverse/Build menu.
 
 ## Initialization order (spec §7.9)
 

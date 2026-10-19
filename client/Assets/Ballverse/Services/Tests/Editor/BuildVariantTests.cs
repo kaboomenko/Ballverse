@@ -162,6 +162,8 @@ namespace Ballverse.Services.Tests
             CollectionAssert.Contains(new[] { "UmpConsentService", "NoConsentService" }, s.Consent.GetType().Name,
                 "UMP when the ads package is installed, otherwise consent not required");
             Assert.IsInstanceOf<BuildDefaultsRemoteConfigService>(s.RemoteConfig, "build defaults while Firebase is off, no test values");
+            CollectionAssert.Contains(new[] { "LogAnalyticsService", "FirebaseAnalyticsService" }, s.Analytics.GetType().Name,
+                "never the recording fake: it keeps events in memory");
             Assert.AreSame(Ballverse.Core.Config.RemoteConfigValues.Defaults, s.RemoteConfig.Current);
             Assert.IsTrue(MonetizationConfigMapper.SameCatalog(Ballverse.Core.Monetization.MonetizationConfig.Release1, s.Purchases.Config));
             Assert.IsTrue(new System.Collections.Generic.List<string>(log.Lines)
@@ -209,6 +211,31 @@ namespace Ballverse.Services.Tests
             Assert.AreEqual(BuildVariant.Store, StoreBuildCheck.ResolveVariant(null, "", new[] { "-ballverseVariant", "Store" }, false));
             Assert.AreEqual(BuildVariant.OwnerTest, StoreBuildCheck.ResolveVariant(null, "", new[] { "-ballverseVariant", "OwnerTest" }, true));
             Assert.IsNull(StoreBuildCheck.ResolveVariant(null, null, none, androidAppBundle: false));
+            Assert.IsNull(StoreBuildCheck.UnmarkedAppBundleProblem(null, "", none, true), "the build script's App Bundle default");
+        }
+
+        [Test]
+        public void AnAppBundleWithoutVariantSymbolOutsideTheBuildScriptIsADevPlayerAndRefused()
+        {
+            // Unity's Build Profiles window: no recorded extra defines, no flag, no -executeMethod of the build script.
+            string[] editor = { "Unity", "-projectPath", "client" };
+            string[] otherMethod = { "Unity", "-batchmode", "-executeMethod", "Some.Other.Builder.Build" };
+            Assert.IsNull(StoreBuildCheck.ResolveVariant(null, "", editor, androidAppBundle: true), "compiles as Dev, not Store");
+            Assert.IsNull(StoreBuildCheck.ResolveVariant(null, "FOO", otherMethod, androidAppBundle: true));
+            StringAssert.Contains("Ballverse/Build", StoreBuildCheck.UnmarkedAppBundleProblem(null, "", editor, true));
+            Assert.IsNotNull(StoreBuildCheck.UnmarkedAppBundleProblem(null, null, otherMethod, true));
+            Assert.IsNotNull(StoreBuildCheck.UnmarkedAppBundleProblem(null, null, null, true));
+
+            // A symbol or the flag says what the bundle is; APKs and Xcode projects are not concerned.
+            Assert.IsNull(StoreBuildCheck.UnmarkedAppBundleProblem(new[] { BuildVariants.StoreSymbol }, "", editor, true));
+            Assert.IsNull(StoreBuildCheck.UnmarkedAppBundleProblem(null, BuildVariants.DevSymbol, editor, true));
+            Assert.IsNull(StoreBuildCheck.UnmarkedAppBundleProblem(null, "", new[] { "-ballverseVariant", "OwnerTest" }, true));
+            Assert.IsNull(StoreBuildCheck.UnmarkedAppBundleProblem(null, "", editor, false));
+
+            Assert.IsTrue(StoreBuildCheck.IsBuildScriptBuild(new[] { "-executeMethod", "Ballverse.Editor.BuildScript.BuildAndroidAab" }));
+            Assert.IsFalse(StoreBuildCheck.IsBuildScriptBuild(new[] { "-executeMethod" }));
+            Assert.IsFalse(StoreBuildCheck.IsBuildScriptBuild(new[] { "-executeMethod", "Ballverse.Editor.BuildScriptX.Build" }));
+            Assert.IsFalse(StoreBuildCheck.IsBuildScriptBuild(null));
         }
 
         const string Manifest =
