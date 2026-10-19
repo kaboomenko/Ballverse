@@ -20,19 +20,24 @@ namespace Ballverse.Media.Android
     {
         const string BridgeClass = "com.ballverse.media.MediaBridge";
 
-        readonly NativeOps _ops = new NativeOps();
+        // One registry and one Java callback for the process (Java keeps a single static callback): operations that
+        // outlive a bridge instance (writer releases) still complete after the bridge was disposed and re-created, and
+        // request ids never collide between bridge instances.
+        static readonly NativeOps s_ops = new NativeOps();
+        static AndroidCallbackProxy s_proxy;
+
+        readonly NativeOps _ops = s_ops;
         readonly AndroidJavaClass _bridge;
-        readonly AndroidCallbackProxy _proxy;
 
         public AndroidMediaBridge()
         {
             MainThread.Assert(nameof(AndroidMediaBridge));
             _bridge = new AndroidJavaClass(BridgeClass);
-            _proxy = new AndroidCallbackProxy(_ops);
+            if (s_proxy == null) s_proxy = new AndroidCallbackProxy(s_ops);
             using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
             using (AndroidJavaObject activity = player.GetStatic<AndroidJavaObject>("currentActivity"))
             {
-                _bridge.CallStatic("init", activity, _proxy);
+                _bridge.CallStatic("init", activity, s_proxy);
             }
         }
 
@@ -40,13 +45,20 @@ namespace Ballverse.Media.Android
 
         Task<string> Start(string method, IProgress<double> progress, CancellationToken ct, params object[] args)
         {
+            return Start(method, false, progress, ct, args);
+        }
+
+        /// <param name="cancelWaitsForNative">A cancel completes the task only once Java reports that the request stopped.</param>
+        Task<string> Start(string method, bool cancelWaitsForNative, IProgress<double> progress, CancellationToken ct, params object[] args)
+        {
             return _ops.Run(progress, ct, id =>
             {
                 var full = new object[args.Length + 1];
                 full[0] = id;
                 Array.Copy(args, 0, full, 1, args.Length);
                 _bridge.CallStatic(method, full);
-            }, CancelNative, e => new MediaException(MediaErrorCode.Unknown, "Java call " + method + " failed: " + e.Message, e));
+            }, CancelNative, e => new MediaException(MediaErrorCode.Unknown, "Java call " + method + " failed: " + e.Message, e),
+                false, cancelWaitsForNative);
         }
 
         void CancelNative(long id)
@@ -77,15 +89,17 @@ namespace Ballverse.Media.Android
             return NativeJson.Parse<NativeAudioDto>(json);
         }
 
-        protected override VideoWriterBase CreateWriter(string outputPath, VideoWriterOptions options)
+        protected override VideoWriterBase CreateWriter(string outputPath, string workPath, VideoWriterOptions options)
         {
-            return new AndroidVideoWriter(outputPath, options, _ops);
+            return new AndroidVideoWriter(outputPath, workPath, options, _ops);
         }
 
         protected override async Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
             SegmentConcatOptions options, CancellationToken ct)
         {
-            string json = await Start("concatSegments", null, ct, string.Join("\n", segments), pcmPath ?? string.Empty, outFile,
+            // A cancelled join completes only after SegmentConcat stopped (muxer and AAC codec released, its own work file
+            // deleted): MediaBridge.submit reports the cancellation after SegmentConcat.run returned.
+            string json = await Start("concatSegments", true, null, ct, string.Join("\n", segments), pcmPath ?? string.Empty, outFile,
                 options.Fps, options.AudioBitrateBps);
             NativeWriterDto dto = NativeJson.Parse<NativeWriterDto>(json);
             return new WriterFinish(dto.frames, dto.durationUs);
@@ -119,7 +133,7 @@ namespace Ballverse.Media.Android
         {
             if (Disposed) return;
             base.Dispose();
-            _ops.CancelAll();
+            _ops.CancelAll(); // writer releases (keepOnCancelAll) stay pending until Java reports them
             _bridge.Dispose();
         }
     }
@@ -242,7 +256,10 @@ namespace Ballverse.Media.Android
         }
     }
 
-    /// <summary>Java <c>VideoWriter</c>: 3 direct slot buffers filled with one memcpy per frame.</summary>
+    /// <summary>
+    /// Java <c>VideoWriter</c>: 3 direct slot buffers filled with one memcpy per frame. The Java writer encodes into the
+    /// work path; <c>releaseAsync</c> reports once its thread has exited (codecs released, unfinished file deleted).
+    /// </summary>
     internal sealed class AndroidVideoWriter : VideoWriterBase
     {
         readonly NativeOps _ops;
@@ -250,10 +267,10 @@ namespace Ballverse.Media.Android
         AndroidJavaObject[] _slots;
         IntPtr[] _slotPointers;
 
-        public unsafe AndroidVideoWriter(string outputPath, VideoWriterOptions o, NativeOps ops) : base(outputPath, o)
+        public unsafe AndroidVideoWriter(string outputPath, string workPath, VideoWriterOptions o, NativeOps ops) : base(outputPath, workPath, o)
         {
             _ops = ops;
-            _writer = new AndroidJavaObject("com.ballverse.media.VideoWriter", outputPath, o.Width, o.Height, o.Fps,
+            _writer = new AndroidJavaObject("com.ballverse.media.VideoWriter", workPath, o.Width, o.Height, o.Fps,
                 o.VideoBitrateBps, o.KeyframeIntervalSeconds, o.AudioPcmPath ?? string.Empty, o.AudioBitrateBps);
             if (!_writer.Call<bool>("open"))
             {
@@ -299,25 +316,30 @@ namespace Ballverse.Media.Android
             return new WriterFinish(dto.frames, dto.durationUs);
         }
 
-        protected override void ReleaseCore()
+        protected override async Task ReleaseCoreAsync()
         {
             if (_slots != null)
             {
                 foreach (AndroidJavaObject s in _slots) s?.Dispose();
                 _slots = null;
             }
-            if (_writer != null)
+            AndroidJavaObject writer = _writer;
+            _writer = null;
+            if (writer == null) return;
+            try
             {
-                try
-                {
-                    _writer.Call("release");
-                }
-                catch (Exception e)
-                {
-                    Debug.LogException(e);
-                }
-                _writer.Dispose();
-                _writer = null;
+                // Completes when the Java writer thread has exited: encoder/muxer released and, if unfinished, the work
+                // file deleted by the writer that owns it. Survives bridge disposal (keepOnCancelAll).
+                await _ops.Run(null, CancellationToken.None, id => writer.Call("releaseAsync", id), null,
+                    e => new MediaException(MediaErrorCode.EncoderFailed, "VideoWriter.releaseAsync failed: " + e.Message, e), true);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+            finally
+            {
+                writer.Dispose();
             }
         }
     }
