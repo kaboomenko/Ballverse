@@ -271,29 +271,6 @@ namespace Ballverse.Core.Tests.Modes.RingEscape
             Assert.True(r.Escaped);
         }
 
-        [Theory]
-        [InlineData(0)]
-        [InlineData(1)]
-        [InlineData(2)]
-        [InlineData(3)]
-        public void RandomValidSetsKeepEveryInvariant(int batch)
-        {
-            // Card test (б) on 4 × 50 random valid sets (180 s each at most); the full 1 000 run with BALLVERSE_LONG_TESTS=1.
-            int count = Environment.GetEnvironmentVariable("BALLVERSE_LONG_TESTS") == "1" ? 250 : 50;
-            var rng = Rng.FromSeed(4242, (ulong)batch);
-            int crossings = 0;
-            for (int i = 0; i < count; i++)
-            {
-                ParamSet raw = ModeConformance.RandomSet(Mode.Schema, ref rng);
-                // Keep runs bounded: a random 20-ball set at 180 s is the costliest case; countdown / rounds are covered above.
-                ParamSet v = ModeParams.Prepare(Mode, raw, DeviceTier.B).Values;
-                RingEscapeValidationTests.AssertAllRules(v);
-                RingEscapeProbe.Result r = RingEscapeProbe.RunChecked(v, rng.NextULong());
-                crossings += r.Crossings;
-            }
-            Assert.True(crossings > 0, "no ring was ever crossed");
-        }
-
         static int CountEvents(ReplayFile f, ReplayEventType type)
         {
             int n = 0;

@@ -90,6 +90,8 @@ namespace Ballverse.Core.Modes.RingEscape
         public float GrowOnHit;
         public bool Competition;
         public AfterEscapeKind AfterEscape;
+        /// <summary>«Новый шар»: most balls of a round (tier-capped parameter, never below <see cref="BallCount"/>).</summary>
+        public int MaxRoundBalls;
         /// <summary>0 = any, else 1-based participant.</summary>
         public int ForcedWinner;
         /// <summary>Target duration in ticks, or null for "unlimited".</summary>
@@ -140,6 +142,7 @@ namespace Ballverse.Core.Modes.RingEscape
                 GrowOnHit = v.GetInt(RingEscapeParams.GrowOnHit) / 100f,
                 Competition = v.GetBool(RingEscapeParams.Competition),
                 AfterEscape = ParseAfter(v.GetString(RingEscapeParams.AfterEscape)),
+                MaxRoundBalls = v.GetInt(RingEscapeParams.MaxRoundBalls),
                 ForcedWinner = v.GetInt(CommonParams.ForcedWinner),
                 TargetDurationTicks = ModeGenerator.TargetDurationTicks(v),
                 FinaleStyle = v.GetString(CommonParams.FinaleStyle),

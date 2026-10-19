@@ -7,8 +7,10 @@ namespace Ballverse.Core.Modes.RingEscape
     /// <summary>Outcome of <see cref="RingEscapeDurationHint.Estimate"/>.</summary>
     public sealed class RingEscapeDurationEstimate
     {
-        internal RingEscapeDurationEstimate(bool showHint, int seedsEscaped, int seedsFinished, float projectedSeconds, int ticksRun, bool budgetExhausted)
+        internal RingEscapeDurationEstimate(bool showHint, int seedsEscaped, int seedsFinished, float projectedSeconds, int ticksRun, bool budgetExhausted,
+            int seedsInconclusive)
         {
+            SeedsInconclusive = seedsInconclusive;
             ShowHint = showHint;
             SeedsEscaped = seedsEscaped;
             SeedsFinished = seedsFinished;
@@ -28,9 +30,13 @@ namespace Ballverse.Core.Modes.RingEscape
 
         /// <summary>
         /// Shortest escape time among the seeds, seconds: measured for an escaped seed, otherwise extrapolated as
-        /// elapsed · ringCount / rings passed (∞ when a seed passed no ring).
+        /// countdown + (elapsed − countdown) · ringCount / max(1, rings passed) — with no ring yet, as if the first one passed now
+        /// (a lower bound) — and ∞ for a seed that ended at the cap without an escape.
         /// </summary>
         public float ProjectedSeconds { get; }
+
+        /// <summary>Probe seeds still running that had not passed a ring when the budget ended (projected optimistically).</summary>
+        public int SeedsInconclusive { get; }
 
         /// <summary>Ticks simulated over all seeds.</summary>
         public int TicksRun { get; }
@@ -43,7 +49,9 @@ namespace Ballverse.Core.Modes.RingEscape
     /// The M01 panel hint "the escape may not make it in 180 s" (spec §2.9 M01 «Длительность не ограничивается валидацией», docs QA
     /// residual): in <c>Setup</c> the current set is run headless on 3 probe seeds, round-robin in 1 s slices, within the tier's
     /// 🎲 budget. Any escape hides the hint. When the budget runs out first, the escape time of each seed is extrapolated from its
-    /// rhythm (rings passed per game second, like the generator's T̄) and the hint shows when every projection exceeds 180 s.
+    /// rhythm after the countdown (rings passed per game second, like the generator's T̄; a seed with no ring yet counts as if
+    /// its first ring passed now, an optimistic bound) and the hint shows when every projection exceeds 180 s. So a short
+    /// budget or one spent in the countdown never shows the hint on its own.
     /// Pure: the caller converts its time budget into ticks (or passes a stop callback that reads its clock).
     /// </summary>
     public static class RingEscapeDurationHint
@@ -109,7 +117,7 @@ namespace Ballverse.Core.Modes.RingEscape
 
         static RingEscapeDurationEstimate Result(RingEscapeScene[] scenes, SimRunner[] runners, int ticks, bool exhausted)
         {
-            int escaped = 0, finished = 0;
+            int escaped = 0, finished = 0, inconclusive = 0;
             float best = float.PositiveInfinity;
             for (int k = 0; k < scenes.Length; k++)
             {
@@ -120,16 +128,26 @@ namespace Ballverse.Core.Modes.RingEscape
                     escaped++;
                     projected = s.EscapeTick / (float)SimConstants.TickRate;
                 }
+                else if (runners[k].TimeLimitReached)
+                {
+                    // The run reached the 180 s cap without an escape: conclusive.
+                    projected = float.PositiveInfinity;
+                }
                 else
                 {
-                    float elapsed = runners[k].Tick / (float)SimConstants.TickRate;
-                    projected = s.RingsPassed > 0 ? elapsed * s.Config.RingCount / s.RingsPassed : float.PositiveInfinity;
+                    // Rhythm after the countdown (the balls are held for its 3 s), extrapolated to every ring. A seed with no
+                    // ring yet is projected optimistically, as if its first ring passed right now: a lower bound, so a short
+                    // budget (or one spent in the countdown) never shows the hint, while a long wait for the first ring does.
+                    float countdown = s.Config.Countdown ? RingEscapeScene.CountdownTicks / (float)SimConstants.TickRate : 0f;
+                    float elapsed = MathF.Max(0f, runners[k].Tick / (float)SimConstants.TickRate - countdown);
+                    if (s.RingsPassed == 0) inconclusive++;
+                    projected = countdown + elapsed * s.Config.RingCount / Math.Max(1, s.RingsPassed);
                 }
                 if (!Running(runners[k])) finished++;
                 if (projected < best) best = projected;
             }
             bool show = escaped == 0 && best > SimConstants.MaxDurationSeconds;
-            return new RingEscapeDurationEstimate(show, escaped, finished, best, ticks, exhausted && escaped == 0);
+            return new RingEscapeDurationEstimate(show, escaped, finished, best, ticks, exhausted && escaped == 0, inconclusive);
         }
     }
 }

@@ -95,7 +95,7 @@ namespace Ballverse.Core.Modes.RingEscape
                 default: // Minimalism: 6–10 rings, the time per ring follows from the target.
                     rotation = rng.NextFloat(40f, 90f);
                     launch = rng.NextFloat(4f, 8f);
-                    ringCount = rng.NextInt(6, 11);
+                    ringCount = rng.NextInt(MinimalismMinRings, MinimalismMaxRings + 1);
                     perRing = targetSeconds / ringCount;
                     v = v.With(CommonParams.Theme, ParamValue.String("Mono"));
                     break;
@@ -125,10 +125,20 @@ namespace Ballverse.Core.Modes.RingEscape
             cfg = RingEscapeConfig.From(Prepare(v, request.Tier));
             float estimate = EstimateSecondsPerRing(cfg);
             if (ringCount < 0) ringCount = (int)MathF.Round(targetSeconds / estimate);
-            // Even the narrowest passable gap cannot make a ring slower than the estimate at this gap: never fewer rings than
-            // the target needs (Minimalism at long targets).
-            if (gap <= MathF.Ceiling(gapMin) + 1f) ringCount = Math.Max(ringCount, (int)MathF.Ceiling(targetSeconds / estimate * 0.9f));
-            ringCount = Math.Max(2, Math.Min(100, ringCount));
+            if (style == GenerationStyle.Minimalism)
+            {
+                // Card: «Минимализм» always has 6–10 rings. At long targets (≳ 150 s for one ball) even the narrowest passable
+                // gap cannot stretch 10 rings to the target: the run ends earlier and the session prefers better-fitting
+                // candidates of other styles when the style is not forced.
+                ringCount = Math.Max(MinimalismMinRings, Math.Min(MinimalismMaxRings, ringCount));
+            }
+            else
+            {
+                // Even the narrowest passable gap cannot make a ring slower than the estimate at this gap: never fewer rings
+                // than the target needs.
+                if (gap <= MathF.Ceiling(gapMin) + 1f) ringCount = Math.Max(ringCount, (int)MathF.Ceiling(targetSeconds / estimate * 0.9f));
+                ringCount = Math.Max(2, Math.Min(100, ringCount));
+            }
             v = v.With(RingEscapeParams.RingCount, ParamValue.Int(ringCount));
 
             if (style == GenerationStyle.TenseFinale && ringCount > 1)
@@ -150,6 +160,10 @@ namespace Ballverse.Core.Modes.RingEscape
             }
             return Prepare(v, request.Tier);
         }
+
+        /// <summary>Ring count range of the «Минимализм» style (card «Генератор»).</summary>
+        public const int MinimalismMinRings = 6;
+        public const int MinimalismMaxRings = 10;
 
         /// <summary>Longest expected escape (100 rings at the narrowest passable gap) for a ball count, seconds.</summary>
         static float MaxRingsSeconds(int balls, float rotationDeg, float launch, bool reverse)

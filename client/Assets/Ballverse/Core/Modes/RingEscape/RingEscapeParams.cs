@@ -35,6 +35,7 @@ namespace Ballverse.Core.Modes.RingEscape
         public const string GrowOnHit = "growOnHit";
         public const string Competition = "competition";
         public const string AfterEscape = "afterEscape";
+        public const string MaxRoundBalls = "maxRoundBalls";
 
         // progression
         public const string ProgressionCompress = "compress";
@@ -144,6 +145,10 @@ namespace Ballverse.Core.Modes.RingEscape
             b.Add(new BoolParam(Competition, false).InGroup(ParamGroup.Mode, o += 10)
                 .WithVisibleIf(VisibleIf.In(CommonParams.BallCount, ballCountValues)));
             b.Add(new EnumParam(AfterEscape, new[] { AfterFinale, AfterNewRound, AfterNewBall }, AfterFinale).InGroup(ParamGroup.Mode, o += 10));
+            // «Новый шар» adds a ball per round up to this count. Tier-capped like ballCount (budget 20 / 12 / 8) and stored with
+            // the parameters, so the replay does not depend on the device that plays it back (spec §2.9 intro).
+            b.Add(new IntParam(MaxRoundBalls, 1, MaxBalls, 1, MaxBalls).WithTierCap(BodyBudgets.BallCap(ModeCode.M01))
+                .InGroup(ParamGroup.Mode, o += 10).WithVisibleIf(VisibleIf.Is(AfterEscape, AfterNewBall)));
             return b.BuildLayer();
         }
     }

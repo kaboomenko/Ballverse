@@ -97,14 +97,19 @@ Rules:
 1. **Phases.** Running → Finale → Finished, never backwards (`SimRunner` checks). Enter Finale on the card's end
    conditions; stay in Finale for the finale effect (0–3 s, `finaleStyle`: `stop` may go straight to Finished), then
    Finished. `OnTimeLimit` (177 s by default) must switch to Finale by score or to Finished. A `targetDuration` end
-   condition must not cut a run the generator selected: end by `targetDuration × 1.3` (the generator's headless limit,
-   §2.4 step 3) — M01 does so.
+   condition follows the mode's card. Note: a live run that ends exactly at `targetDuration` cuts a selected candidate whose
+   finale falls after the target (the generator runs candidates up to `targetDuration × 1.3`, §2.4 step 3); M01 therefore
+   ends at `targetDuration × 1.3` (an M01 card change awaiting the owner's confirmation). This is not a requirement for
+   other modes; M02 / M05 keep their cards' end conditions unless the owner decides otherwise.
 2. **AppendStateHash** adds every rule variable that influences the future (counters, flags, phase, rule RNG state as two
    `ulong`s or a draw counter, pending timers). The world hash is added by the runner.
 3. **WriteFrame** writes bodies in a fixed order with stable ids; ids unique per frame; balls keep their id for their life.
    Values outside `Quantization` are clamped by the writer silently, so the scene removes bodies past
    `PositionRange − 1 m`. Shape ids come from `context.Visuals.DefineShape`, label / skin ids from `DefineLabel` (define
-   once, at build or when first needed — definitions allocate). Colours are palette indices (`RenderGeometry.PaletteSlots`):
+   once, at build or when first needed — definitions allocate). Labels are never released and the table holds
+   `RenderStreamLimits.MaxLabels` (1 024) for the whole run: strings that come from live edits or stored PARM records
+   (`labelNames`) go through `TryDefineLabel`, which returns `NoLabel` instead of throwing when the table is full or the
+   string is not a valid label. Colours are palette indices (`RenderGeometry.PaletteSlots`):
    participant colours 0…223 (ball i of team k → k), rings / walls `PaletteSlots.Arena` / `ArenaAlt` / theme decor
    224+. Flags: `BodyFlags.Visible` (+`Trail` for balls when `trail ≠ off`, `Dead` for passed-but-kept walls,
    `Highlight`), `RenderBodyFlags.CameraTarget` / `FadeOutsideSafeZone` per RenderEventContract.md §5. HUD: `HudKeys`.
@@ -115,6 +120,10 @@ Rules:
    `WantsSound` / `WantsReplay` to skip work in headless runs. Bodiless replay events use
    `ModeEventBuffer.BodilessReplayBodyId`. Sound for the same fact must come from the same `SimEvent` as its render event.
    Hit events below the card's audible / visible threshold may be dropped (resting contacts: `Speed < 0.5 m/s`).
+   Pitch that the card ties to progress rather than to body size (M01: ring number, combo) travels in
+   `SoundEvent.BodySize` as a *pitch size* (the mixer's size-dependent pitch reads it); it must be a pure function of the
+   EVNT record, and the mode provides an `Integration.ISoundBodySource` wrapper for the export (M01:
+   `RingEscapeSound.BodySource`). Re-simulation (`ModeReplay` with `SoundEvents`) reproduces the live list exactly.
 5. **Inputs** (M05 «Игрок»): `SimInput.Type` = mode-defined byte, payload in `A..D` (quantized ints). The session records
    INPT as `(tick, type, [A, B, C, D])` and replays it identically. An autopilot («Бот») runs inside the rules
    (deterministic from state) and is not recorded.
@@ -131,6 +140,12 @@ Rules:
 
 ## 4. Recording conventions
 
+- Recording ends at the tick the rules report Finished (spec §2.1). With `SimRunnerOptions.ContinueAfterFinish` the
+  background keeps playing for the live view (`ModeSession.Frame`), but no sink (replay, render stream, render events,
+  sound list, hash log) receives anything after that tick, PARM / INPT after it are not recorded, and RSLT / the result are
+  taken at that tick. `SimRunnerOptions.MaxTicks` / `FinaleReserveTicks` are not stored in a `.bvr`: a session with a
+  replay sink requires their defaults (the constructor throws `ArgumentException`).
+
 - `.bvs` header: `RenderStreamHeader(Info.Id, 60, 60, scene.Quantization)`; frame k = state after k ticks.
 - `.bvr` header: `Integration.ReplayParams.CreateHeader(Info.Id, SimVersion, appVersion, PhysicsBackend.CoreSim, seed, values, Schema)`;
   HASH every 60 ticks = `SimRunner.ComputeStateHash()` (world + rules); PARM via `ReplayParams.ParamChange`; RSLT at the end.
@@ -146,6 +161,10 @@ session.Step(); session.RunHeadless(maxTicks);
 session.SetLiveParam(id, value);  session.EnqueueInput(type, a, b, c, d);
 ModeSessionOutcome o = session.Complete();          // finishes sinks, RSLT, GameRunSummary
 ModeReplayResult r = ModeReplay.Resimulate(def, replayFile, options);   // HashVerifier + optional render stream rebuild
+// statuses, never exceptions, for stored data: Verified, HashMismatch (a hash differs or a recorded hash was not reached),
+// DurationMismatch (hashes fine but the run did not end on header.DurationTicks), WrongMode, SimVersionMismatch,
+// UnsupportedBackend, InvalidParams, InvalidData (an input / PARM the rules cannot apply). With options.LastTick (trim-out)
+// only hashes up to that tick are required.
 ModeGenerationResult g = ModeGenerator.Generate(def, request);         // chosen seed + values (+ forced winner / goal)
 ```
 
