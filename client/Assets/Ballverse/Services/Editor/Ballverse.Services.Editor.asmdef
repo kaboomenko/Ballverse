@@ -1,0 +1,19 @@
+{
+    "name": "Ballverse.Services.Editor",
+    "rootNamespace": "Ballverse.Services.Editor",
+    "references": [
+        "Ballverse.Services",
+        "Ballverse.Platform"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
