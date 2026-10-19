@@ -87,7 +87,8 @@ namespace Ballverse.Studio
             }
             if (ExportJob.EffectiveStreamTicks(_clip.TickCount) != state.StreamTicks)
                 throw new ExportFailureException(ExportErrorCode.ResumeInvalid, "render stream changed since the export started");
-            _frames = new StudioFrameRenderer(_services.Compositor, _services.CreateSimRenderer(), StudioRenderQuality.Export, SimSlotSizing.DefaultMaxSide, ownsSimRenderer: true);
+            _frames = new StudioFrameRenderer(_services.Compositor, _services.CreateSimRenderer(), StudioRenderQuality.Export, SimSlotSizing.DefaultMaxSide, ownsSimRenderer: true,
+                maxSimZoomDensity: SimSlotSizing.ExportMaxZoomDensity);
             _frames.OpenClip(_clip);
             _frames.SetProject(_doc, CompositeStyle.FromProject(_doc, _services.ThemeBackground, _services.WatermarkTexture));
             int w = job.Settings.Width, h = job.Settings.Height;

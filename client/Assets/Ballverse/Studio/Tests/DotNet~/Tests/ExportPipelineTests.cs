@@ -264,6 +264,7 @@ namespace Ballverse.Studio.Tests
 
         public void Dispose()
         {
+            _pump.SettleWriters(_dir.Path);
             _media.Dispose();
             _pump.Dispose();
             _dir.Dispose();

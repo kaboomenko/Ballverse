@@ -21,8 +21,8 @@ namespace Ballverse.Core.Studio
     /// </summary>
     public static class StudioFiles
     {
-        /// <summary>Render events of a clip (VFX, spec §7.7), next to <c>clip.bvs</c>; format owned by the Render module (RenderEventLog.ClipFileName).</summary>
-        public const string ClipEventsFile = "clip.bve";
+        /// <summary>Render events of a clip (VFX, spec §7.7), next to <c>clip.bvs</c>; name and format owned by <see cref="RenderGeometry.RenderEventLog"/>.</summary>
+        public const string ClipEventsFile = RenderGeometry.RenderEventLog.ClipFileName;
         /// <summary>Folder of the recent runs inside the run cache store.</summary>
         public const string RunsRoot = "runs";
         /// <summary>Folder of the saved clips inside the persistent store (spec §3.9).</summary>
