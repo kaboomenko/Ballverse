@@ -1,20 +1,34 @@
 // Minimal runtime stand-ins for the Unity APIs used by the pure-C# parts of Ballverse.Media, so that the EditMode tests
 // also run under plain .NET (see Ballverse.Media.DotNetTests.csproj). Behaviour mirrors Unity where the tests depend on
-// it (JsonUtility: public fields only; NativeArray: view over unmanaged memory). Not part of the Unity project.
+// it (JsonUtility: public fields only; NativeArray: view over unmanaged memory; LogAssert: an unexpected error or
+// exception log fails the running test, as in the Unity Test Framework). Not part of the Unity project.
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 
+[assembly: UnityEngine.TestTools.LogScopeCheck]
+
 namespace UnityEngine
 {
+    public enum LogType
+    {
+        Error,
+        Assert,
+        Warning,
+        Log,
+        Exception,
+    }
+
     public static class Debug
     {
-        public static void Log(object message) => Console.WriteLine("[Log] " + message);
-        public static void LogWarning(object message) => Console.WriteLine("[Warning] " + message);
-        public static void LogError(object message) => Console.WriteLine("[Error] " + message);
-        public static void LogException(Exception exception) => Console.WriteLine("[Exception] " + exception);
+        public static void Log(object message) => TestTools.LogScope.Add(LogType.Log, "" + message);
+        public static void LogWarning(object message) => TestTools.LogScope.Add(LogType.Warning, "" + message);
+        public static void LogError(object message) => TestTools.LogScope.Add(LogType.Error, "" + message);
+        public static void LogException(Exception exception) => TestTools.LogScope.Add(LogType.Exception, exception.GetType().Name + ": " + exception.Message);
     }
 
     public static class Application
@@ -142,5 +156,128 @@ namespace Unity.Collections.LowLevel.Unsafe
         public static void* Malloc(long size, int alignment, Allocator allocator) => (void*)Marshal.AllocHGlobal((IntPtr)size);
         public static void Free(void* memory, Allocator allocator) => Marshal.FreeHGlobal((IntPtr)memory);
         public static void MemCpy(void* destination, void* source, long size) => Buffer.MemoryCopy(source, destination, size, size);
+    }
+}
+
+namespace UnityEngine.TestTools
+{
+    /// <summary>
+    /// Stand-in for the Unity Test Framework's LogAssert (com.unity.test-framework). Same rule as UTF's LogScope: every
+    /// <see cref="LogType.Error"/>, <see cref="LogType.Assert"/> or <see cref="LogType.Exception"/> log received while a test
+    /// runs — from any thread — fails that test unless an <see cref="Expect(LogType, Regex)"/> matches it (expectations are
+    /// matched in order against the logs in arrival order) or <see cref="ignoreFailingMessages"/> is set; an expectation
+    /// that no log matched fails the test too. A log that arrives after its test ended is charged to whichever test runs
+    /// then, exactly the CI failure mode of a leaked timer.
+    /// </summary>
+    public static class LogAssert
+    {
+        public static bool ignoreFailingMessages
+        {
+            get => LogScope.IgnoreFailingMessages;
+            set => LogScope.IgnoreFailingMessages = value;
+        }
+
+        public static void Expect(LogType type, string message) => LogScope.Expect(type, message, null);
+
+        public static void Expect(LogType type, Regex message) => LogScope.Expect(type, null, message);
+
+        /// <summary>Fails now if an unexpected failing log was received so far in this test.</summary>
+        public static void NoUnexpectedReceived()
+        {
+            string failure = LogScope.Check(false);
+            if (failure != null) NUnit.Framework.Assert.Fail(failure);
+        }
+    }
+
+    internal static class LogScope
+    {
+        sealed class Entry
+        {
+            public LogType Type;
+            public string Message;
+            public bool Handled;
+            public bool Consumed;
+        }
+
+        sealed class Match
+        {
+            public LogType Type;
+            public string Message;
+            public Regex Regex;
+
+            public bool Matches(Entry e) => e.Type == Type && (Regex != null ? Regex.IsMatch(e.Message) : e.Message == Message);
+
+            public override string ToString() => Type + " " + (Regex != null ? "/" + Regex + "/" : "'" + Message + "'");
+        }
+
+        static readonly object s_lock = new object();
+        static readonly List<Entry> s_logs = new List<Entry>();
+        static readonly Queue<Match> s_expected = new Queue<Match>();
+        internal static bool IgnoreFailingMessages;
+
+        static bool IsFailing(LogType t) => t == LogType.Error || t == LogType.Assert || t == LogType.Exception;
+
+        internal static void Add(LogType type, string message)
+        {
+            Console.WriteLine("[" + type + "] " + message);
+            lock (s_lock) s_logs.Add(new Entry { Type = type, Message = message, Handled = !IsFailing(type) || IgnoreFailingMessages });
+        }
+
+        internal static void Expect(LogType type, string message, Regex regex)
+        {
+            lock (s_lock) s_expected.Enqueue(new Match { Type = type, Message = message, Regex = regex });
+        }
+
+        internal static void Reset()
+        {
+            lock (s_lock)
+            {
+                s_logs.Clear();
+                s_expected.Clear();
+                IgnoreFailingMessages = false;
+            }
+        }
+
+        /// <summary>Matches expectations to logs (UTF ProcessExpectedLogs) and describes what is left, or null.</summary>
+        internal static string Check(bool end)
+        {
+            lock (s_lock)
+            {
+                foreach (Entry e in s_logs)
+                {
+                    if (s_expected.Count == 0) break;
+                    if (e.Consumed || !s_expected.Peek().Matches(e)) continue;
+                    s_expected.Dequeue();
+                    e.Consumed = true;
+                    e.Handled = true;
+                }
+                var problems = new List<string>();
+                foreach (Entry e in s_logs)
+                {
+                    if (!e.Handled) problems.Add("Unhandled log message: '[" + e.Type + "] " + e.Message + "'. Use UnityEngine.TestTools.LogAssert.Expect");
+                }
+                if (end)
+                {
+                    foreach (Match m in s_expected) problems.Add("Expected log did not appear: " + m);
+                }
+                return problems.Count == 0 ? null : string.Join(Environment.NewLine, problems);
+            }
+        }
+    }
+
+    /// <summary>Applies the <see cref="LogScope"/> rule around every test of the harness assembly.</summary>
+    [AttributeUsage(AttributeTargets.Assembly)]
+    public sealed class LogScopeCheckAttribute : Attribute, NUnit.Framework.ITestAction
+    {
+        public NUnit.Framework.ActionTargets Targets => NUnit.Framework.ActionTargets.Test;
+
+        public void BeforeTest(NUnit.Framework.Interfaces.ITest test) => LogScope.Reset();
+
+        public void AfterTest(NUnit.Framework.Interfaces.ITest test)
+        {
+            string failure = LogScope.Check(true);
+            LogScope.Reset();
+            if (failure != null) NUnit.Framework.Assert.Fail(failure);
+        }
     }
 }

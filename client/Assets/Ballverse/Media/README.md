@@ -109,7 +109,22 @@ at ≈ 2E either way.
   unawaited release never posts to the caller's context, FinalizeAsync on a disposed writer, the 20 s release fallback,
   a release outliving the bridge), joins whose cancel waits for the native stop (`NativeOpsTests`).
 - `Tests/DotNet~/run.sh` — the same tests under plain .NET 8 without Unity (Unity ignores `~` folders); compiles
-  Api/Common/Internal/Fake with small Unity stand-ins.
+  Api/Common/Internal/Fake with small Unity stand-ins, including a `LogAssert` stand-in that applies the Unity Test
+  Framework rule below to every test.
+- **Logs and leaks (UTF rule).** The Unity Test Framework fails the running test on any `Debug.LogError` /
+  `LogException` / assert log it did not expect — logged from any thread — unless `LogAssert.Expect` matches it (or
+  `LogAssert.ignoreFailingMessages` is set). Two consequences, both of which once turned CI red:
+  - A test that takes an intentional error path expects each log exactly (`LogAssert.Expect(LogType.Error, Regex)`, one
+    call per log): the NativeOps cancel timeout (1 log) and the hung writer release (2 logs: the disposed writer and the
+    next writer's finalize, 5000 ms fake teardown vs a 200 ms timeout).
+  - Nothing a test starts may log after it ended, or it fails whichever test runs then. Root cause of the CI failure in
+    `UiShellTests`: `NativeOps` armed a 20 s fallback `Task.Delay` for every forwarded cancel and never stopped it when
+    native reported in time; ~20 s after `NativeOpsTests` it posted from the thread pool, found no main-thread context
+    and logged an error. Now every way an operation finishes stops its timer (`ArmedCancelTimerCount`, checked in
+    TearDown), a timer that races the finish does nothing, the writer release timeout is cancelled as soon as its wait
+    ends (a late fault of a hung release is observed silently), and `MainThread.Post` without a context — only possible
+    for callbacks outliving their test, since a player captures the context at startup — drops with a warning instead
+    of an error. Tests restore the static timeouts (`NativeCancelTimeoutMs`, `NativeReleaseTimeoutMs`) in TearDown.
 - `core-tests/MediaJavaCheck/check.sh <android-all.jar>` — javac `--release 8 -Xlint:all -Werror` over the Java plugin
   against Android API 34 classes and a `UnityPlayer` stub, then three plain-JVM checks:
   - `YuvConverterCheck` — 72 layout/crop/rotation cases against an independent reference;

@@ -2,9 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Ballverse.Media.Internal;
 using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace Ballverse.Media.Tests
 {
@@ -40,6 +43,7 @@ namespace Ballverse.Media.Tests
         [TearDown]
         public void TearDown()
         {
+            VideoWriterBase.NativeReleaseTimeoutMs = VideoWriterBase.DefaultNativeReleaseTimeoutMs;
             _bridge.Dispose();
             _pump.Dispose();
             _dir.Dispose();
@@ -279,11 +283,17 @@ namespace Ballverse.Media.Tests
         }
 
         // QA round 2 (minor): a native release that hangs is given up after VideoWriterBase.NativeReleaseTimeoutMs.
+        // Both writers' releases take 5000 ms against a 200 ms timeout, so each logs the timeout error exactly once (w on
+        // Dispose, next inside FinalizeAsync): two expected logs, nothing else (UTF fails a test on unexpected Error logs).
+        // The 5000 ms fake teardowns finish later without logging; the timeout timers were cancelled when they fired.
         [Test]
         public void HungNativeRelease_GivenUpAfterTimeout_WorkDeleted_PathReusable()
         {
             int saved = VideoWriterBase.NativeReleaseTimeoutMs;
             VideoWriterBase.NativeReleaseTimeoutMs = 200;
+            var timeoutLog = new Regex(@"^\[Media\] native writer for .*hung\.mp4 did not stop within 200 ms; continuing");
+            LogAssert.Expect(LogType.Error, timeoutLog); // writer w
+            LogAssert.Expect(LogType.Error, timeoutLog); // writer next
             IMediaBridge slow = MediaBridgeFactory.CreateFake(new FakeMediaOptions { PngFrameStride = 1, SimulatedReleaseDelayMs = 5000 });
             try
             {
