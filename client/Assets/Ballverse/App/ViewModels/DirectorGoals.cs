@@ -13,18 +13,27 @@ namespace Ballverse.App
     /// The director goal «Победа в последнюю секунду» in the 🎲 mini sheet (spec §2.5: release 1 — M01 «Соревнование», ≥ 2
     /// colours). The UI's generation sheet binds the style list the view model gives it (<c>GenerationStyles</c>), so the goal
     /// is offered there as one more choice, <see cref="StyleId"/>, only while the current set allows it. Choosing it generates
-    /// with the «Напряжённый финал» style (the narrowest last gap, the closest Core style), <see cref="DirectorGoal.LastSecond"/>
-    /// and the user's colours kept (<see cref="ParticipantsKeepingMode"/>).
+    /// with <see cref="DirectorGoal.LastSecond"/> over the neutral «Любой» candidate distribution (<see cref="GoalStyle"/>):
+    /// Core ranks the candidates by finishTension for the goal, and no style's distribution aims at the leaders' final gap
+    /// («Напряжённый финал» narrows the escape's last gap, which lowered the goal's hit rate). The user's colours are kept
+    /// (<see cref="ParticipantsKeepingMode"/>).
     /// </summary>
     public static class DirectorGoals
     {
         /// <summary>Choice id of «Победа в последнюю секунду» in <c>ISimulationViewModel.GenerationStyles</c>.</summary>
         public const string StyleId = "last_second";
 
-        /// <summary>Core style the goal generates with.</summary>
-        public const GenerationStyle GoalStyle = GenerationStyle.TenseFinale;
+        /// <summary>
+        /// Core style the goal generates with: «Любой», so the goal's finishTension ranking picks among neutral candidates (a
+        /// QA probe over tiers A–C: goal met 112/144 with «Любой» vs 96/144 with «Напряжённый финал»).
+        /// </summary>
+        public const GenerationStyle GoalStyle = GenerationStyle.Any;
 
-        /// <summary>Style id used when the goal was chosen but the current set no longer allows it (fewer than 2 colours).</summary>
+        /// <summary>
+        /// Style shown and generated while the goal is remembered but the current set cannot take it (fewer than 2 colours):
+        /// without a competition the closest intent is an escape at the last moment, «Напряжённый финал». The stored choice
+        /// stays the goal.
+        /// </summary>
         public const string FallbackStyleId = "tense_finale";
 
         /// <summary>

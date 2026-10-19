@@ -386,6 +386,7 @@ namespace Ballverse.App.Tests
             ParamSet hard = ModeParams.Prepare(mode, ModeParams.Defaults(mode, app.Context.Tier)
                 .With(RingEscapeParams.RingCount, ParamValue.Int(100))
                 .With(RingEscapeParams.GapSize, ParamValue.Float(26)), app.Context.Tier).Values;
+            app.Sim.ProbeClockMs = () => 0; // the probe runs to its end on any machine (QA round 3: no wall-clock verdicts)
             Assert.IsTrue(app.Sim.OpenWith(mode, hard));
             app.Sim.SetScreenActive(true);
             WaitUntil(app, () => !app.Sim.SetupHintPending, "probe done");

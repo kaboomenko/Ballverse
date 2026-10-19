@@ -110,6 +110,18 @@ namespace Ballverse.App
         /// <summary>A Setup probe is running on a worker.</summary>
         public bool SetupHintPending => _hintProbe != null;
 
+        /// <summary>
+        /// Monotonic clock of the Setup probe, milliseconds (the worker's <see cref="System.Diagnostics.Stopwatch"/> by
+        /// default). Read on the worker thread; the probe stops once it advanced by the tier's 🎲 time budget. Tests inject a
+        /// clock that never or always runs out, so the verdict does not depend on the test machine's speed.
+        /// </summary>
+        public Func<long> ProbeClockMs { get; set; } = StopwatchMs;
+
+        static long StopwatchMs()
+        {
+            return (long)(System.Diagnostics.Stopwatch.GetTimestamp() * (1000.0 / System.Diagnostics.Stopwatch.Frequency));
+        }
+
         /// <summary>Session seed of each 🎲 (random by default; Core is pure, the app supplies it). Tests pin it.</summary>
         public Func<ulong> SessionSeedSource { get; set; } = NewSessionSeed;
 
@@ -217,6 +229,9 @@ namespace Ballverse.App
 
         /// <summary>The director goal the last 🎲 asked Core for (<see cref="ModeGenerationRequest.Goal"/>).</summary>
         public DirectorGoal LastGenerationGoal { get; private set; }
+
+        /// <summary>The Core style the last 🎲 asked for (<see cref="ModeGenerationRequest.Style"/>).</summary>
+        public GenerationStyle LastGenerationStyle { get; private set; }
         public string SelectedDurationId => _ctx.Settings.Data.GenerationDuration ?? "auto";
         public IParamPanelViewModel Params => _params;
         public IPresetsViewModel Presets => _presets;
@@ -556,9 +571,23 @@ namespace Ballverse.App
             Notify();
         }
 
+        /// <summary>
+        /// Short 🎲: the remembered style and duration. A remembered «Победа в последнюю секунду» stays remembered on a set
+        /// that cannot take it (it generates as <see cref="DirectorGoals.FallbackStyleId"/> there).
+        /// </summary>
         public void Generate()
         {
-            Generate(SelectedStyleId, SelectedDurationId);
+            Generate(StoredStyleId, SelectedDurationId);
+        }
+
+        /// <summary>The stored style id (the goal included, whether or not the current set can take it).</summary>
+        string StoredStyleId
+        {
+            get
+            {
+                string id = _ctx.Settings.Data.GenerationStyle ?? "any";
+                return id == DirectorGoals.StyleId || Array.IndexOf(s_styleIds, id) >= 0 ? id : "any";
+            }
         }
 
         public void Generate(string styleId, string durationId)
@@ -567,6 +596,10 @@ namespace Ballverse.App
             DropDecision();
             styleId = Array.IndexOf(s_styleIds, styleId) >= 0 || styleId == DirectorGoals.StyleId ? styleId : "any";
             durationId = Array.IndexOf(s_durationIds, durationId) >= 0 ? durationId : "auto";
+            // The sheet echoes the shown choice: «Напряжённый финал» shown for a remembered goal this set cannot take is the
+            // goal's fallback, so the goal stays remembered for the next set with ≥ 2 colours.
+            if (styleId == DirectorGoals.FallbackStyleId && StoredStyleId == DirectorGoals.StyleId && !LastSecondGoalAvailable)
+                styleId = DirectorGoals.StyleId;
             _ctx.Settings.Update(d =>
             {
                 d.GenerationStyle = styleId;
@@ -613,17 +646,19 @@ namespace Ballverse.App
             if (durationId != "auto" && mode.Schema.Contains(CommonParams.TargetDuration))
                 baseValues = baseValues.With(CommonParams.TargetDuration, ParamValue.Int(int.Parse(durationId, System.Globalization.CultureInfo.InvariantCulture)));
             GenerationBudget budget = _ctx.Remote.Budgets.Get(_ctx.Tier);
-            // «Победа в последнюю секунду» (spec §2.5): the «Напряжённый финал» style with the LastSecond goal; the candidates
-            // keep the user's colours (a competition in every candidate). Without ≥ 2 colours the choice is the style alone.
+            // «Победа в последнюю секунду» (spec §2.5): the LastSecond goal over the neutral candidate distribution (Core ranks
+            // them by finishTension); the candidates keep the user's colours (a competition in every candidate). Without ≥ 2
+            // colours the choice generates as its fallback style without a goal (Core would reject the goal).
             bool lastSecond = styleId == DirectorGoals.StyleId && DirectorGoals.LastSecondAvailable(mode, baseValues);
             IModeDefinition generatorMode = lastSecond ? new ParticipantsKeepingMode(mode) : mode;
             LastGenerationGoal = lastSecond ? DirectorGoal.LastSecond : DirectorGoal.None;
+            LastGenerationStyle = lastSecond ? DirectorGoals.GoalStyle : StyleOf(styleId == DirectorGoals.StyleId ? DirectorGoals.FallbackStyleId : styleId);
             var request = new ModeGenerationRequest
             {
                 BaseValues = baseValues,
                 Tier = _ctx.Tier,
                 SessionSeed = (SessionSeedSource ?? NewSessionSeed)(),
-                Style = StyleOf(styleId),
+                Style = LastGenerationStyle,
                 Goal = LastGenerationGoal,
                 Budgets = _ctx.Remote.Budgets,
                 Profiles = _ctx.Remote.Profiles,
@@ -877,7 +912,6 @@ namespace Ballverse.App
                 case "tense_finale": return GenerationStyle.TenseFinale;
                 case "many_balls": return GenerationStyle.ManyBalls;
                 case "minimal": return GenerationStyle.Minimalism;
-                case DirectorGoals.StyleId: return DirectorGoals.GoalStyle;
                 default: return GenerationStyle.Any;
             }
         }
@@ -1180,12 +1214,13 @@ namespace Ballverse.App
             // further); the tick cap only bounds it.
             const int maxTicks = SetupHintRegistry.MaxProbeTicks;
             long budgetMs = Math.Max(1, budget.TimeMs);
+            Func<long> clock = ProbeClockMs ?? StopwatchMs;
             Task.Run(() =>
             {
-                var watch = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    SetupHint hint = provider.Evaluate(values, maxTicks, () => cts.IsCancellationRequested || watch.ElapsedMilliseconds >= budgetMs);
+                    long start = clock();
+                    SetupHint hint = provider.Evaluate(values, maxTicks, () => cts.IsCancellationRequested || clock() - start >= budgetMs);
                     _ctx.Main.Post(() => OnSetupHint(cts, mode, key, hint, null));
                 }
                 catch (Exception e)

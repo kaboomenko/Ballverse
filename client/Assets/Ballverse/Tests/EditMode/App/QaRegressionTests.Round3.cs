@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using Ballverse.Core;
 using Ballverse.Core.Ads;
@@ -69,7 +68,7 @@ namespace Ballverse.App.Tests
                 BaseValues = app.Sim.CurrentValues,
                 Tier = app.Context.Tier,
                 SessionSeed = sessionSeed,
-                Style = DirectorGoals.GoalStyle,
+                Style = GenerationStyle.Any, // QA round 3 (r1): the goal ranks neutral candidates, not «Напряжённый финал» ones
                 Goal = DirectorGoal.LastSecond,
                 Budgets = app.Context.Remote.Budgets,
                 Profiles = app.Context.Remote.Profiles,
@@ -131,6 +130,7 @@ namespace Ballverse.App.Tests
             app.Sim.SessionSeedSource = () => seed;
             app.Sim.Generate(DirectorGoals.StyleId, "auto");
             Assert.AreEqual(DirectorGoal.LastSecond, app.Sim.LastGenerationGoal, "ModeGenerationRequest.Goal = LastSecond");
+            Assert.AreEqual(GenerationStyle.Any, app.Sim.LastGenerationStyle, "the goal does not force «Напряжённый финал»");
             WaitUntil(app, () => !app.Sim.IsGenerating, "generation done");
             Assert.AreEqual(reference.Seed, app.Context.Live.Seed, "the candidate Core chose for the goal runs");
             Assert.AreEqual(participants, mode.GetParticipantCount(app.Sim.CurrentValues), "still «Соревнование» with 6 colours");
@@ -156,8 +156,29 @@ namespace Ballverse.App.Tests
             ulong before = app.Context.Live.Seed;
             app.Sim.Generate(); // short press with the remembered goal
             Assert.AreEqual(DirectorGoal.None, app.Sim.LastGenerationGoal, "Core rejects no goal it does not support");
+            Assert.AreEqual(GenerationStyle.TenseFinale, app.Sim.LastGenerationStyle, "generates as «Напряжённый финал»");
             WaitUntil(app, () => !app.Sim.IsGenerating, "generation done");
             Assert.AreNotEqual(before, app.Context.Live.Seed, "the 🎲 still ran: " + string.Join(", ", app.Ui.Toasts.Select(t => t.Literal ?? t.Key)));
+            Assert.AreEqual(DirectorGoals.StyleId, app.Context.Settings.Data.GenerationStyle, "QA round 3 (r1): the short press keeps the goal remembered");
+
+            // The sheet echoing the shown «Напряжённый финал» keeps it remembered too.
+            app.Sim.Generate(DirectorGoals.FallbackStyleId, "auto");
+            Assert.AreEqual(GenerationStyle.TenseFinale, app.Sim.LastGenerationStyle);
+            WaitUntil(app, () => !app.Sim.IsGenerating, "second generation done");
+            Assert.AreEqual(DirectorGoals.StyleId, app.Context.Settings.Data.GenerationStyle);
+
+            // Back on «Гонка цветов»: the goal is selected again and a short 🎲 sends it.
+            Assert.IsTrue(app.Sim.OpenWith(mode, ColorRace(mode, app.Context.Tier)));
+            Assert.AreEqual(DirectorGoals.StyleId, app.Sim.SelectedStyleId, "«Победа в последнюю секунду» is still the choice");
+            app.Sim.Generate();
+            Assert.AreEqual(DirectorGoal.LastSecond, app.Sim.LastGenerationGoal);
+            WaitUntil(app, () => !app.Sim.IsGenerating, "goal generation done");
+
+            // A real choice of another style on the one-ball set replaces the goal.
+            Assert.IsTrue(app.Sim.OpenWith(mode, oneBall));
+            app.Sim.Generate("chaos", "auto");
+            WaitUntil(app, () => !app.Sim.IsGenerating, "chaos generation done");
+            Assert.AreEqual("chaos", app.Context.Settings.Data.GenerationStyle);
             Assert.IsEmpty(app.Errors, Errors(app));
         }
 
@@ -229,6 +250,7 @@ namespace Ballverse.App.Tests
             ParamSet hard = ModeParams.Prepare(ring, ModeParams.Defaults(ring, app.Context.Tier)
                 .With(RingEscapeParams.RingCount, ParamValue.Int(100))
                 .With(RingEscapeParams.GapSize, ParamValue.Float(26)), app.Context.Tier).Values;
+            app.Sim.ProbeClockMs = () => 0; // full probes on any machine
             app.Sim.SetScreenActive(true);
             Assert.IsTrue(app.Sim.OpenWith(ring, hard));
             WaitUntil(app, () => !app.Sim.SetupHintPending, "first probe done");
@@ -246,27 +268,137 @@ namespace Ballverse.App.Tests
 
         // ------------------------------------------------------------------ m5: probe stopped by the tier's clock
 
+        /// <summary>Wraps the real M01 provider and records how the App drives it (on the worker thread).</summary>
+        sealed class RecordingHintProvider : ISetupHintProvider
+        {
+            readonly ISetupHintProvider _inner = new RingEscapeDurationHintProvider();
+            int _maxTicks = -1, _stops, _stopped;
+
+            public int MaxTicks => System.Threading.Volatile.Read(ref _maxTicks);
+            public int StopPolls => System.Threading.Volatile.Read(ref _stops);
+            public bool Stopped => System.Threading.Volatile.Read(ref _stopped) != 0;
+
+            public SetupHint Evaluate(ParamSet values, int maxTotalTicks, Func<bool> stop)
+            {
+                System.Threading.Volatile.Write(ref _maxTicks, maxTotalTicks);
+                return _inner.Evaluate(values, maxTotalTicks, () =>
+                {
+                    System.Threading.Interlocked.Increment(ref _stops);
+                    bool s = stop();
+                    if (s) System.Threading.Volatile.Write(ref _stopped, 1);
+                    return s;
+                });
+            }
+        }
+
+        static ParamSet RingSet(IModeDefinition mode, DeviceTier tier, int rings, double gap)
+        {
+            return ModeParams.Prepare(mode, ModeParams.Defaults(mode, tier)
+                .With(RingEscapeParams.RingCount, ParamValue.Int(rings))
+                .With(RingEscapeParams.GapSize, ParamValue.Float(gap)), tier).Values;
+        }
+
+        RecordingHintProvider BootWithRecordingProvider(out TestApp app, Func<long> clock)
+        {
+            app = Boot();
+            var provider = new RecordingHintProvider();
+            var registry = new SetupHintRegistry();
+            registry.Register(RingEscapeDurationHintProvider.ModeId, provider);
+            app.Sim.SetupHints = registry;
+            app.Sim.ProbeClockMs = clock;
+            return provider;
+        }
+
+        /// <summary>
+        /// m5, made deterministic in QA round 3 (r1): the App gives the provider the full tick cap (not a fixed game-time
+        /// ratio of the budget) and stops it only by its clock; with a clock that never runs out the probe of 80 rings at 35°
+        /// runs to its end and gives no hint, on any machine. (The round-3 test read the wall clock and failed on slow runners.)
+        /// </summary>
         [Test]
         public void DurationProbeRunsOnTheTierClockNotAFixedGameTimeRatio()
         {
-            TestApp app = Boot();
+            RecordingHintProvider provider = BootWithRecordingProvider(out TestApp app, () => 0);
             Assert.AreEqual(DeviceTier.A, app.Context.Tier, "test phone is tier A (1.5 s 🎲 budget)");
             Assert.IsTrue(app.Context.Modes.TryGet("ring_escape", out IModeDefinition mode));
-            // 80 rings at 35°: one probe seed escapes in ≈ 154 s (QA S1) — no hint. The old cap of 10 game seconds per budget
-            // second (900 ticks on tier A, ≈ 5 s per seed) extrapolated ≈ 200 s and showed a false hint.
-            ParamSet values = ModeParams.Prepare(mode, ModeParams.Defaults(mode, DeviceTier.A)
-                .With(RingEscapeParams.RingCount, ParamValue.Int(80))
-                .With(RingEscapeParams.GapSize, ParamValue.Float(35)), DeviceTier.A).Values;
+            // 80 rings at 35°: one probe seed escapes in ≈ 154 s — no hint. The old cap of 10 game seconds per budget second
+            // (900 ticks on tier A, ≈ 5 s per seed) extrapolated ≈ 200 s and showed a false hint.
+            ParamSet values = RingSet(mode, DeviceTier.A, 80, 35);
             RingEscapeDurationEstimate truth = RingEscapeDurationHint.Estimate(values, RingEscapeDurationHintProvider.ProbeSeed, SetupHintRegistry.MaxProbeTicks, null);
             Assert.IsFalse(truth.ShowHint, "full probe: a seed escapes within 180 s");
+            Assert.IsFalse(truth.BudgetExhausted);
             Assert.Greater(SetupHintRegistry.MaxProbeTicks, truth.TicksRun, "the cap does not cut the full probe");
 
-            var watch = Stopwatch.StartNew();
             Assert.IsTrue(app.Sim.OpenWith(mode, values));
             app.Sim.SetScreenActive(true);
             WaitUntil(app, () => !app.Sim.SetupHintPending, "probe done");
+            Assert.AreEqual(SetupHintRegistry.MaxProbeTicks, provider.MaxTicks, "the App passes the tick cap, not a game-time ratio");
+            Assert.IsFalse(provider.Stopped, "the clock never ran out: the full probe ran");
+            Assert.Greater(provider.StopPolls, 0, "the clock is polled between slices");
             Assert.IsNull(app.Sim.SetupHint, "tier A, 80 rings at 35°: no false hint");
-            TestContext.WriteLine("probe took " + watch.ElapsedMilliseconds + " ms (" + truth.TicksRun + " ticks for the full probe)");
+            Assert.IsEmpty(app.Errors, Errors(app));
+        }
+
+        /// <summary>QA round 3 (r1): a clock that has run out at the first poll stops the probe after its first round — no hint.</summary>
+        [Test]
+        public void DurationProbeStopsWhenTheClockRunsOutAndShowsNoHint()
+        {
+            long now = 0;
+            // Every read advances by a minute: the tier's budget has passed at the first poll.
+            BootWithRecordingProvider(out TestApp app, () => System.Threading.Interlocked.Add(ref now, 60000));
+            Assert.IsTrue(app.Context.Modes.TryGet("ring_escape", out IModeDefinition mode));
+            foreach (ParamSet values in new[] { ModeParams.Defaults(mode, app.Context.Tier), RingSet(mode, app.Context.Tier, 100, 26) })
+            {
+                app.Sim.SetScreenActive(false); // no probe while the provider is swapped
+                var provider = new RecordingHintProvider();
+                var registry = new SetupHintRegistry();
+                registry.Register(RingEscapeDurationHintProvider.ModeId, provider);
+                app.Sim.SetupHints = registry;
+                ParamSet prepared = ModeParams.Prepare(mode, values, app.Context.Tier).Values;
+                Assert.IsTrue(app.Sim.OpenWith(mode, prepared));
+                app.Sim.SetScreenActive(true);
+                Assert.IsTrue(app.Sim.SetupHintPending, "probed");
+                WaitUntil(app, () => !app.Sim.SetupHintPending, "probe done");
+                Assert.IsTrue(provider.Stopped, "stopped by the clock");
+                Assert.AreEqual(1, provider.StopPolls, "after the first round");
+                Assert.IsNull(app.Sim.SetupHint, prepared.GetInt(RingEscapeParams.RingCount) + " rings: a probe cut short never shows the hint");
+            }
+            Assert.IsEmpty(app.Errors, Errors(app));
+        }
+
+        /// <summary>
+        /// QA round 3 (r1): a probe stopped by the clock (a slow device) rests on Core's rhythm extrapolation, which overshoots
+        /// after the first rings; Core alone showed a false hint for 80 rings at 35° when stopped after 3–5 or 40–122 rounds and
+        /// for 60 rings at 30° after 4–116 rounds. The provider keeps such a verdict only when clear — and still keeps a clear
+        /// one (100 rings at gapMin).
+        /// </summary>
+        [Test]
+        public void ExtrapolatedDurationVerdictShowsTheHintOnlyWhenClear()
+        {
+            Assert.IsTrue(ReleaseModes.CreateRegistry().TryGet("ring_escape", out IModeDefinition mode));
+            var provider = new RingEscapeDurationHintProvider();
+            var cases = new[]
+            {
+                (rings: 80, gap: 35.0, rounds: new[] { 3, 4, 5, 40, 60, 100 }),
+                (rings: 60, gap: 30.0, rounds: new[] { 4, 7, 40, 100 }),
+            };
+            foreach (var c in cases)
+            {
+                ParamSet values = RingSet(mode, DeviceTier.A, c.rings, c.gap);
+                foreach (int rounds in c.rounds)
+                {
+                    int calls = 0;
+                    SetupHint hint = provider.Evaluate(values, SetupHintRegistry.MaxProbeTicks, () => ++calls >= rounds);
+                    Assert.IsNull(hint, c.rings + " rings at " + c.gap + "°, stopped after " + rounds + " rounds: no false hint");
+                }
+            }
+
+            ParamSet hard = RingSet(mode, DeviceTier.A, 100, 26);
+            int n = 0;
+            RingEscapeDurationEstimate cut = RingEscapeDurationHint.Estimate(hard, RingEscapeDurationHintProvider.ProbeSeed, SetupHintRegistry.MaxProbeTicks, () => ++n >= 60);
+            Assert.IsTrue(cut.BudgetExhausted && cut.ShowHint, "stopped after 60 rounds: an extrapolated verdict");
+            Assert.IsTrue(RingEscapeDurationHintProvider.ShowsHint(cut), "100 rings at gapMin, projected " + cut.ProjectedSeconds + " s: the clear hint is kept");
+            n = 0;
+            Assert.IsNotNull(provider.Evaluate(hard, SetupHintRegistry.MaxProbeTicks, () => ++n >= 60));
         }
 
         // ------------------------------------------------------------------ m6: below-threshold text
