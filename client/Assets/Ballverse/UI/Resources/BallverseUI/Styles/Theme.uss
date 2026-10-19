@@ -25,7 +25,7 @@
     --color-warning-text: #FFB020;
     --color-scrim: #000000;
     --color-media-chip: rgba(0, 0, 0, 0.45);
-    --glass-frosted: rgba(22, 25, 36, 0.8);
+    --glass-frosted: rgba(22, 25, 36, 0.93);
     --glass-solid: rgba(22, 25, 36, 0.92);
     --glass-border: rgba(255, 255, 255, 0.14);
     --glass-highlight: rgba(255, 255, 255, 0.34);
@@ -67,8 +67,17 @@
    Text on glass (spec §4.5: WCAG AA 4.5:1 in the worst case): inside .bv-glass every text colour is opaque and at least
    as strong as the weakest of them, and the adaptive tint is computed for that weakest one, so all of them keep 4.5:1
    however bright the backdrop is (GlassTextPalette in Model/Glass; ShellStaticChecksTests keeps these values in sync
-   and bans fill colours as text colours). */
+   and bans fill colours as text colours).
+   Control fills under labels (chips, secondary buttons, segmented controls, text fields, selected rows) are opaque
+   inside .bv-glass: a translucent fill drawn over the tinted glass would lift it above the compose-pass bound (UI
+   Toolkit blends in linear space here, so 12% white alone adds 0.12 luminance), so on glass the labels stand on a
+   solid colour that keeps 4.5:1 with every glass text colour.
+   Frosted glass (no backdrop source, e.g. the tab bar over the gallery) has no adaptive tint: --glass-frosted is opaque
+   enough that the weakest glass text keeps 4.5:1 over white content (dark theme) or black content (light theme), in
+   linear and in gamma blending (GlassTextPalette.MinFrostedAlpha, QaRound3Tests). */
 .bv-theme-dark .bv-glass {
+    --color-control: #2A2F40;
+    --color-control-pressed: #363C50;
     --color-text-2: #DCE1ED;
     --color-text-3: #C4CAD8;
     --color-accent-text: #D2CCFF;
@@ -78,6 +87,8 @@
 }
 
 .bv-theme-light .bv-glass {
+    --color-control: #E3E6ED;
+    --color-control-pressed: #D2D6E0;
     --color-text-2: #3A3F48;
     --color-text-3: #525965;
     --color-accent-text: #3B2FC9;
@@ -103,4 +114,15 @@
     --color-control: rgba(0, 0, 0, 0.16);
     --glass-frosted: rgba(255, 255, 255, 0.96);
     --glass-border: rgba(0, 0, 0, 0.45);
+}
+
+/* Contrast theme on glass: stronger (still opaque) control fills; the glass text colours stay as above. */
+.bv-theme-dark.bv-contrast .bv-glass {
+    --color-control: #3A4157;
+    --color-control-pressed: #474F68;
+}
+
+.bv-theme-light.bv-contrast .bv-glass {
+    --color-control: #D6DAE3;
+    --color-control-pressed: #CDD1DB;
 }

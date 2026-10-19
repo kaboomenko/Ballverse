@@ -199,8 +199,10 @@
 
 /* Tracks do not clip: a trim handle at the start or end of the reel reaches past the track (over the badge column or
    the side padding) and must still be hit there, since UI Toolkit never picks the children of a clipping element
-   outside its rect. No ancestor up to the screen layer clips either (ShellStaticChecksTests). Thumbnails clip inside
-   .bv-timeline__thumbs; the music track clips because its bar slides while dragged. */
+   outside its rect. No ancestor up to the screen layer clips either (ShellStaticChecksTests). What a segment draws lives
+   in its .bv-timeline__body, which TimelineView clips to the track (TimelineGeometry.ClipToTrack), so a V clip before S
+   or a text span past the reel end does not paint over the badges or the padding. The music track clips because its
+   bar slides while dragged. */
 .bv-timeline__track {
     flex-grow: 1;
     border-radius: 8px;
@@ -211,38 +213,57 @@
     overflow: hidden;
 }
 
-/* Segments do not clip: their edge handles reach outside so the hit area is 44 pt wide (spec §4.4). */
+/* Segments do not clip: their edge handles reach outside so the hit area is 44 pt wide (spec §4.4). The segment element
+   spans the true clip and draws nothing itself. */
 .bv-timeline__segment {
     position: absolute;
     top: 0;
     bottom: 0;
+}
+
+/* Drawn part of a segment or text span: placed and sized inline by TimelineView to the part inside the track; it clips
+   its thumbnails / label. The handles are its siblings, so this clip never cuts their hit areas. */
+.bv-timeline__body {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
+.bv-timeline__segment .bv-timeline__body {
     border-radius: 8px;
     border-width: 2px;
 }
 
-.bv-timeline__segment--sim {
+.bv-timeline__segment--sim .bv-timeline__body {
     border-color: var(--color-accent);
     background-color: rgba(108, 92, 255, 0.35);
 }
 
-.bv-timeline__segment--video {
+.bv-timeline__segment--video .bv-timeline__body {
     border-color: var(--color-accent-2);
     background-color: rgba(61, 139, 255, 0.35);
+}
+
+/* A side cut by the track edge is not the clip's edge: no border there (same specificity as the border rule above, declared later). */
+.bv-timeline__segment .bv-timeline__body--cut-start {
+    border-left-width: 0;
+}
+
+.bv-timeline__segment .bv-timeline__body--cut-end {
+    border-right-width: 0;
 }
 
 .bv-timeline__segment--dragging {
     opacity: 0.8;
 }
 
+/* Thumbnails of the whole clip (left / width inline: the clip's true extent inside the clipped body). */
 .bv-timeline__thumbs {
     position: absolute;
-    left: 0;
     top: 0;
-    right: 0;
     bottom: 0;
     flex-direction: row;
-    border-radius: 6px;
-    overflow: hidden;
 }
 
 .bv-timeline__thumb {
@@ -316,19 +337,28 @@
     font-size: var(--font-xs);
 }
 
-.bv-timeline__text,
-.bv-timeline__music {
+.bv-timeline__text {
     position: absolute;
     top: 4px;
     bottom: 4px;
+}
+
+.bv-timeline__text .bv-timeline__body,
+.bv-timeline__music {
     border-radius: 6px;
     padding-left: var(--space-2);
     padding-right: var(--space-2);
     justify-content: center;
+}
+
+.bv-timeline__text .bv-timeline__body {
     background-color: var(--color-surface-3);
 }
 
 .bv-timeline__music {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
     background-color: rgba(47, 210, 122, 0.3);
     overflow: hidden;
 }

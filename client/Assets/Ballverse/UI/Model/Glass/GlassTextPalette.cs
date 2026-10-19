@@ -28,6 +28,54 @@ namespace Ballverse.UI.Glass
         public const string LightSuccessText = "#0A5E31";
         public const string LightWarningText = "#6E4300";
 
+        /// <summary>
+        /// Opaque control fills inside <c>.bv-glass</c> (<c>--color-control</c>, <c>--color-control-pressed</c>) for the
+        /// dark, light and Contrast themes. A translucent fill under a label would be blended over the tinted glass and lift
+        /// it above <see cref="BackgroundTarget"/> (UI Toolkit blends in linear space in this project, so 12% white alone
+        /// adds 0.12 luminance); an opaque fill takes the backdrop out of the equation, and each of these keeps 4.5:1 with
+        /// every glass text colour (<see cref="Colors"/>).
+        /// </summary>
+        public const string DarkControl = "#2A2F40";
+        public const string DarkControlPressed = "#363C50";
+        public const string DarkContrastControl = "#3A4157";
+        public const string DarkContrastControlPressed = "#474F68";
+        public const string LightControl = "#E3E6ED";
+        public const string LightControlPressed = "#D2D6E0";
+        public const string LightContrastControl = "#D6DAE3";
+        public const string LightContrastControlPressed = "#CDD1DB";
+
+        /// <summary>Fill tokens redefined (opaque) inside <c>.bv-glass</c>, in the order of <see cref="GlassFills"/>.</summary>
+        public static readonly string[] FillTokenNames = { "--color-control", "--color-control-pressed" };
+
+        /// <summary>Glass values of <see cref="FillTokenNames"/> for a theme (and the Contrast modifier).</summary>
+        public static string[] GlassFills(bool darkTheme, bool contrast)
+        {
+            if (darkTheme) return contrast ? new[] { DarkContrastControl, DarkContrastControlPressed } : new[] { DarkControl, DarkControlPressed };
+            return contrast ? new[] { LightContrastControl, LightContrastControlPressed } : new[] { LightControl, LightControlPressed };
+        }
+
+        /// <summary>
+        /// Smallest opacity of a frosted glass fill (no backdrop pass, so no adaptive tint) that keeps 4.5:1 for the weakest
+        /// glass text colour over the worst content behind it: white under light text (dark theme), black under dark text
+        /// (light theme). Linear blending (what UI Toolkit does in this project): panel = (1 − α)·content + α·fill. Gamma
+        /// blending is never worse for these two cases (checked by the tests with <see cref="GlassContrast.GammaBlendLuminance"/>).
+        /// Returns a value above 1 when no opacity suffices.
+        /// </summary>
+        public static double MinFrostedAlpha(bool darkTheme, string fillHex)
+        {
+            double fill = Luminance(fillHex);
+            double target = BackgroundTarget(darkTheme);
+            if (darkTheme)
+            {
+                // (1 − α)·1 + α·fill ≤ target
+                if (fill >= target) return double.PositiveInfinity;
+                return (1.0 - target) / (1.0 - fill);
+            }
+            // (1 − α)·0 + α·fill ≥ target
+            if (fill <= 0) return double.PositiveInfinity;
+            return target / fill;
+        }
+
         /// <summary>The USS custom properties redefined inside <c>.bv-glass</c>, in the order of <see cref="GlassTokens"/>.</summary>
         public static readonly string[] TokenNames =
         {

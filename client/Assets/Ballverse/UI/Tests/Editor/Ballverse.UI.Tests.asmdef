@@ -3,6 +3,7 @@
     "rootNamespace": "Ballverse.UI.EditorTests",
     "references": [
         "Ballverse.Core",
+        "Ballverse.Platform",
         "Ballverse.UI",
         "Ballverse.UI.Fakes",
         "UnityEngine.TestRunner",

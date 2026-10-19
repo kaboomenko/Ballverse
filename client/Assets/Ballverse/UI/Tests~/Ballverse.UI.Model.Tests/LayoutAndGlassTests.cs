@@ -103,8 +103,10 @@ namespace Ballverse.UI.Tests
         [Fact]
         public void InsetsFromEngineSafeArea()
         {
-            // 1170×2532 screen, notch 141 px on top, home indicator 102 px at the bottom; panel 390 units wide.
-            var i = PanelInsets.FromScreen(1170, 2532, 0, 102, 1170, 2532 - 102 - 141, 390f / 1170f);
+            // 1170×2532 screen, notch 141 px on top, home indicator 102 px at the bottom; panel 390 units wide. The rect is
+            // converted once, by the platform layer (Ballverse.Platform.SafeAreaInsets); the UI only scales it.
+            var device = Ballverse.Platform.SafeAreaInsets.FromBottomLeftRect(0, 102, 1170, 2532 - 141, 1170, 2532);
+            var i = PanelInsets.FromDevice(device, 390f);
             Assert.Equal(47f, i.Top, 2);
             Assert.Equal(34f, i.Bottom, 2);
             Assert.Equal(0f, i.Left, 2);

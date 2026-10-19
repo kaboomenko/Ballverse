@@ -1,7 +1,8 @@
 # Ballverse.UI — app shell (UI Toolkit)
 
 Release-1 interface of Ballverse (spec §4 with the release-1 scope: three free modes, shop with three products).
-Assembly `Ballverse.UI` references `Ballverse.Core` only; the app (`Ballverse.App`) binds real view models.
+Assembly `Ballverse.UI` references `Ballverse.Core` and the engine-free platform interfaces `Ballverse.Platform`
+(safe area); the app (`Ballverse.App`) binds real view models and passes its platform services.
 
 ## Folders
 
@@ -18,7 +19,7 @@ Assembly `Ballverse.UI` references `Ballverse.Core` only; the app (`Ballverse.Ap
 ## Using the shell from the app
 
 ```csharp
-var ui = BallverseUIRoot.Create(viewModels);   // creates UIDocument + PanelSettings at runtime
+var ui = BallverseUIRoot.Create(viewModels, services.Get<ISafeAreaProvider>());   // UIDocument + PanelSettings at runtime
 ui.Shell.SetDeviceTier(tier);                  // glass quality (spec §4.5, §8.1)
 ui.Shell.OpenMode("ring_escape");              // first launch goes straight to M01 (spec §4.3)
 ui.Shell.ShowAdNotice(() => ads.ShowInterstitial());   // 0.5 s "Ad" plaque (spec §5.3.2 IN8)
@@ -76,7 +77,13 @@ Unity 6.3 is new and not used here). The material is therefore split:
    `.bv-glass` (values in `Model/Glass/GlassTextPalette`, none weaker than the tertiary text the tint protects), and
    the fill tokens (`--color-accent`, `--color-warning`, ...) are never used as text colours (a test checks every
    `color:` declaration), so every glass text colour keeps 4.5:1, not only the primary one. Selected glass tabs show
-   the glass accent text, bold and underlined, with no translucent fill under the label. Only `Graphics.Blit` with a
+   the glass accent text, bold and underlined, with no translucent fill under the label. Control fills under labels
+   (`--color-control` / `--color-control-pressed`: chips, secondary buttons, segmented controls, text fields, selected
+   rows) are **opaque inside `.bv-glass`** (per theme and for Contrast; `GlassTextPalette.GlassFills`): UI Toolkit blends
+   in linear space in this project, so a translucent fill would lift the clamped glass above the bound (12% white alone
+   adds 0.12 luminance) and no lower bound could compensate. Every translucent fill in the styles is either one of these
+   tokens or documented as never carrying text on glass (media overlays, scrims, lines, the timeline; a test keeps the
+   list complete). Only `Graphics.Blit` with a
    material is used, so it works with URP and without camera hooks.
 2. **Each surface** (class `bv-glass`) shows that one texture as its background image, sized to the panel and offset by
    the element's `worldBound` every frame (`GlassSurfaces`, background-size / background-position API), so it displays
@@ -88,7 +95,7 @@ Unity 6.3 is new and not used here). The material is therefore split:
 | Tier A / B | Full: 1/4 buffer, refraction, highlight, adaptive tint |
 | Tier C | Simplified: 1/8 buffer, blur + tint + edge highlight, no refraction (spec §4.5) |
 | Reduce Transparency (iOS system flag via `ISystemAppearance`, own switch in Settings) | `bv-glass-mode-solid`: matte surfaces at 92% opacity, no backdrop pass |
-| No backdrop source (e.g. tab bar over the gallery) or shader unsupported | `bv-glass-mode-frosted`: translucent theme tint over the app background |
+| No backdrop source (e.g. tab bar over the gallery) or shader unsupported | `bv-glass-mode-frosted`: theme tint over the content, opaque enough (dark 93%) that the weakest glass text keeps 4.5:1 over white content (dark theme) or black content (light theme), in linear and gamma blending (`GlassTextPalette.MinFrostedAlpha`) |
 | More than 8 visible surfaces | extra surfaces get `bv-glass--overflow` (frosted) |
 
 Prices, purchase buttons and long lists are never glass (solid surfaces, spec §4.5). Cost: one prefilter, 2–6
@@ -105,12 +112,20 @@ source. The ≤ 1.5 ms tier-B budget must be measured on device (spec spike S3).
   anywhere in the row; timeline handles are 44 pt hit areas placed by `TimelineGeometry.PlaceHandles`: centred on the
   segment edges, kept whole inside the screen (the tracks and their ancestors do not clip, so a handle at the reel
   start reaches over the badge column), moved outwards on short text spans so part of the body stays free; a handle
-  pressed without moving is a tap (selects the text layer).
+  pressed without moving is a tap (selects the text layer). Every segment (S / V clip, text span) is placed after it and
+  its handles are in the track. What a segment draws (fill, border, thumbnails, label) is its `bv-timeline__body`,
+  clipped to the track by `TimelineGeometry.ClipToTrack` (a V clip before S or a text span past the reel end stops at
+  the track edge, without a border there); the handles are the body's siblings, so the clip never cuts their hit areas,
+  and a grip whose edge lies outside the track is drawn at the track edge.
 - Text colours: `--color-text`, `-2`, `-3` and `--color-{accent,danger,success,warning}-text` (AA on the background
   and surfaces, glass-safe inside `.bv-glass`); the plain colour tokens are fills.
 - The panel is scaled to a 390-unit-wide reference, so panel units ≈ points.
-- Safe area: layouts contain spacer elements `bv-safe-top` / `bv-safe-bottom` sized by `SafeAreaController`; the
-  simulation renders edge to edge underneath.
+- Safe area: layouts contain spacer elements `bv-safe-top` / `bv-safe-bottom` sized by `SafeAreaController` from
+  `Ballverse.Platform.ISafeAreaProvider` (the bootstrap polls `Screen.safeArea` once per frame and converts it once,
+  `SafeAreaInsets.FromBottomLeftRect`); the UI only scales the pixel insets to panel units (`PanelInsets.FromDevice`)
+  when they or the panel width change, and never reads the screen itself. The simulation renders edge to edge
+  underneath. The editor preview (`UiPreviewBootstrap`) uses `PreviewSafeAreaProvider` (Fakes) with the same
+  conversion.
 - Reduce motion (`bv-reduce-motion`): all tweens complete instantly, USS transitions are zeroed.
 - Icons are drawn as vectors (`Painter2D`, 2 pt stroke, round caps) in the current text colour: no image assets.
 
@@ -152,14 +167,16 @@ source. The ≤ 1.5 ms tier-B budget must be measured on device (spec spike S3).
 
 Every element registered with `Tap.On` / `TapOrLongPress` is a button for VoiceOver / TalkBack; icon-only buttons get
 labels by element name (`A11yLabels`, keys `a11y.*`), others are read by their text; screen, sheet and dialog titles
-are headings. `ScreenReaderBridge` mirrors the top-most modal layer into Unity 6's `AssistiveSupport.activeHierarchy`
+are headings. The current tab, studio tool tab, segment, chip, swatch or row is announced as selected (`A11yStates`),
+disabled buttons as disabled; these states are updated in place without rebuilding the hierarchy. `ScreenReaderBridge` mirrors the top-most modal layer into Unity 6's `AssistiveSupport.activeHierarchy`
 while a screen reader is on (iOS / Android). It runs in `LateUpdate`, after the panel update: a change (screen, sheet,
 dialog, language) is read once its new elements are laid out (`ScreenReaderSync`; a new element has NaN bounds until
 the next panel update), and the visible UI is re-read twice a second so nodes that appear without an event (transition
-end, result card, chrome) are republished; otherwise only the frames move. It needs the built-in Accessibility module
-(`com.unity.modules.accessibility` in `Packages/manifest.json`; the asmdef sets `BALLVERSE_ACCESSIBILITY` when it is
-present). Without the module the bridge is a no-op; the same module supplies the system font scale fallback
-(`AccessibilitySettings.fontScale`).
+end, result card, chrome) are republished; otherwise only the frames move. It uses the built-in
+Accessibility module (`"com.unity.modules.accessibility": "1.0.0"` in `Packages/manifest.json`, a built-in module of
+Unity 6 that is enabled by default in new projects; the asmdef sets `BALLVERSE_ACCESSIBILITY` when it is present). The
+code stays compile-safe without it (the bridge becomes a no-op); the same module supplies the system font scale
+fallback (`AccessibilitySettings.fontScale`).
 
 ## Tests
 
@@ -167,26 +184,30 @@ present). Without the module the bridge is a no-op; the same module supplies the
 dotnet test "client/Assets/Ballverse/UI/Tests~/Ballverse.UI.Model.Tests"
 ```
 
-Compiles `Core` + `UI/Model` without UnityEngine (keeps the model engine-free) and checks: plural rules, fallback,
+Compiles `Core` + `UI/Model` (+ `App/Platform/SafeAreaInsets.cs`) without UnityEngine (keeps the model engine-free) and checks: plural rules, fallback,
 navigation and back order, settings-sheet live / structural rules, sheet detents, split ratios against Core
 `RatioMagnets`, slow-mo values against Core `ClipTiming`, segment → Core enum mapping, trimming and V offsets, preview
-and edge gestures, arena dead zone, chrome policy, safe-area math, glass tiers and AA contrast of every glass text
-colour, appearance resolution (dark default, language fallback), device-locale formats, and that both string tables
+and edge gestures, arena dead zone, chrome policy, safe-area scaling of the platform insets, timeline handle placement
+and segment clipping, glass tiers and AA contrast of every glass text colour (on the clamped glass, on the opaque
+control fills inside glass, on accent fills, and on frosted / solid glass over the worst content), appearance resolution (dark default, language fallback), device-locale formats, and that both string tables
 have the same keys and contain every UXML key, every key literal in `Runtime/` and every common parameter label /
 option. Static checks keep the Unity-side fixes in place (inline sizing of the shell container, key binding only on
-fresh layouts, 44 pt touch targets, no clipping ancestor of the timeline tracks, no fill colour as a text colour, edge
-swipe capture handling, screen-reader sync after layout, no roadmap teasers or sale wording).
+fresh layouts, 44 pt touch targets, no clipping ancestor of the timeline tracks, text spans placed after their handles
+are in the track, segment visuals only in the clipped body, every translucent fill glass-safe or documented off glass,
+no fill colour as a text colour, edge swipe capture handling, screen-reader sync after layout, the Accessibility module
+in the manifest, no own `Screen.safeArea` reads, no roadmap teasers or sale wording).
 
-The EditMode tests in `Tests/Editor` run in Unity (GameCI). `Tests~` is not wired into a workflow yet (the workflow
-files belong to the infrastructure track).
+The EditMode tests in `Tests/Editor` run in Unity (GameCI); `QaRound3Tests` there builds the timeline for a fixed track
+width (text handles placed as `PlaceHandles` says, V clip body clipped) and drives `SafeAreaController` with a fake
+provider. `Tests~` runs in CI (`unity-free-checks.yml`, job `ui-model`).
 
 ## Open issues (outside this assembly)
 
-- CI: `Tests~` (dotnet) is not run by any workflow yet; add a `dotnet test "client/Assets/Ballverse/UI/Tests~/Ballverse.UI.Model.Tests"` step
-  (infrastructure track). The EditMode tests in `Tests/Editor` run with GameCI's EditMode job once it is on main.
-- Screen readers and the system font scale need `"com.unity.modules.accessibility": "1.0.0"` in
-  `client/Packages/manifest.json` (not listed in the bootstrap manifest today; the bootstrap / owner track has to add
-  it). Until then release 1 has no VoiceOver / TalkBack support: the bridge is compiled out.
+- The EditMode tests in `Tests/Editor` run with GameCI's EditMode job once Unity license secrets are set.
+- Text over media (gallery captions, run / project thumbnail durations, on-media chips) uses 45–62% black plates; with
+  linear blending these can drop below 4.5:1 over very bright media. They are outside glass (spec §4.5) and unchanged.
+- VoiceOver / TalkBack node frames are passed in screen pixels with a top-left origin; this and the announcements must
+  be checked on a device (no editor here).
 - Mode names: the tables follow spec §2.8 ("Геометрия отскоков", "Хеликс-дроп"); `Core.ModeCatalog` on the
   core-integration branch carries its own `NameRu` values, so one of the two should become the single source.
 - Not verified on a device: glass cost and look, gesture feel (PiP drag, pinch, edge swipe), VoiceOver / TalkBack

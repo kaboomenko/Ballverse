@@ -1,4 +1,5 @@
 using System;
+using Ballverse.Platform;
 using Ballverse.UI.ViewModels;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -8,7 +9,8 @@ namespace Ballverse.UI
     /// <summary>
     /// Scene entry point of the UI: creates a <see cref="UIDocument"/> with runtime <see cref="PanelSettings"/> (no
     /// editor-made assets needed), builds the <see cref="UiShell"/> and drives it every frame.
-    /// Usage from the composition root: <c>var ui = BallverseUIRoot.Create(viewModels); ui.Shell.OpenMode("ring_escape");</c>
+    /// Usage from the composition root:
+    /// <c>var ui = BallverseUIRoot.Create(viewModels, services.Get&lt;ISafeAreaProvider&gt;()); ui.Shell.OpenMode("ring_escape");</c>
     /// </summary>
     public sealed class BallverseUIRoot : MonoBehaviour
     {
@@ -25,19 +27,25 @@ namespace Ballverse.UI
         public UIDocument Document => _document;
 
         /// <summary>Creates the UI root object and shell.</summary>
+        /// <param name="safeArea">
+        /// The platform's safe-area service (Ballverse.Platform, registered by the app bootstrap, which polls the screen):
+        /// the UI sizes its safe-area spacers from it and does not read <c>Screen.safeArea</c> itself.
+        /// </param>
         /// <param name="sortingOrder">Panel sorting order relative to other UI panels / canvases.</param>
-        public static BallverseUIRoot Create(IBallverseViewModels viewModels, int sortingOrder = 0, Transform parent = null)
+        public static BallverseUIRoot Create(IBallverseViewModels viewModels, ISafeAreaProvider safeArea, int sortingOrder = 0,
+            Transform parent = null)
         {
             if (viewModels == null) throw new ArgumentNullException(nameof(viewModels));
+            if (safeArea == null) throw new ArgumentNullException(nameof(safeArea));
             var go = new GameObject("BallverseUI");
             go.SetActive(false);
             if (parent != null) go.transform.SetParent(parent, false);
             var root = go.AddComponent<BallverseUIRoot>();
-            root.Build(viewModels, sortingOrder);
+            root.Build(viewModels, safeArea, sortingOrder);
             return root;
         }
 
-        void Build(IBallverseViewModels viewModels, int sortingOrder)
+        void Build(IBallverseViewModels viewModels, ISafeAreaProvider safeArea, int sortingOrder)
         {
             _panelSettings = ScriptableObject.CreateInstance<PanelSettings>();
             _panelSettings.name = "BallversePanelSettings";
@@ -56,7 +64,7 @@ namespace Ballverse.UI
 
             var root = _document.rootVisualElement;
             root.AddToClassList("bv-panel-root");
-            Shell = new UiShell(root, viewModels);
+            Shell = new UiShell(root, viewModels, safeArea);
         }
 
         void Update()

@@ -1,7 +1,9 @@
 using System;
 using Ballverse.Core;
+using Ballverse.Platform;
 using Ballverse.UI.Components;
 using Ballverse.UI.Glass;
+using Ballverse.UI.Layout;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -64,41 +66,65 @@ namespace Ballverse.UI.Theming
 
     /// <summary>
     /// Safe-area handling (spec §4.3: content inside the safe zone, simulation edge to edge). Layouts mark spacer
-    /// elements with <c>bv-safe-top</c> / <c>bv-safe-bottom</c> / <c>bv-safe-left</c> / <c>bv-safe-right</c>; the
-    /// controller sizes them to the device insets (notch, home indicator) in panel units.
+    /// elements with <c>bv-safe-top</c> / <c>bv-safe-bottom</c> / <c>bv-safe-left</c> / <c>bv-safe-right</c> /
+    /// <c>bv-safe-pad-x</c>; the controller sizes them to the device insets (notch, home indicator) in panel units.
+    /// The insets come from the platform layer (<see cref="ISafeAreaProvider"/>: the app's bootstrap polls
+    /// <c>Screen.safeArea</c> once per frame and raises <see cref="ISafeAreaProvider.Changed"/>); the UI does not read the
+    /// screen itself, it only scales the pixels to panel units when the insets or the panel width change. Without a
+    /// provider (EditMode tests, a bare shell) the insets stay zero.
     /// </summary>
-    public sealed class SafeAreaController
+    public sealed class SafeAreaController : IDisposable
     {
         readonly VisualElement _root;
-        Layout.PanelInsets _insets;
-        Rect _lastSafe;
-        Vector2Int _lastScreen;
+        readonly ISafeAreaProvider _provider;
+        SafeAreaInsets _device;
+        PanelInsets _insets;
+        bool _disposed;
 
-        public Layout.PanelInsets Insets => _insets;
+        public PanelInsets Insets => _insets;
+        /// <summary>The device insets last received from the provider (pixels).</summary>
+        public SafeAreaInsets DeviceInsets => _device;
         public event Action Changed;
 
-        public SafeAreaController(VisualElement root)
+        public SafeAreaController(VisualElement root, ISafeAreaProvider provider)
         {
-            _root = root;
-            _root.RegisterCallback<GeometryChangedEvent>(e => Refresh(true));
+            _root = root ?? throw new ArgumentNullException(nameof(root));
+            _provider = provider;
+            if (_provider != null)
+            {
+                _device = _provider.Current;
+                _provider.Changed += OnDeviceInsetsChanged;
+            }
+            _root.RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
+            Recompute(_root.layout.width);
         }
 
-        /// <summary>Call every frame (cheap): re-applies when the safe area or the screen size changed.</summary>
-        public void Refresh(bool force = false)
+        void OnDeviceInsetsChanged(SafeAreaInsets insets)
         {
-            var safe = Screen.safeArea;
-            var screen = new Vector2Int(Screen.width, Screen.height);
-            if (!force && safe == _lastSafe && screen == _lastScreen) return;
-            float panelWidth = _root.layout.width;
-            if (float.IsNaN(panelWidth) || panelWidth <= 0 || screen.x <= 0) return;
-            _lastSafe = safe;
-            _lastScreen = screen;
-            var insets = Layout.PanelInsets.FromScreen(screen.x, screen.y, safe.x, safe.y, safe.width, safe.height,
-                panelWidth / screen.x);
-            if (insets.Equals(_insets) && !force) return;
+            if (_disposed) return;
+            _device = insets;
+            Recompute(_root.layout.width);
+        }
+
+        void OnGeometryChanged(GeometryChangedEvent e)
+        {
+            if (_disposed) return;
+            Recompute(_root.layout.width);
+        }
+
+        /// <summary>
+        /// Scales the current device insets to panel units for a panel of <paramref name="panelWidth"/> units and sizes the
+        /// spacers when the result changed. Returns false while the panel is not laid out (the next geometry change retries).
+        /// </summary>
+        internal bool Recompute(float panelWidth)
+        {
+            if (!PanelInsets.IsUsablePanelWidth(panelWidth)) return false;
+            var insets = PanelInsets.FromDevice(_device, panelWidth);
+            if (insets.Equals(_insets)) return true;
             _insets = insets;
             Apply(_root);
             Changed?.Invoke();
+            return true;
         }
 
         /// <summary>Sizes the spacers under <paramref name="root"/>.</summary>
@@ -114,6 +140,14 @@ namespace Ballverse.UI.Theming
                 e.style.paddingLeft = _insets.Left;
                 e.style.paddingRight = _insets.Right;
             });
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (_provider != null) _provider.Changed -= OnDeviceInsetsChanged;
+            _root.UnregisterCallback<GeometryChangedEvent>(OnGeometryChanged);
         }
     }
 }
