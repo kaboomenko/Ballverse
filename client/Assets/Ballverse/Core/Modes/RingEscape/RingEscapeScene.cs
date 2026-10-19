@@ -64,6 +64,8 @@ namespace Ballverse.Core.Modes.RingEscape
         readonly RingEscapeConfig _cfg;
         readonly RenderQuantization _q = new RenderQuantization(16f, 16f);
         readonly ModeMetrics _metrics;
+        /// <summary>Priority of breaks and the escape chord over hits within the mixer's 40/s (RingEscapeSound caps).</summary>
+        readonly ModeSoundBudget _soundBudget = new ModeSoundBudget();
         readonly int _teams;
         readonly bool _competition;
         readonly int _timeLimitTicks;
@@ -755,6 +757,7 @@ namespace Ballverse.Core.Modes.RingEscape
                     s.Radius, RingIdBase + _round * MaxRingsPerRound + ring, e.Feature, e.LocalAngle));
             }
             // Card «Звук»: the note rises with the ring number (pitch size, see RingEscapeSound).
+            if (!AudibleSound(RingEscapeSound.HitSoundCap)) return;
             if (_events.WantsSound)
             {
                 SoundEvent se = ModeSound.ForBall(SoundEventType.Hit, ball, e.Impulse, _q, s.Radius, s.Position.X);
@@ -774,8 +777,20 @@ namespace Ballverse.Core.Modes.RingEscape
                 _events.AddRender(RenderEvent.Hit(0, 0, e.Point.X, e.Point.Y, e.Normal.X, e.Normal.Y, (byte)_ballTeam[e.A], intensity, e.A,
                     s.Radius, -1, -1, 0f));
             }
+            if (!AudibleSound(RingEscapeSound.HitSoundCap)) return;
             if (_events.WantsSound) _events.AddSound(ModeSound.ForBall(SoundEventType.Hit, e.A, e.Impulse, _q, s.Radius, s.Position.X));
             if (_events.WantsReplay) _events.AddReplay(ReplayEventType.Hit, e.A, ReplayQuantization.QuantizeImpulse(e.Impulse), -1 - (long)e.B);
+        }
+
+        /// <summary>
+        /// Sound priority (<see cref="ModeSoundBudget"/>): true when a sound of this priority cap fits the window. The same
+        /// decision gates the sound event and the EVNT record, and it is taken whenever either sink is attached, so the live
+        /// list and the export agree.
+        /// </summary>
+        bool AudibleSound(int cap)
+        {
+            if (!_events.WantsSound && !_events.WantsReplay) return false;
+            return _soundBudget.TryTake(_events.Tick, cap);
         }
 
         /// <summary>Rule 4: grow by growOnHit, clipped to d_grow of the rings that are still walls (<see cref="EffectiveGrowLimit"/>).</summary>
@@ -841,14 +856,14 @@ namespace Ballverse.Core.Modes.RingEscape
             _metrics.AddSignificant(Math.Min(tick, SimConstants.MaxDurationTicks));
             while (_current < _ringCount && _ringPassed[_current]) _current++;
 
-            ref readonly BallState s = ref _world.GetBall(ball);
             bool visible = _ringInSolver[j] && !_ringDestroyed[j];
+            int ringRenderId = RingIdBase + _round * MaxRingsPerRound + j;
             if (_cfg.EffectiveDestroyPassed && _ringInSolver[j])
             {
                 ref readonly PhysicsBodyState b = ref _world.GetBody(_ringBody[j]);
                 if (visible && _events.WantsRender)
                 {
-                    _events.AddRender(RenderEvent.Break(tick, 0, RingIdBase + _round * MaxRingsPerRound + j, _ringShape[j], 0f, 0f, b.Angle, b.Scale,
+                    _events.AddRender(RenderEvent.Break(tick, 0, ringRenderId, _ringShape[j], 0f, 0f, b.Angle, b.Scale,
                         RingColor(j), 1f));
                 }
                 _ringDestroyed[j] = true;
@@ -861,14 +876,16 @@ namespace Ballverse.Core.Modes.RingEscape
                 _ringDestroyed[j] = true;
             }
             // Card «Звук» / «Модель»: the break rises with every ring and climbs further in a combo (pitch size, RingEscapeSound).
-            if (_events.WantsSound)
+            // The emitter is the ring (its render id), not the ball: the break often falls in the tick of the ball's ring hit or
+            // 1–2 ticks after the previous break of a combo, and the mixer's per-body 50 ms limit (spec §2.7) would drop it.
+            // A ring breaks once, so its id never repeats. Breaks take priority over hits within the mixer's 40/s.
+            if (AudibleSound(RingEscapeSound.BreakSoundCap))
             {
-                SoundEvent se = ModeSound.ForBall(SoundEventType.Break, ball, BreakSoundImpulse, _q, s.Radius, s.Position.X);
-                se.BodySize = RingEscapeSound.BreakPitchSize(j, _ballCombo[ball]);
-                _events.AddSound(se);
+                if (_events.WantsSound)
+                    _events.AddSound(RingEscapeSound.BreakSound(ringRenderId, j, _ballCombo[ball], BreakSoundImpulse));
+                if (_events.WantsReplay)
+                    _events.AddReplay(ReplayEventType.Break, ringRenderId, ReplayQuantization.QuantizeImpulse(BreakSoundImpulse), RingEscapeSound.BreakExtra(j, _ballCombo[ball]));
             }
-            if (_events.WantsReplay)
-                _events.AddReplay(ReplayEventType.Break, ball, ReplayQuantization.QuantizeImpulse(BreakSoundImpulse), RingEscapeSound.BreakExtra(j, _ballCombo[ball]));
 
             if (j == _ringCount - 1) Escape(ball, tick);
         }
@@ -888,8 +905,13 @@ namespace Ballverse.Core.Modes.RingEscape
                 e.BodyId = ball;
                 _events.AddRender(e);
             }
-            if (_events.WantsSound) _events.AddSound(ModeSound.ForBall(SoundEventType.Finish, ball, BreakSoundImpulse, _q, s.Radius, s.Position.X));
-            if (_events.WantsReplay) _events.AddReplay(ReplayEventType.Finish, ball, ReplayQuantization.QuantizeImpulse(BreakSoundImpulse), _ballTeam[ball]);
+            // Escape chord: bodiless (the ball has just hit / broken a ring in this tick, the per-body limit would drop it).
+            if (AudibleSound(RingEscapeSound.FinishSoundCap))
+            {
+                if (_events.WantsSound) _events.AddSound(RingEscapeSound.FinishSound(BreakSoundImpulse));
+                if (_events.WantsReplay)
+                    _events.AddReplay(ReplayEventType.Finish, ModeEventBuffer.BodilessReplayBodyId, ReplayQuantization.QuantizeImpulse(BreakSoundImpulse), _ballTeam[ball]);
+            }
             if (_cfg.AfterEscape == AfterEscapeKind.Finale) EnterFinale(tick, true);
             else _pendingRound = true;
         }
@@ -919,8 +941,12 @@ namespace Ballverse.Core.Modes.RingEscape
                 _phase = SimPhase.Finale;
                 _finaleEndTick = tick + _finaleTicks;
             }
-            if (!escaped && _events.WantsReplay) _events.AddReplay(ReplayEventType.Finish, ModeEventBuffer.BodilessReplayBodyId, 0, _winnerTeam);
-            if (!escaped && _events.WantsSound) _events.AddSound(ModeSound.Bodiless(SoundEventType.Finish, BreakSoundImpulse, _cfg.BallSize));
+            if (!escaped && AudibleSound(RingEscapeSound.FinishSoundCap))
+            {
+                if (_events.WantsReplay)
+                    _events.AddReplay(ReplayEventType.Finish, ModeEventBuffer.BodilessReplayBodyId, ReplayQuantization.QuantizeImpulse(BreakSoundImpulse), _winnerTeam);
+                if (_events.WantsSound) _events.AddSound(RingEscapeSound.FinishSound(BreakSoundImpulse));
+            }
         }
 
         /// <summary>Team with the most rings; ties go to the team that reached that count first; −1 when nobody passed a ring.</summary>
@@ -1009,6 +1035,7 @@ namespace Ballverse.Core.Modes.RingEscape
             if (_cfg.AfterEscape == AfterEscapeKind.NewBall)
             {
                 int capacity = RingEscapeGeometry.StartCapacity(_cfg.BallSize, _cfg.InnerRadius, _cfg.RingThickness);
+                // Constrain keeps maxRoundBalls ≥ ballCount; the guard covers sets that bypassed it.
                 int max = Math.Max(_cfg.MaxRoundBalls, _cfg.BallCount);
                 count = Math.Min(Math.Min(_cfg.BallCount + _round, max), capacity);
             }

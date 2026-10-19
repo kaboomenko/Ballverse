@@ -18,6 +18,17 @@ namespace Ballverse.Core.Modes.RingEscape
     /// records, wraps its stream-based <see cref="ISoundBodySource"/> in <see cref="BodySource"/> and gets the same events
     /// as the live run.
     /// </para>
+    /// <para>
+    /// Emitters (mixer per-body 50 ms limit, spec §2.7): a ring hit is the ball's sound (body id = ball render id); a break is
+    /// the ring's sound (body id = the ring's render id <c>RingIdBase + round · 128 + j</c>, centre pan — rings are centred),
+    /// so it is not dropped when it falls in the tick of the ball's ring hit or 1–2 ticks after the previous break of a combo;
+    /// the escape chord and the finale are bodiless (−1, EVNT <see cref="ModeEventBuffer.BodilessReplayBodyId"/>). EVNT
+    /// records carry the same body ids, and <see cref="BodySource"/> reproduces every field of the live events.
+    /// </para>
+    /// <para>
+    /// Audible rise: only packs whose Break rule pitches by size (built-in: Notes) rise with each break; the other built-in
+    /// packs play their break sample at a fixed pitch (Audio <c>SoundPackCatalog</c>, Audio owner's decision).
+    /// </para>
     /// </summary>
     public static class RingEscapeSound
     {
@@ -28,6 +39,22 @@ namespace Ballverse.Core.Modes.RingEscape
         /// <summary>Scale steps of the built-in Notes pack: hits C3…C6 (15 steps), breaks C4…C6 (10 steps).</summary>
         public const int HitSteps = 15;
         public const int BreakSteps = 10;
+
+        /// <summary>
+        /// Size of the escape chord and of the finale (bodiless events; the packs' Finish rules have a fixed pitch). Equals the
+        /// size the Studio's generic render-stream source gives a bodiless event, so even an unwrapped export matches.
+        /// </summary>
+        public const float FinishSize = 0.5f;
+
+        /// <summary>
+        /// Priority caps within the mixer's 40 sounds per second (<see cref="ModeSoundBudget"/>): hits are emitted while fewer
+        /// than 32 M01 sounds fell in the last second, breaks while fewer than 39, the escape chord / finale up to the full 40.
+        /// So at playback speed ≤ 1× a break always finds at least 7 free slots per second and the chord is never refused by the
+        /// overall limit. Hits over the cap are dropped from the sound list and from EVNT alike (their VFX stay).
+        /// </summary>
+        public const int HitSoundCap = 32;
+        public const int BreakSoundCap = 39;
+        public const int FinishSoundCap = ModeSoundBudget.MaxPerWindow;
 
         /// <summary>Break EVNT extra = ring + <see cref="ComboFactor"/> × (combo − 1) (ring numbers are below 128).</summary>
         public const long ComboFactor = 256;
@@ -74,6 +101,21 @@ namespace Ballverse.Core.Modes.RingEscape
         /// <summary>Combo (1 = first ring of the flight) stored in a Break extra.</summary>
         public static int ComboOfBreakExtra(long extra) => (int)(extra < 0 ? 0 : extra / ComboFactor) + 1;
 
+        /// <summary>
+        /// Live sound of the break of ring <paramref name="ring"/> (render id <paramref name="ringRenderId"/>) as the
+        /// <paramref name="combo"/>-th ring of one flight: the ring is the emitter, centre pan, pitch size of the progression.
+        /// </summary>
+        public static SoundEvent BreakSound(int ringRenderId, int ring, int combo, float impulse)
+        {
+            return new SoundEvent(0, SoundEventType.Break, ringRenderId, ModeSound.Impulse(impulse), BreakPitchSize(ring, combo), 0f);
+        }
+
+        /// <summary>Live sound of an escape or of the finale: bodiless (exempt from the per-body limit), centre pan, <see cref="FinishSize"/>.</summary>
+        public static SoundEvent FinishSound(float impulse)
+        {
+            return ModeSound.Bodiless(SoundEventType.Finish, impulse, FinishSize);
+        }
+
         static int ComboStep(int combo)
         {
             int s = combo - 1;
@@ -102,9 +144,20 @@ namespace Ballverse.Core.Modes.RingEscape
 
             public bool TryGetBody(in ReplayEvent e, out float bodySize, out float pan)
             {
+                switch (e.Type)
+                {
+                    case ReplayEventType.Break:
+                        // The ring is the emitter whether or not the frame still shows it (a destroyed ring is not drawn).
+                        bodySize = BreakPitchSize(RingOfBreakExtra(e.Extra), ComboOfBreakExtra(e.Extra));
+                        pan = 0f;
+                        return e.BodyId != ModeEventBuffer.BodilessReplayBodyId;
+                    case ReplayEventType.Finish:
+                        bodySize = FinishSize;
+                        pan = 0f;
+                        return false;
+                }
                 bool hasBody = _inner.TryGetBody(in e, out bodySize, out pan);
                 if (e.Type == ReplayEventType.Hit && e.Extra >= 0) bodySize = HitPitchSize((int)Math.Min(e.Extra, int.MaxValue));
-                else if (e.Type == ReplayEventType.Break) bodySize = BreakPitchSize(RingOfBreakExtra(e.Extra), ComboOfBreakExtra(e.Extra));
                 return hasBody;
             }
         }
