@@ -22,6 +22,8 @@ namespace Ballverse.Core.Tests.Sim
 
         /// <summary>Allowed relative energy gain below restitution 1 (integration noise).</summary>
         const float InelasticTolerance = 0.01f;
+        /// <summary>Absolute speed tolerance of the rebound ceiling (m/s).</summary>
+        const float SpeedTolerance = 0.05f;
         /// <summary>Allowed relative energy gain at restitution 1 (integration drift; measured at most 1.9 %).</summary>
         const float ElasticTolerance = 0.03f;
 
@@ -153,7 +155,7 @@ namespace Ballverse.Core.Tests.Sim
         /// restitution | 0–1,2»). A ball dropped straight onto a static opening of free width 95–99.9 % of its diameter at
         /// 5–10 m/s with e = 0.9 touches both caps at once and only the wedge response's restitution step sends it back: it must
         /// leave upwards (higher than 0.3 m above the bridge within 20 ticks) with a peak upward speed of at least 0.5·e·v_in
-        /// (measured 0.56–0.89·v_in). Without the restitution step every such hit is perfectly inelastic: the ball stops dead
+        /// (measured 0.81–0.91·v_in; before the round-3 wedge fix 0.53–0.89). Without the restitution step every such hit is perfectly inelastic: the ball stops dead
         /// in the opening from 98 % free width on (and rebounds at 0.3·v_in at 95 %).
         /// </summary>
         [Theory]
@@ -170,6 +172,37 @@ namespace Ballverse.Core.Tests.Sim
                 Assert.True(vin > 0f, "no rebound (" + where + ")");
                 Assert.True(peakUp >= 0.5f * e * vin, "rebound too slow (" + where + ")");
                 Assert.True(maxY > 0.3f, "the ball did not leave the opening (" + where + ")");
+            }
+        }
+
+        /// <summary>
+        /// QA (residual minors, round 3): the wedge restitution step worked from the velocity the sequential cap responses had
+        /// already turned largely along the opening, and mirroring that sideways part out of the narrow cone of leaving
+        /// velocities cost a perfectly elastic ball 40 % of its speed (0.58–0.61·v_in at 98 % free width; 62 % of its energy).
+        /// Straight drops onto static segments and a ring gap at 95–99.9 % free width and 3–10 m/s: the speed right after the
+        /// impact is at least 0.85·e·v_in and never above v_in·(1 + tolerance) (static walls do no work; e = 1 is elastic).
+        /// Measured after the fix: 0.94–1.04·v_in at e = 1, 0.85–0.94·v_in at e = 0.9 (the upper ends are the g·dt the ball
+        /// gains in the impact tick before it touches); the code under review: 0.58–0.61·v_in at 98 % free width.
+        /// </summary>
+        [Theory]
+        [InlineData(false, 1f)]
+        [InlineData(true, 1f)]
+        [InlineData(false, 0.9f)]
+        [InlineData(true, 0.9f)]
+        public void StraightDropOntoNarrowOpeningReboundsInProportionToRestitution(bool ring, float e)
+        {
+            // v_in is the speed at the end of the tick before the impact; gravity adds up to g·dt before the contact in the
+            // impact tick, so the elastic ceiling is v_in + g·dt (exactly what a centred hit at 99 % width reaches).
+            float ceiling = SimSettings.StandardGravity / SimConstants.TickRate + SpeedTolerance;
+            foreach (float ff in new[] { 0.95f, 0.97f, 0.98f, 0.99f, 0.995f, 0.999f })
+            foreach (float speed in new[] { 3f, 5f, 7f, 10f })
+            {
+                var (vin, vout, _, maxY) = StraightDropRebound(ring, ff, e, speed);
+                string where = "free width " + ff + ", " + speed + " m/s, e = " + e + ": v_in " + vin + ", after the impact " + vout + " (ratio " + vout.Length / vin + ")";
+                Assert.True(vin > 0f, "no rebound (" + where + ")");
+                Assert.True(vout.Y > 0f && maxY > 0.3f, "the ball did not leave the opening (" + where + ")");
+                Assert.True(vout.Length >= 0.85f * e * vin, "rebound too slow (" + where + ")");
+                Assert.True(vout.Length <= e * (vin + ceiling), "rebound faster than the restitution allows (" + where + ")");
             }
         }
 

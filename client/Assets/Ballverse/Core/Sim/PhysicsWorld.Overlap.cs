@@ -135,14 +135,16 @@ namespace Ballverse.Core.Sim
         /// When, after the responses, the ball still approaches one of at least two touching contacts with opposing normals, it
         /// gets one simultaneous response of a point mass (one or two active contacts in 2D):
         /// <list type="number">
-        /// <item>compression: the nearest velocity leaving no touching contact behind, N·v ≥ N·v_wall (projection onto the
-        /// feasible set); if there is none (a pusher crushing the ball into the opening) the sequential result stays;</item>
-        /// <item>restitution on the joint impulse (Poisson): v' = v_c + e·(v_c − v), e the largest restitution of the touching
+        /// <item>compression: the nearest velocity to the base velocity v_b leaving no touching contact behind, N·v ≥ N·v_wall
+        /// (projection onto the feasible set); v_b is the velocity before the sequential responses when that one still
+        /// approaches a touching contact, else the velocity after them; if there is none (a pusher crushing the ball into the
+        /// opening) the sequential result stays;</item>
+        /// <item>restitution on the joint impulse (Poisson): v' = v_c + e·(v_c − v_b), e the largest restitution of the touching
         /// contacts (as in <see cref="ApplyImpulse"/>, from their approach before the responses; zero below the resting
         /// threshold, so a held ball only follows the walls); a v' still approaching a contact is projected again.</item>
         /// </list>
         /// Both steps are projections or a reflection of the removed part, so against static walls the speed never grows for
-        /// e ≤ 1 (v_c ⊥ v − v_c): per-contact restitution targets on nearly opposite normals would intersect far out along the
+        /// e ≤ 1 (v_c ⊥ v_b − v_c; the sequential responses never speed a ball up either): per-contact restitution targets on nearly opposite normals would intersect far out along the
         /// opening's axis (QA: a 9.5 m/s hit left at 12.1 m/s with e = 0.9). The velocity change is added to the contacts' Hit
         /// events (<see cref="RecordWedgeImpulse"/>).
         /// </summary>
@@ -177,10 +179,16 @@ namespace Ballverse.Core.Sim
                     if (ei > e) e = ei;
                 }
             }
-            if (!NearestLeavingVelocity(v, touching, m, out Vec2 solved)) return;
+            // Base velocity: the sequential responses above act on nearly opposite normals one at a time, so where the ball came
+            // in still approaching a touching contact they have usually swapped much of its normal speed into a large component
+            // along the opening (same speed at e = 1) that the restitution step would mirror out of the narrow cone of leaving
+            // velocities (QA: an elastic ball kept 0.58 of its speed). The joint response therefore starts from the velocity
+            // before them (v0) whenever v0 still moves into a touching contact; otherwise from v.
+            Vec2 vb = LeavesAll(v0, touching, m) ? v : v0;
+            if (!NearestLeavingVelocity(vb, touching, m, out Vec2 solved)) return;
             if (e > 0f)
             {
-                Vec2 bounced = solved + (solved - v) * e;
+                Vec2 bounced = solved + (solved - vb) * e;
                 if (LeavesAll(bounced, touching, m)) solved = bounced;
                 else if (NearestLeavingVelocity(bounced, touching, m, out Vec2 projected)) solved = projected;
             }
