@@ -16,7 +16,8 @@ namespace Ballverse.UI
     {
         public UiShell Shell { get; private set; }
 
-        public static BallverseUIRoot Create(IBallverseViewModels viewModels, int sortingOrder = 0, Transform parent = null) => default;
+        public static BallverseUIRoot Create(IBallverseViewModels viewModels, Ballverse.Platform.ISafeAreaProvider safeArea, int sortingOrder = 0,
+            Transform parent = null) => default;
     }
 
     public sealed class UiShell : IDisposable

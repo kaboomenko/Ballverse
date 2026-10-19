@@ -86,7 +86,7 @@ namespace Ballverse.App
                 Platform = new UnityPlatformActions(),
                 Textures = new UnityTextureLoader(),
                 Clock = new StopwatchClock(),
-                CreateUi = viewModels => new UnityAppUi(BallverseUIRoot.Create(viewModels)),
+                CreateUi = viewModels => new UnityAppUi(BallverseUIRoot.Create(viewModels, platform.SafeArea)),
                 RunLoop = AppRunner.Create,
                 Shutdown = () =>
                 {
