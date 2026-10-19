@@ -115,6 +115,8 @@ namespace Ballverse.Core.Sim
             float tStart = 0f;
             Vec2 wStart = _ballPrev[bi];
             int impacts = 0;
+            int heldBody = -1;
+            Vec2 heldPos = default, heldN = default;
             while (true)
             {
                 SweepHit best = SweepHit.None;
@@ -136,8 +138,10 @@ namespace Ballverse.Core.Sim
                         continue;
                     }
                     // Stopped on the start side of a closed opening, inside both primitives: the joint overlap projection pushes
-                    // the ball back out and applies the responses of everything it touches.
-                    ball.Position = FromBodySpace(_colliders[bestC].Body, best.Pos);
+                    // the ball back out and applies the responses of everything it touches (HoldOnBridge if it cannot).
+                    heldBody = _colliders[bestC].Body;
+                    ball.Position = heldPos = FromBodySpace(heldBody, best.Pos);
+                    heldN = Vec2.Rotate(best.N, _frames[heldBody].Cos, _frames[heldBody].Sin);
                     break;
                 }
                 if (best.Transit)
@@ -173,6 +177,24 @@ namespace Ballverse.Core.Sim
             }
             if (!ball.Alive) return;
             ResolveOverlaps(bi, n, h);
+            if (heldBody >= 0 && ball.Alive) HoldOnBridge(bi, heldBody, heldPos, heldN);
+        }
+
+        /// <summary>
+        /// A ball the sweep held on the start side of a bridge that the overlap pass could not push clear of it (no position fits
+        /// the ball: a pusher crushing it into a closed opening) rests on the bridge, which is a solid centre line: its velocity
+        /// through the bridge (relative to the body) is removed, so it does not accumulate while the ball is held. A ball pushed
+        /// off the bridge got the responses of the primitives it touches.
+        /// </summary>
+        void HoldOnBridge(int bi, int body, Vec2 heldPos, Vec2 n)
+        {
+            ref BallState ball = ref _balls[bi];
+            if (Vec2.Dot(ball.Position - heldPos, n) > ContactSlop) return;
+            ref PhysicsBodyState b = ref _bodies[body];
+            ref BodyFrame f = ref _frames[body];
+            Vec2 w = WallVelocityAt(ref b, b.Position, b.Scale, heldPos - n * ContactSlop, Vec2.Zero, f.Cos, f.Sin);
+            float vn = Vec2.Dot(ball.Velocity - w, n);
+            if (vn < 0f) ball.Velocity = ball.Velocity - n * vn;
         }
 
         /// <summary>
@@ -602,6 +624,14 @@ namespace Ballverse.Core.Sim
             return ball.Velocity - n.Perp * (ball.AngularVelocity * ball.Radius);
         }
 
+        /// <summary>Restitution of a ball–wall contact approaching at <paramref name="approach"/>: max of ball and wall, 0 below the resting threshold.</summary>
+        float RestitutionOf(ref BallState ball, int collider, float approach)
+        {
+            float wall = _colliders[collider].Material.Restitution;
+            float e = ball.Restitution > wall ? ball.Restitution : wall;
+            return approach < RestingThreshold(ball.GravityScale) ? 0f : e;
+        }
+
         /// <summary>
         /// Normal impulse with restitution (max of ball and wall, 0 below the resting threshold) and Coulomb friction against the
         /// wall's surface velocity, from the ball's current velocity; records the Hit event when the ball approaches.
@@ -617,8 +647,7 @@ namespace Ballverse.Core.Sim
             Vec2 vrel = BallSurfaceVelocity(ref ball, n) - cf.WallVelocity;
             float vn = Vec2.Dot(vrel, n);
             if (vn >= 0f) return;
-            float e = ball.Restitution > c.Material.Restitution ? ball.Restitution : c.Material.Restitution;
-            if (-vn < RestingThreshold(ball.GravityScale)) e = 0f;
+            float e = RestitutionOf(ref ball, cf.Collider, -vn);
             float jn = -(1f + e) * vn * ball.Mass;
             float jt = 0f;
             float mu = MathF.Sqrt(ball.Friction * c.Material.Friction);
