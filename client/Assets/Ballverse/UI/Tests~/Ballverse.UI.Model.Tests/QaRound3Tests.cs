@@ -145,6 +145,31 @@ namespace Ballverse.UI.Tests
         }
 
         [Fact]
+        public void TheTextBodyHasNoHorizontalPaddingOrBorderSoItCanShrinkToItsClip()
+        {
+            // QA round 4: the layout never sizes a box below its padding + border, so 8 + 8 pt of padding kept a span past
+            // the reel end at least 16 pt wide and painted it up to ~14 pt over the side padding. Every rule that can reach
+            // the body of a text span (any body selector not limited to S / V segments) carries no horizontal box.
+            string[] banned = { "padding", "padding-left", "padding-right", "border-width", "border-left-width", "border-right-width", "min-width" };
+            var rules = Sources.UssRules();
+            int bodyRules = 0;
+            foreach (var rule in rules)
+            {
+                string last = rule.Key.Split(' ', '>').Last(p => p.Length > 0);
+                if (!Regex.IsMatch(last, @"\.bv-timeline__body(?![\w-])") || rule.Key.Contains("bv-timeline__segment")) continue;
+                bodyRules++;
+                foreach (string p in banned) Assert.False(rule.Value.ContainsKey(p), rule.Key + " sets " + p + " on the clipped text body");
+            }
+            Assert.True(bodyRules >= 2, "expected .bv-timeline__body and .bv-timeline__text .bv-timeline__body");
+            // The label keeps its inset as a margin inside the clipped body.
+            var text = Sources.RulesBySelector()[".bv-timeline__text .bv-timeline__text-label"];
+            Assert.Equal("var(--space-2)", text["margin-left"]);
+            Assert.Equal("var(--space-2)", text["margin-right"]);
+            // The music bar is not clipped by ClipToTrack (its track clips): it keeps its padding.
+            Assert.Equal("var(--space-2)", Sources.RulesBySelector()[".bv-timeline__music"]["padding-left"]);
+        }
+
+        [Fact]
         public void SegmentsDrawThroughAClippedBodyAndAreDraggedByIt()
         {
             string view = Sources.Strip(Sources.Read("Runtime", "Screens", "Studio", "TimelineView.cs"));
@@ -398,8 +423,27 @@ namespace Ballverse.UI.Tests
             double a = GlassTextPalette.MinFrostedAlpha(true, "#161924");
             double lum = GlassContrast.LinearBlendLuminance(1.0, GlassTextPalette.Luminance("#161924"), a);
             Assert.Equal(GlassTextPalette.BackgroundTarget(true), lum, 9);
-            double la = GlassTextPalette.MinFrostedAlpha(false, "#FAFAFC");
+            double la = GlassTextPalette.MinFrostedAlphaLinear(false, "#FAFAFC");
             Assert.Equal(GlassTextPalette.BackgroundTarget(false), GlassContrast.LinearBlendLuminance(0.0, GlassTextPalette.Luminance("#FAFAFC"), la), 9);
+            // QA round 4: in light theme gamma blending is the worse case (a light fill over black is darker blended in
+            // gamma space), so the bound is the gamma one there: 0.825 against 0.647 linear.
+            double lg = GlassTextPalette.MinFrostedAlphaGamma(false, "#FAFAFC");
+            Assert.Equal(GlassTextPalette.BackgroundTarget(false), GlassContrast.GammaBlendLuminance(0, 0, 0, 250 / 255.0, 250 / 255.0, 252 / 255.0, lg), 9);
+            Assert.True(GlassContrast.GammaBlendLuminance(0, 0, 0, 250 / 255.0, 250 / 255.0, 252 / 255.0, lg) >= GlassTextPalette.BackgroundTarget(false));
+            Assert.InRange(la, 0.64, 0.66);
+            Assert.InRange(lg, 0.82, 0.83);
+            Assert.Equal(lg, GlassTextPalette.MinFrostedAlpha(false, "#FAFAFC"));
+            // At the linear minimum the light panel fails under gamma blending: the bound must not be the linear one.
+            double atLinear = GlassContrast.GammaBlendLuminance(0, 0, 0, 250 / 255.0, 250 / 255.0, 252 / 255.0, la);
+            Assert.True(GlassContrast.ContrastRatio(GlassTextPalette.WeakestLuminance(false), atLinear) < GlassContrast.MinTextContrast);
+            // In dark theme the linear bound decides (gamma is never lighter), and MinFrostedAlpha is the larger of the two.
+            Assert.Equal(a, GlassTextPalette.MinFrostedAlphaLinear(true, "#161924"));
+            Assert.True(GlassTextPalette.MinFrostedAlphaGamma(true, "#161924") <= a + 1e-9);
+            foreach (bool dark in new[] { true, false })
+            foreach (string fill in new[] { "#161924", "#0C0E14", "#FAFAFC", "#FFFFFF", "#808080" })
+                Assert.Equal(Math.Max(GlassTextPalette.MinFrostedAlphaLinear(dark, fill), GlassTextPalette.MinFrostedAlphaGamma(dark, fill)), GlassTextPalette.MinFrostedAlpha(dark, fill));
+            Assert.True(double.IsPositiveInfinity(GlassTextPalette.MinFrostedAlphaGamma(true, "#FFFFFF")));
+            Assert.True(double.IsPositiveInfinity(GlassTextPalette.MinFrostedAlpha(false, "#000000")));
             // A fill lighter than the bound can never protect light text.
             Assert.True(double.IsPositiveInfinity(GlassTextPalette.MinFrostedAlpha(true, "#FFFFFF")));
             // Gamma blending of a dark fill over white is never lighter than linear blending (convex sRGB curve).
@@ -519,6 +563,42 @@ namespace Ballverse.UI.Tests
         }
 
         [Fact]
+        public void ADeviceChangeAfterTheFirstLayoutUpdatesTheInsetsWithoutANewWidth()
+        {
+            var tracker = new SafeAreaTracker(new SafeAreaInsets(1170, 2532, 0, 141, 0, 102));
+            Assert.Equal(default(PanelInsets), tracker.Insets);
+            Assert.True(tracker.SetPanelWidth(390f));
+            Assert.Equal(47f, tracker.Insets.Top, 2);
+            Assert.Equal(34f, tracker.Insets.Bottom, 2);
+            // Split view / foldable: new insets while the panel has no layout (NaN) use the last usable width.
+            Assert.True(tracker.SetDevice(new SafeAreaInsets(1170, 2532, 0, 0, 0, 0), float.NaN));
+            Assert.Equal(0f, tracker.Insets.Top, 2);
+            Assert.Equal(0f, tracker.Insets.Bottom, 2);
+            Assert.Equal(390f, tracker.PanelWidth);
+            // With a laid-out panel the current width wins (and is remembered).
+            Assert.True(tracker.SetDevice(new SafeAreaInsets(1170, 2532, 0, 141, 0, 102), 780f));
+            Assert.Equal(94f, tracker.Insets.Top, 2);
+            Assert.Equal(780f, tracker.PanelWidth);
+            // Same insets again: no change reported, so the spacers are not touched.
+            Assert.False(tracker.SetDevice(new SafeAreaInsets(1170, 2532, 0, 141, 0, 102), 780f));
+            Assert.False(tracker.SetPanelWidth(780f));
+        }
+
+        [Fact]
+        public void ADeviceChangeBeforeAnyLayoutWaitsForTheFirstWidth()
+        {
+            var tracker = new SafeAreaTracker(default(SafeAreaInsets));
+            Assert.False(tracker.SetDevice(new SafeAreaInsets(1179, 2556, 0, 177, 0, 102), float.NaN));
+            Assert.Equal(default(PanelInsets), tracker.Insets);
+            Assert.True(float.IsNaN(tracker.PanelWidth));
+            Assert.False(tracker.SetPanelWidth(0f));
+            Assert.False(tracker.SetPanelWidth(float.NaN));
+            Assert.True(tracker.SetPanelWidth(393f));
+            Assert.Equal(59f, tracker.Insets.Top, 2);
+            Assert.Equal(new SafeAreaInsets(1179, 2556, 0, 177, 0, 102), tracker.Device);
+        }
+
+        [Fact]
         public void TheUiNeverReadsTheScreenSafeAreaItself()
         {
             foreach (string file in Directory.GetFiles(Sources.Ui("Runtime"), "*.cs", SearchOption.AllDirectories)
@@ -528,7 +608,12 @@ namespace Ballverse.UI.Tests
             Assert.Contains("public SafeAreaController(VisualElement root, ISafeAreaProvider provider)", theme);
             Assert.Contains("_provider.Changed += OnDeviceInsetsChanged", theme);
             Assert.Contains("_provider.Changed -= OnDeviceInsetsChanged", Sources.Body(theme, "public void Dispose()"));
-            Assert.Contains("PanelInsets.FromDevice(_device, panelWidth)", theme);
+            // QA round 4: a provider change resizes the spacers by itself (not only after a geometry change).
+            string onChange = Sources.Body(theme, "void OnDeviceInsetsChanged(SafeAreaInsets insets)");
+            Assert.Contains("if (_state.SetDevice(insets, _root.layout.width)) Publish();", onChange);
+            Assert.Contains("Apply(_root)", Sources.Body(theme, "void Publish()"));
+            Assert.Contains("if (_state.SetPanelWidth(panelWidth)) Publish();", Sources.Body(theme, "internal bool Recompute(float panelWidth)"));
+            Assert.Contains("PanelInsets.FromDevice(_device, _panelWidth)", Sources.Strip(Sources.Read("Model", "Layout", "PanelInsets.cs")));
             string shell = Sources.Strip(Sources.Read("Runtime", "Shell", "UiShell.cs"));
             Assert.DoesNotContain("SafeArea.Refresh", shell);
             Assert.Contains("new SafeAreaController(appRoot, safeArea)", shell);

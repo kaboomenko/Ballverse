@@ -77,33 +77,32 @@ namespace Ballverse.UI.Theming
     {
         readonly VisualElement _root;
         readonly ISafeAreaProvider _provider;
-        SafeAreaInsets _device;
-        PanelInsets _insets;
+        readonly SafeAreaTracker _state;
         bool _disposed;
 
-        public PanelInsets Insets => _insets;
+        public PanelInsets Insets => _state.Insets;
         /// <summary>The device insets last received from the provider (pixels).</summary>
-        public SafeAreaInsets DeviceInsets => _device;
+        public SafeAreaInsets DeviceInsets => _state.Device;
         public event Action Changed;
 
         public SafeAreaController(VisualElement root, ISafeAreaProvider provider)
         {
             _root = root ?? throw new ArgumentNullException(nameof(root));
             _provider = provider;
-            if (_provider != null)
-            {
-                _device = _provider.Current;
-                _provider.Changed += OnDeviceInsetsChanged;
-            }
+            _state = new SafeAreaTracker(_provider != null ? _provider.Current : default);
+            if (_provider != null) _provider.Changed += OnDeviceInsetsChanged;
             _root.RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
             Recompute(_root.layout.width);
         }
 
+        /// <summary>
+        /// A provider change (split view, resize, foldable) resizes the spacers at once: scaled with the current panel width,
+        /// or the last usable one while the panel has no layout.
+        /// </summary>
         void OnDeviceInsetsChanged(SafeAreaInsets insets)
         {
             if (_disposed) return;
-            _device = insets;
-            Recompute(_root.layout.width);
+            if (_state.SetDevice(insets, _root.layout.width)) Publish();
         }
 
         void OnGeometryChanged(GeometryChangedEvent e)
@@ -119,26 +118,29 @@ namespace Ballverse.UI.Theming
         internal bool Recompute(float panelWidth)
         {
             if (!PanelInsets.IsUsablePanelWidth(panelWidth)) return false;
-            var insets = PanelInsets.FromDevice(_device, panelWidth);
-            if (insets.Equals(_insets)) return true;
-            _insets = insets;
+            if (_state.SetPanelWidth(panelWidth)) Publish();
+            return true;
+        }
+
+        void Publish()
+        {
             Apply(_root);
             Changed?.Invoke();
-            return true;
         }
 
         /// <summary>Sizes the spacers under <paramref name="root"/>.</summary>
         public void Apply(VisualElement root)
         {
             if (root == null) return;
-            root.Query<VisualElement>(className: "bv-safe-top").ForEach(e => e.style.height = _insets.Top);
-            root.Query<VisualElement>(className: "bv-safe-bottom").ForEach(e => e.style.height = _insets.Bottom);
-            root.Query<VisualElement>(className: "bv-safe-left").ForEach(e => e.style.width = _insets.Left);
-            root.Query<VisualElement>(className: "bv-safe-right").ForEach(e => e.style.width = _insets.Right);
+            var i = _state.Insets;
+            root.Query<VisualElement>(className: "bv-safe-top").ForEach(e => e.style.height = i.Top);
+            root.Query<VisualElement>(className: "bv-safe-bottom").ForEach(e => e.style.height = i.Bottom);
+            root.Query<VisualElement>(className: "bv-safe-left").ForEach(e => e.style.width = i.Left);
+            root.Query<VisualElement>(className: "bv-safe-right").ForEach(e => e.style.width = i.Right);
             root.Query<VisualElement>(className: "bv-safe-pad-x").ForEach(e =>
             {
-                e.style.paddingLeft = _insets.Left;
-                e.style.paddingRight = _insets.Right;
+                e.style.paddingLeft = i.Left;
+                e.style.paddingRight = i.Right;
             });
         }
 

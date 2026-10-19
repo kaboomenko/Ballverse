@@ -343,22 +343,28 @@
     bottom: 4px;
 }
 
-.bv-timeline__text .bv-timeline__body,
-.bv-timeline__music {
+/* The clipped body of a text span has no horizontal padding or border: the layout never sizes a box below its padding
+   plus border, so 8 + 8 pt of padding would keep a span that ends past the reel at least 16 pt wide and paint it over
+   the side padding (QA round 4). The label keeps its inset as a margin instead, and the body can shrink to 0. */
+.bv-timeline__text .bv-timeline__body {
     border-radius: 6px;
-    padding-left: var(--space-2);
-    padding-right: var(--space-2);
     justify-content: center;
+    background-color: var(--color-surface-3);
 }
 
-.bv-timeline__text .bv-timeline__body {
-    background-color: var(--color-surface-3);
+.bv-timeline__text .bv-timeline__text-label {
+    margin-left: var(--space-2);
+    margin-right: var(--space-2);
 }
 
 .bv-timeline__music {
     position: absolute;
     top: 4px;
     bottom: 4px;
+    border-radius: 6px;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+    justify-content: center;
     background-color: rgba(47, 210, 122, 0.3);
     overflow: hidden;
 }

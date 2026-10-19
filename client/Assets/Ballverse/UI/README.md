@@ -123,7 +123,8 @@ source. The ≤ 1.5 ms tier-B budget must be measured on device (spec spike S3).
 - Safe area: layouts contain spacer elements `bv-safe-top` / `bv-safe-bottom` sized by `SafeAreaController` from
   `Ballverse.Platform.ISafeAreaProvider` (the bootstrap polls `Screen.safeArea` once per frame and converts it once,
   `SafeAreaInsets.FromBottomLeftRect`); the UI only scales the pixel insets to panel units (`PanelInsets.FromDevice`)
-  when they or the panel width change, and never reads the screen itself. The simulation renders edge to edge
+  when they or the panel width change (`SafeAreaTracker`: a provider change between layouts uses the last usable panel
+  width, so the spacers follow it at once), and never reads the screen itself. The simulation renders edge to edge
   underneath. The editor preview (`UiPreviewBootstrap`) uses `PreviewSafeAreaProvider` (Fakes) with the same
   conversion.
 - Reduce motion (`bv-reduce-motion`): all tweens complete instantly, USS transitions are zeroed.

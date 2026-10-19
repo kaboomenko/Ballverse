@@ -144,10 +144,19 @@ namespace Ballverse.UI.EditorTests
             Assert.AreEqual(47f, top.style.height.value.value, 0.01f);
             Assert.AreEqual(34f, bottom.style.height.value.value, 0.01f);
 
+            // A provider change resizes the spacers by itself (no geometry change follows a split-view or foldable change
+            // when the panel width stays): the root here has no layout, so the last usable width (390) scales it.
+            int changes = 0;
+            controller.Changed += () => changes++;
             provider.Raise(new SafeAreaInsets(1170, 2532, 0, 0, 0, 0));
             Assert.AreEqual(provider.Current, controller.DeviceInsets);
-            controller.Recompute(390f);
             Assert.AreEqual(0f, top.style.height.value.value, 0.01f);
+            Assert.AreEqual(0f, bottom.style.height.value.value, 0.01f);
+            Assert.AreEqual(1, changes);
+            provider.Raise(new SafeAreaInsets(1170, 2532, 0, 141, 0, 102));
+            Assert.AreEqual(47f, top.style.height.value.value, 0.01f);
+            Assert.AreEqual(34f, bottom.style.height.value.value, 0.01f);
+            Assert.AreEqual(2, changes);
 
             controller.Dispose();
             Assert.IsFalse(provider.HasListeners);

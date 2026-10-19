@@ -59,6 +59,60 @@ namespace Ballverse.UI.Layout
         }
     }
 
+    /// <summary>
+    /// Safe-area state of the UI: the device insets last received from the platform and the last usable panel width.
+    /// A device change is scaled with the current panel width, or with the last usable one while the panel has no layout
+    /// (a split-view, resize or foldable change can arrive between layouts), so the spacers follow it at once. Pure.
+    /// </summary>
+    public sealed class SafeAreaTracker
+    {
+        SafeAreaInsets _device;
+        float _panelWidth = float.NaN;
+        PanelInsets _insets;
+
+        public SafeAreaTracker(SafeAreaInsets device)
+        {
+            _device = device;
+        }
+
+        /// <summary>Device insets last received (pixels).</summary>
+        public SafeAreaInsets Device => _device;
+
+        /// <summary>Last usable panel width, NaN before the first layout.</summary>
+        public float PanelWidth => _panelWidth;
+
+        /// <summary>Current insets in panel units (zero until a usable panel width is known).</summary>
+        public PanelInsets Insets => _insets;
+
+        /// <summary>
+        /// Takes new device insets. <paramref name="currentPanelWidth"/> is used when usable, else the last usable width.
+        /// Returns true when <see cref="Insets"/> changed.
+        /// </summary>
+        public bool SetDevice(SafeAreaInsets device, float currentPanelWidth)
+        {
+            _device = device;
+            if (PanelInsets.IsUsablePanelWidth(currentPanelWidth)) _panelWidth = currentPanelWidth;
+            return Update();
+        }
+
+        /// <summary>Takes a new panel width; an unusable one is ignored. Returns true when <see cref="Insets"/> changed.</summary>
+        public bool SetPanelWidth(float panelWidth)
+        {
+            if (!PanelInsets.IsUsablePanelWidth(panelWidth)) return false;
+            _panelWidth = panelWidth;
+            return Update();
+        }
+
+        bool Update()
+        {
+            if (!PanelInsets.IsUsablePanelWidth(_panelWidth)) return false;
+            var insets = PanelInsets.FromDevice(_device, _panelWidth);
+            if (insets.Equals(_insets)) return false;
+            _insets = insets;
+            return true;
+        }
+    }
+
     /// <summary>Box fitting for the 9:16 studio preview and similar fixed-aspect slots.</summary>
     public static class AspectFit
     {
