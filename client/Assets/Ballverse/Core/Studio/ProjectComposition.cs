@@ -138,6 +138,28 @@ namespace Ballverse.Core.Studio
         }
 
         /// <summary>
+        /// Identity of everything the studio mix of <paramref name="doc"/> on <paramref name="timeline"/> depends on: the audio block,
+        /// the clip's sounds and timing, the user video's file, trim, offset and volume, the output duration and the timeline's
+        /// fps and length. Geometry edits (pan, zoom, fill, rotation, layout, texts) leave it unchanged, so the preview does not
+        /// remix while the user pinches or drags.
+        /// </summary>
+        public static string AudioMixKey(ProjectDocument doc, StudioTimeline timeline)
+        {
+            if (doc == null) throw new ArgumentNullException(nameof(doc));
+            if (timeline == null) throw new ArgumentNullException(nameof(timeline));
+            ClipSettings c = doc.Clip ?? new ClipSettings();
+            OutputSettings o = doc.Output ?? new OutputSettings();
+            UserVideoSettings v = doc.UserVideo;
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            string video = v == null ? "-" : v.File + "|" + v.TrimInUs.ToString(inv) + "|" + v.TrimOutUs.ToString(inv) + "|" + v.OffsetUs.ToString(inv)
+                + "|" + v.Volume.ToString("R", inv);
+            return CoreJson.Serialize(doc.Audio, false) + "|" + c.Replay + "|" + c.SoundPack + "|" + c.Melody + "|" + c.TrimInTick.ToString(inv)
+                + "|" + c.TrimOutTick.ToString(inv) + "|" + c.Speed.ToString("R", inv) + "|" + CoreJson.Serialize(c.FinaleSlowMo, false) + "|" + c.AfterEnd
+                + "|" + video + "|" + o.DurationMode + "|" + (o.ManualDurationUs?.ToString(inv) ?? "-") + "|" + CoreJson.Serialize(o.Cover, false)
+                + "|" + timeline.Fps.ToString(inv) + "|" + timeline.FrameCount.ToString(inv);
+        }
+
+        /// <summary>
         /// Export mix settings from the project's <c>audio</c> block (spec §3.6): gains 0–200 %, user track off without a video or at
         /// 0 %, music start inside the track (<see cref="MusicSettings.StartUs"/> → negative start frame), fades, ducking and
         /// normalization.

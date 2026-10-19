@@ -188,6 +188,16 @@ namespace Ballverse.Core.Tests.Modes
         /// </summary>
         public static long MeasureSteadyStateAllocation(IModeDefinition mode, ParamSet values, ulong seed, int warmupTicks, int measureTicks)
         {
+            // A per-tick allocation shows in every attempt; a stray runtime allocation on this thread (tiered JIT, GC
+            // bookkeeping under a loaded CI machine) does not repeat, so the smallest of three fresh runs is the measurement.
+            long best = long.MaxValue;
+            for (int attempt = 0; attempt < 3 && best != 0; attempt++)
+                best = Math.Min(best, MeasureOnce(mode, values, seed, warmupTicks, measureTicks));
+            return best;
+        }
+
+        static long MeasureOnce(IModeDefinition mode, ParamSet values, ulong seed, int warmupTicks, int measureTicks)
+        {
             var session = new ModeSession(mode, values, seed, new ModeSessionOptions
             {
                 RenderEvents = new RenderEventLog(100000),

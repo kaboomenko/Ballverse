@@ -70,6 +70,16 @@ namespace Ballverse.Core.Studio
         public SlotGeometry? VideoSlot => Planner.LayoutPlan.Layout.HasVideo ? Planner.LayoutPlan.Layout.Video : (SlotGeometry?)null;
 
         /// <summary>
+        /// Ticks of a render stream that an export uses: the stream's tick count limited to the 180-second maximum (a run ending at
+        /// the limit writes one frame more than <see cref="SimConstants.MaxDurationTicks"/>). The same value is stored in the resume
+        /// state and compared against the clip when rendering, so a long stream is not mistaken for a changed one.
+        /// </summary>
+        public static int EffectiveStreamTicks(int streamTicks)
+        {
+            return Math.Max(1, Math.Min(streamTicks, SimConstants.MaxDurationTicks));
+        }
+
+        /// <summary>
         /// Builds the persisted snapshot of a new export. Throws <see cref="ArgumentException"/> when the request is incomplete or the
         /// project cannot be sanitized.
         /// </summary>
@@ -82,7 +92,7 @@ namespace Ballverse.Core.Studio
             SanitizeResult sanitized = ProjectValidator.Sanitize(ProjectJson.Clone(r.Project));
             if (sanitized.HasErrors) throw new ArgumentException("project cannot be exported: invalid document", nameof(r));
             ProjectDocument doc = sanitized.Document;
-            int ticks = Math.Max(1, Math.Min(r.StreamTicks, SimConstants.MaxDurationTicks));
+            int ticks = EffectiveStreamTicks(r.StreamTicks);
             StudioTimeline timeline = ProjectComposition.BuildTimeline(doc, r.Settings.Fps, ticks);
             IReadOnlyList<FloatRect> masks = r.MaskRects ?? PlatformUiMasks.Default.Union();
             var state = new ExportResumeState

@@ -142,13 +142,14 @@ namespace Ballverse.Studio
         }
 
         /// <summary>Glyph mesh (positions in canvas px) offset by <paramref name="offset"/>, sampling the font atlas alpha.</summary>
-        public void DrawGlyphs(CommandBuffer cmd, Mesh mesh, Texture atlas, Vector2 offset, StudioColor color)
+        public void DrawGlyphs(CommandBuffer cmd, Mesh mesh, Texture atlas, Vector2 offset, StudioColor color, bool colourGlyphs = false)
         {
             if (mesh == null || atlas == null || color.A <= 0f) return;
             _block.Clear();
             _block.SetTexture(s_mainTex, atlas);
             _block.SetVector(s_offset, new Vector4(offset.x, offset.y, 0f, 0f));
             _block.SetVector(s_color, ToShader(color));
+            _block.SetVector(s_params, new Vector4(colourGlyphs ? 1f : 0f, 0f, 0f, 0f));
             cmd.DrawMesh(mesh, Matrix4x4.identity, _material, 0, PassGlyph, _block);
         }
 

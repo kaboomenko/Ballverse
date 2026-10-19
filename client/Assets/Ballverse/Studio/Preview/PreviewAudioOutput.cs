@@ -7,7 +7,11 @@ namespace Ballverse.Studio
     /// Plays the studio's offline mix during the preview (spec §3.7: sound within one frame of the picture). An
     /// <see cref="AudioSource"/> loops a silent clip so Unity calls <see cref="OnAudioFilterRead"/> on the audio thread, where
     /// <see cref="PcmPlaybackCursor"/> writes the mix samples (resampled to the device rate). The picture follows
-    /// <see cref="AudibleUs"/> (cursor position minus the DSP buffer latency) through Core <see cref="PlaybackClock"/>.
+    /// <see cref="AudibleUs"/> (cursor position minus the DSP buffer latency) through Core <see cref="PreviewAudioSync"/> and
+    /// <see cref="PlaybackClock"/>, which fall back to the frame clock whenever the audio thread stops pulling samples.
+    /// <para>The filter only runs when the source does not bypass effects (<c>bypassEffects</c> also bypasses the custom
+    /// <see cref="OnAudioFilterRead"/> filter) and an enabled <see cref="AudioListener"/> exists: when the scene has none, one is
+    /// added to this object for the preview's lifetime.</para>
     /// </summary>
     [RequireComponent(typeof(AudioSource))]
     public sealed class PreviewAudioOutput : MonoBehaviour
@@ -17,6 +21,8 @@ namespace Ballverse.Studio
         AudioClip _silence;
         volatile int _outputRate = 48000;
         long _latencyUs;
+        long _blockUs;
+        AudioListener _ownListener;
 
         public PcmPlaybackCursor Cursor => _cursor;
 
@@ -25,6 +31,18 @@ namespace Ballverse.Studio
 
         /// <summary>Output time the listener hears now, µs (approximate: cursor minus device buffering).</summary>
         public long AudibleUs => System.Math.Max(0, _cursor.PositionUs - _latencyUs);
+
+        /// <summary>Cursor position (after the last block handed to the device), µs; frozen while the audio thread does not run.</summary>
+        public long CursorUs => _cursor.PositionUs;
+
+        /// <summary>Device buffering between the cursor and the speaker, µs.</summary>
+        public long LatencyUs => _latencyUs;
+
+        /// <summary>Length of one audio callback block, µs.</summary>
+        public long BlockUs => _blockUs;
+
+        /// <summary>Raised on the main thread when the output device or its buffer size changed (the sync is rebuilt).</summary>
+        public event System.Action ConfigurationChanged;
 
         public static PreviewAudioOutput Create(Transform parent)
         {
@@ -46,10 +64,19 @@ namespace Ballverse.Studio
             _source.spatialBlend = 0f;
             _source.volume = 1f;
             _source.priority = 0;
-            _source.bypassEffects = true;
+            // Not bypassEffects: it would also bypass this component's OnAudioFilterRead, the only thing producing sound.
             _source.bypassListenerEffects = true;
             _source.bypassReverbZones = true;
             AudioSettings.OnAudioConfigurationChanged += OnAudioConfigurationChanged;
+            EnsureListener();
+        }
+
+        /// <summary>Unity mixes nothing without an enabled AudioListener; the studio may run in a scene without a camera listener.</summary>
+        void EnsureListener()
+        {
+            AudioListener existing = Object.FindAnyObjectByType<AudioListener>();
+            if (existing != null && existing.isActiveAndEnabled) return;
+            _ownListener = gameObject.AddComponent<AudioListener>();
         }
 
         void OnEnable()
@@ -72,6 +99,7 @@ namespace Ballverse.Studio
         {
             ReadConfiguration();
             if (_source != null && isActiveAndEnabled && !_source.isPlaying) _source.Play();
+            ConfigurationChanged?.Invoke();
         }
 
         void ReadConfiguration()
@@ -79,6 +107,7 @@ namespace Ballverse.Studio
             _outputRate = AudioSettings.outputSampleRate > 0 ? AudioSettings.outputSampleRate : 48000;
             AudioSettings.GetDSPBufferSize(out int bufferLength, out int numBuffers);
             _latencyUs = (long)bufferLength * System.Math.Max(1, numBuffers) * 1000000L / System.Math.Max(1, _outputRate);
+            _blockUs = (long)System.Math.Max(1, bufferLength) * 1000000L / System.Math.Max(1, _outputRate);
         }
 
         /// <summary>Loads the mix (interleaved stereo 48 kHz) and keeps the position.</summary>
@@ -91,6 +120,7 @@ namespace Ballverse.Studio
         {
             _cursor.SeekUs(outputUs);
             _cursor.Playing = true;
+            if (_ownListener == null) EnsureListener(); // a listener found at start may have been destroyed with its scene
             if (_source != null && !_source.isPlaying) _source.Play();
         }
 

@@ -75,6 +75,7 @@ namespace Ballverse.Studio
         readonly ISimFrameRenderer _sim;
         readonly StudioRenderQuality _quality;
         readonly int _maxSimSide;
+        readonly bool _ownsSim;
         readonly List<TextDraw> _texts = new List<TextDraw>(8);
         readonly RenderTexture[] _simTargets = new RenderTexture[2];
         ClipSource _clip;
@@ -87,13 +88,17 @@ namespace Ballverse.Studio
         int _discontinuity;
         bool _clipBegun;
 
+        /// <param name="sim">This frame renderer's own simulation renderer (one clip per instance: never share it with another user).</param>
         /// <param name="maxSimSide">Cap of the simulation render target's longer side (preview may use less than export).</param>
-        public StudioFrameRenderer(StudioCompositor compositor, ISimFrameRenderer sim, StudioRenderQuality quality, int maxSimSide = SimSlotSizing.DefaultMaxSide)
+        /// <param name="ownsSimRenderer">Dispose <paramref name="sim"/> (when it is <see cref="IDisposable"/>) with this renderer.</param>
+        public StudioFrameRenderer(StudioCompositor compositor, ISimFrameRenderer sim, StudioRenderQuality quality, int maxSimSide = SimSlotSizing.DefaultMaxSide,
+            bool ownsSimRenderer = false)
         {
             _compositor = compositor ?? throw new ArgumentNullException(nameof(compositor));
             _sim = sim ?? throw new ArgumentNullException(nameof(sim));
             _quality = quality;
             _maxSimSide = Math.Max(SimSlotSizing.MinSide, maxSimSide);
+            _ownsSim = ownsSimRenderer;
         }
 
         public StudioCompositor Compositor => _compositor;
@@ -165,9 +170,10 @@ namespace Ballverse.Studio
             _lastIteration = sim.Iteration;
             _lastTick = sim.Tick;
             IntRect slotRect = plan.Layout.Simulation.Rect;
-            SimSlotRender sizing = SimSlotSizing.Compute(Math.Max(1, slotRect.Width), Math.Max(1, slotRect.Height), _simContent, _maxSimSide);
+            SimSlotRender sizing = SimSlotSizing.Compute(Math.Max(1, slotRect.Width), Math.Max(1, slotRect.Height), _simContent, _maxSimSide,
+                _sim.SupportsViewport);
             RenderTexture simTarget = SimTarget(sizing.TargetSize);
-            _sim.SetFrameTime(new SimFrameTime(sim.Tick, frozen, sim.Iteration, _discontinuity, outputUs));
+            _sim.SetFrameTime(new SimFrameTime(sim.Tick, frozen, sim.Iteration, _discontinuity, outputUs, sizing.Viewport));
             _sim.Render(frame, _clip.Shapes, _clip.Labels, simTarget, _quality);
             FitBackground simBg = _doc.Clip?.FitBackground;
             var simPicture = new SlotPicture
@@ -240,6 +246,7 @@ namespace Ballverse.Studio
                 StudioUnity.Release(_simTargets[i]);
                 _simTargets[i] = null;
             }
+            if (_ownsSim && _sim is IDisposable d) d.Dispose();
         }
     }
 }

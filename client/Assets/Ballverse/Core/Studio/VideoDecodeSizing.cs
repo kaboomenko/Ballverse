@@ -36,6 +36,26 @@ namespace Ballverse.Core.Studio
             return new IntVec2(w, h);
         }
 
+        /// <summary>
+        /// Decode box of the studio preview's realtime reader: what a full 1080×1920 frame needs, halved (a phone preview area is
+        /// ≤ ~540 px wide), with the zoom rounded up to a power of two (1, 2, 4, 8) so a pinch gesture reopens the decoder at most a
+        /// few times, and only when it zooms in (see <see cref="Covers"/>). Slot, layout and canvas changes do not change it.
+        /// </summary>
+        public static IntVec2 PreviewBox(int displayWidth, int displayHeight, SlotContent content)
+        {
+            if (content == null) throw new ArgumentNullException(nameof(content));
+            float zoom = 1f;
+            while (zoom < content.Zoom && zoom < SlotContent.MaxZoom) zoom *= 2f;
+            IntVec2 box = Compute(displayWidth, displayHeight, 1080, 1920, content.WithZoom(Math.Min(SlotContent.MaxZoom, zoom)).WithPan(FloatVec2.Zero));
+            return new IntVec2(Math.Max(MinSide, (box.X / 2) & ~1), Math.Max(MinSide, (box.Y / 2) & ~1));
+        }
+
+        /// <summary>True when a reader opened with box <paramref name="open"/> serves a request for <paramref name="needed"/> (no reopen).</summary>
+        public static bool Covers(IntVec2 open, IntVec2 needed)
+        {
+            return open.X >= needed.X && open.Y >= needed.Y;
+        }
+
         static int EvenUp(double v)
         {
             long n = (long)v;

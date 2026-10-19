@@ -30,6 +30,7 @@
     <Compile Include="../../Clips/ClipLibrary.cs" />
     <Compile Include="../../Audio/PcmFileSource.cs;../../Audio/StudioAudioMixer.cs" />
     <Compile Include="../../Export/ExportContracts.cs;../../Export/ExportPipeline.cs;../../Export/StudioExportAudio.cs" />
+    <Compile Include="../../Rendering/IRenderStreamRebuilder.cs;../../Rendering/RenderStreamRepair.cs" />
     <Compile Include="Tests/*.cs" />
   </ItemGroup>
   <ItemGroup>

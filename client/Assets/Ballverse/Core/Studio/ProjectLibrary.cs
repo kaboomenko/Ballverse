@@ -234,6 +234,42 @@ namespace Ballverse.Core.Studio
             return sanitized.Issues;
         }
 
+        /// <summary>
+        /// Applies a metadata change that is not a user edit (an export added to the history, spec §3.9): it changes the current
+        /// document and every undo / redo snapshot alike, so Undo never takes it back, and records no undo step. Marks the
+        /// document dirty. Throws <see cref="ArgumentException"/> (nothing changed) when the change makes the document unrepairable.
+        /// </summary>
+        public void ApplyMetadata(Action<ProjectDocument> change)
+        {
+            if (change == null) throw new ArgumentNullException(nameof(change));
+            ProjectDocument current = Changed(_document, change);
+            if (current == null) throw new ArgumentException("change makes the project invalid", nameof(change));
+            RewriteSnapshots(_undo, change);
+            RewriteSnapshots(_redo, change);
+            current.UpdatedAt = _clock.NowIso();
+            _document = current;
+            Revision++;
+            _autosave.MarkChanged(_clock.NowMs());
+        }
+
+        ProjectDocument Changed(ProjectDocument doc, Action<ProjectDocument> change)
+        {
+            ProjectDocument copy = ProjectJson.Clone(doc);
+            change(copy);
+            copy.Id = _document.Id;
+            SanitizeResult sanitized = ProjectValidator.Sanitize(copy, _document.Id);
+            return sanitized.HasErrors ? null : sanitized.Document;
+        }
+
+        void RewriteSnapshots(LinkedList<string> list, Action<ProjectDocument> change)
+        {
+            for (LinkedListNode<string> node = list.First; node != null; node = node.Next)
+            {
+                ProjectDocument changed = Changed(ProjectJson.Deserialize(node.Value), change);
+                if (changed != null) node.Value = ProjectJson.Serialize(changed);
+            }
+        }
+
         public bool Undo()
         {
             if (_undo.Count == 0) return false;
