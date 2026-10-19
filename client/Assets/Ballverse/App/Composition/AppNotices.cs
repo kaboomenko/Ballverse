@@ -31,6 +31,8 @@ namespace Ballverse.App
         public const string GenerateNone = "app.generate.none";
         public const string GenerateNearestWinner = "app.generate.nearest_winner";
         public const string GenerateGoalMissed = "app.generate.goal_missed";
+        /// <summary>The director goal «Победа в последнюю секунду» as a choice of the 🎲 mini sheet (spec §2.5).</summary>
+        public const string GenerateStyleLastSecond = "app.generate.style.last_second";
         public const string WinnerNotFoundTitle = "app.generate.winner_not_found.title";
         public const string WinnerNotFoundBody = "app.generate.winner_not_found.body";
         public const string SearchLonger = "app.generate.search_longer";

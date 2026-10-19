@@ -56,8 +56,12 @@ namespace Ballverse.App
     /// </summary>
     public sealed class SetupHintRegistry
     {
-        /// <summary>Game time the probe may simulate per real second of the tier's 🎲 budget (a conservative 10× real time).</summary>
-        public const int GameSecondsPerBudgetSecond = 10;
+        /// <summary>
+        /// Tick cap of a probe: 3 × 180 s of game time (3 probe seeds run to their end). The probe is limited by the tier's 🎲
+        /// time budget on the caller's clock (spec §2.9 M01: «останавливает пробу по своим часам»), not by a fixed game-time
+        /// ratio, so a fast device probes as far as its budget allows; the cap only bounds a probe whose clock never runs out.
+        /// </summary>
+        public const int MaxProbeTicks = 3 * SimConstants.MaxDurationTicks;
 
         readonly Dictionary<string, ISetupHintProvider> _providers = new Dictionary<string, ISetupHintProvider>(StringComparer.Ordinal);
 
@@ -78,17 +82,6 @@ namespace Ballverse.App
         public ISetupHintProvider Find(string modeId)
         {
             return modeId != null && _providers.TryGetValue(modeId, out ISetupHintProvider p) ? p : null;
-        }
-
-        /// <summary>
-        /// The probe's tick budget for a 🎲 time budget: <see cref="GameSecondsPerBudgetSecond"/> game seconds per budget second
-        /// (tier B 2.5 s → 25 s of game time over the probe seeds, the Core acceptance budget). The caller also stops the probe
-        /// on its own clock when the time budget runs out (a device slower than 10× real time).
-        /// </summary>
-        public static int TickBudget(GenerationBudget budget)
-        {
-            long ticks = budget.TimeMs * GameSecondsPerBudgetSecond * SimConstants.TickRate / 1000L;
-            return (int)Math.Max(SimConstants.TickRate, Math.Min(int.MaxValue, ticks));
         }
 
         /// <summary>The structural (non-live) values of a set, without the seed: a hint depends only on these.</summary>

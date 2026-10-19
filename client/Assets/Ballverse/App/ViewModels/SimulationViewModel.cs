@@ -70,6 +70,8 @@ namespace Ballverse.App
         IDisposable _awake;
         SimPhaseView _lastPhase = SimPhaseView.Setup;
         CancellationTokenSource _generation;
+        /// <summary>The 🎲 deferred behind the result-card interstitial whose continuation has not run yet.</summary>
+        CancellationTokenSource _generationBehindBreak;
         GenerationDecision _decision;
         CancellationTokenSource _hintProbe;
         ParamSet _hintFor;
@@ -181,9 +183,40 @@ namespace Ballverse.App
             }
         }
 
-        public IReadOnlyList<GenerationChoice> GenerationStyles => _styles;
+        /// <summary>
+        /// The 🎲 mini sheet's style choices; with M01 «Соревнование» (≥ 2 colours) also the director goal «Победа в последнюю
+        /// секунду» (<see cref="DirectorGoals.StyleId"/>, spec §2.5).
+        /// </summary>
+        public IReadOnlyList<GenerationChoice> GenerationStyles
+        {
+            get
+            {
+                if (!LastSecondGoalAvailable) return _styles;
+                var styles = new GenerationChoice[_styles.Length + 1];
+                Array.Copy(_styles, styles, _styles.Length);
+                styles[_styles.Length] = new GenerationChoice(DirectorGoals.StyleId, _ctx.Notices.TextOf(AppStrings.GenerateStyleLastSecond));
+                return styles;
+            }
+        }
+
         public IReadOnlyList<GenerationChoice> GenerationDurations => _durations;
-        public string SelectedStyleId => _ctx.Settings.Data.GenerationStyle ?? "any";
+
+        /// <summary>The chosen style; «Победа в последнюю секунду» reads as «Напряжённый финал» while the set cannot take the goal.</summary>
+        public string SelectedStyleId
+        {
+            get
+            {
+                string id = _ctx.Settings.Data.GenerationStyle ?? "any";
+                if (id == DirectorGoals.StyleId) return LastSecondGoalAvailable ? id : DirectorGoals.FallbackStyleId;
+                return Array.IndexOf(s_styleIds, id) >= 0 ? id : "any";
+            }
+        }
+
+        /// <summary>The current mode and set can take the director goal «Победа в последнюю секунду» (M01 «Соревнование», ≥ 2 colours).</summary>
+        public bool LastSecondGoalAvailable => DirectorGoals.LastSecondAvailable(_mode, _values);
+
+        /// <summary>The director goal the last 🎲 asked Core for (<see cref="ModeGenerationRequest.Goal"/>).</summary>
+        public DirectorGoal LastGenerationGoal { get; private set; }
         public string SelectedDurationId => _ctx.Settings.Data.GenerationDuration ?? "auto";
         public IParamPanelViewModel Params => _params;
         public IPresetsViewModel Presets => _presets;
@@ -223,6 +256,12 @@ namespace Ballverse.App
             CancelGeneration();
             EndRun(GameRunEnd.Abandoned, false);
             bool modeChanged = _mode != mode;
+            if (modeChanged)
+            {
+                // Another mode's hint (or the probed set) does not carry over; coming back probes the set again.
+                CancelSetupHint();
+                ClearSetupHint();
+            }
             _mode = mode;
             if (modeChanged) ClearRecent();
             _values = Prepare(values ?? ModeParams.Defaults(mode, _ctx.Tier));
@@ -526,7 +565,7 @@ namespace Ballverse.App
         {
             if (_mode == null || _generation != null) return;
             DropDecision();
-            styleId = Array.IndexOf(s_styleIds, styleId) >= 0 ? styleId : "any";
+            styleId = Array.IndexOf(s_styleIds, styleId) >= 0 || styleId == DirectorGoals.StyleId ? styleId : "any";
             durationId = Array.IndexOf(s_durationIds, durationId) >= 0 ? durationId : "auto";
             _ctx.Settings.Update(d =>
             {
@@ -538,8 +577,32 @@ namespace Ballverse.App
             _generation = cts;
             SetProgress(0f);
             Notify();
-            if (AtNaturalBreak && _ctx.Ads != null) _ctx.Ads.At(NaturalBreakKind.Generate, () => StartGeneration(cts, styleId, durationId));
-            else StartGeneration(cts, styleId, durationId);
+            if (AtNaturalBreak && _ctx.Ads != null)
+            {
+                _generationBehindBreak = cts;
+                _ctx.Ads.At(NaturalBreakKind.Generate, () => ContinueAfterBreak(cts, styleId, durationId));
+            }
+            else
+            {
+                StartGeneration(cts, styleId, durationId);
+            }
+        }
+
+        /// <summary>
+        /// The interstitial break in front of a 🎲 is over (plaque, iOS ATT pre-prompt and system dialog, the ad). The break
+        /// covered the screen, so a hide during it did not cancel the 🎲 (<see cref="SetScreenActive"/>); if the screen is
+        /// still hidden now, the user really left it (spec §2.4) and the 🎲 is dropped.
+        /// </summary>
+        void ContinueAfterBreak(CancellationTokenSource cts, string styleId, string durationId)
+        {
+            if (_generationBehindBreak == cts) _generationBehindBreak = null;
+            if (_generation == cts && !_screenActive)
+            {
+                CancelGeneration();
+                Notify();
+                return;
+            }
+            StartGeneration(cts, styleId, durationId);
         }
 
         void StartGeneration(CancellationTokenSource cts, string styleId, string durationId)
@@ -550,12 +613,18 @@ namespace Ballverse.App
             if (durationId != "auto" && mode.Schema.Contains(CommonParams.TargetDuration))
                 baseValues = baseValues.With(CommonParams.TargetDuration, ParamValue.Int(int.Parse(durationId, System.Globalization.CultureInfo.InvariantCulture)));
             GenerationBudget budget = _ctx.Remote.Budgets.Get(_ctx.Tier);
+            // «Победа в последнюю секунду» (spec §2.5): the «Напряжённый финал» style with the LastSecond goal; the candidates
+            // keep the user's colours (a competition in every candidate). Without ≥ 2 colours the choice is the style alone.
+            bool lastSecond = styleId == DirectorGoals.StyleId && DirectorGoals.LastSecondAvailable(mode, baseValues);
+            IModeDefinition generatorMode = lastSecond ? new ParticipantsKeepingMode(mode) : mode;
+            LastGenerationGoal = lastSecond ? DirectorGoal.LastSecond : DirectorGoal.None;
             var request = new ModeGenerationRequest
             {
                 BaseValues = baseValues,
                 Tier = _ctx.Tier,
                 SessionSeed = (SessionSeedSource ?? NewSessionSeed)(),
                 Style = StyleOf(styleId),
+                Goal = LastGenerationGoal,
                 Budgets = _ctx.Remote.Budgets,
                 Profiles = _ctx.Remote.Profiles,
                 // Spec §2.5: when the forced winner is not found the user chooses «Искать дольше» or «Взять ближайший вариант».
@@ -575,7 +644,7 @@ namespace Ballverse.App
             {
                 try
                 {
-                    ModeGenerationResult result = ModeGenerator.Generate(mode, request);
+                    ModeGenerationResult result = ModeGenerator.Generate(generatorMode, request);
                     _ctx.Main.Post(() => OnGenerated(cts, mode, request, result, null));
                 }
                 catch (Exception e)
@@ -788,6 +857,7 @@ namespace Ballverse.App
             CancellationTokenSource cts = _generation;
             if (cts == null) return;
             _generation = null;
+            if (_generationBehindBreak == cts) _generationBehindBreak = null;
             cts.Cancel();
             SetProgress(-1f);
         }
@@ -807,6 +877,7 @@ namespace Ballverse.App
                 case "tense_finale": return GenerationStyle.TenseFinale;
                 case "many_balls": return GenerationStyle.ManyBalls;
                 case "minimal": return GenerationStyle.Minimalism;
+                case DirectorGoals.StyleId: return DirectorGoals.GoalStyle;
                 default: return GenerationStyle.Any;
             }
         }
@@ -943,7 +1014,12 @@ namespace Ballverse.App
             _screenActive = active;
             if (!active)
             {
-                CancelGeneration();
+                // A screen the interstitial break pushes over the simulation (the iOS ATT pre-prompt before the first ad,
+                // spec §5.6) hides it as the navigator does for any screen, but the user did not leave: the 🎲 waiting behind
+                // that break survives, and its continuation drops it if the screen is still hidden then.
+                bool coveredByBreak = _generation != null && _generation == _generationBehindBreak && _ctx.Ads != null && _ctx.Ads.AdCoversScreen;
+                if (coveredByBreak) DropDecision();
+                else CancelGeneration();
                 CancelSetupHint();
                 _ctx.Live.ResetInput();
                 SaveLastParams();
@@ -1100,7 +1176,9 @@ namespace Ballverse.App
             IModeDefinition mode = _mode;
             ParamSet values = _values;
             GenerationBudget budget = _ctx.Remote.Budgets.Get(_ctx.Tier);
-            int maxTicks = SetupHintRegistry.TickBudget(budget);
+            // Spec §2.9 M01: the probe runs within the tier's 🎲 time budget, stopped by this clock (a fast device probes
+            // further); the tick cap only bounds it.
+            const int maxTicks = SetupHintRegistry.MaxProbeTicks;
             long budgetMs = Math.Max(1, budget.TimeMs);
             Task.Run(() =>
             {
@@ -1144,8 +1222,10 @@ namespace Ballverse.App
             cts.Cancel();
         }
 
+        /// <summary>Drops the shown hint and forgets which set it was for, so that set is probed again when it returns.</summary>
         void ClearSetupHint()
         {
+            _hintFor = null;
             if (_setupHint == null) return;
             _setupHint = null;
             Notify();

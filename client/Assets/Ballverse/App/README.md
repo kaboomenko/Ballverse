@@ -87,13 +87,26 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   decision time excluded; the candidate's parameters are rebuilt from its seed — `GenerateCandidate` is pure), «Взять
   ближайший вариант» completes it and starts the nearest run with the notice «Нужный победитель не найден — показан
   ближайший вариант»; dismissing keeps the current run; leaving the screen or a new 🎲 closes a stale choice. Other
-  notices: below the quality threshold → «try a longer duration» text, director goal missed, and «Не удалось найти рабочий
-  вариант» when nothing was chosen (nothing starts). Headless (no UI) the nearest variant is taken with its notice.
+  notices: below the quality threshold (§2.4 step 5) → «Показан лучший вариант. Попробуйте увеличить длительность» /
+  "Here is the best variant. Try a longer duration", director goal missed → «Цель режиссуры не достигнута — показан лучший
+  вариант», and «Не удалось найти рабочий вариант» when nothing was chosen (nothing starts). Headless (no UI) the nearest
+  variant is taken with its notice.
+- **Director goal «Победа в последнюю секунду»** (§2.5, M01 «Соревнование»): the UI's 🎲 mini sheet shows whatever
+  `ISimulationViewModel.GenerationStyles` lists, so while the current set can take the goal
+  (`DirectorGoals.LastSecondAvailable`: a mode Core accepts it for — `GenerationSessionOptions.SupportsDirectorGoal` — not
+  interactive, ≥ 2 participants, i.e. M01 with «Соревнование» and ≥ 2 colours) the list gains the choice `last_second`
+  «Победа в последнюю секунду». Choosing it sends `ModeGenerationRequest.Goal = DirectorGoal.LastSecond` with the
+  «Напряжённый финал» style (narrowest last gap, the closest Core style) and generates through `ParticipantsKeepingMode`,
+  which fixes the user's ball count, colours and «Соревнование» in every candidate (Core fixes them only for a forced
+  winner). `SimulationViewModel.LastGenerationGoal` tells what the last 🎲 asked for. The choice is remembered; while the
+  set has fewer than 2 colours it reads and generates as «Напряжённый финал» without a goal (Core would reject the goal).
 - **Setup hints** (§2.9 M01): `SetupHintRegistry` (mode-owned, like `ArenaInputMapperRegistry`) — release 1 registers
   `RingEscapeDurationHintProvider`. Whenever the structural parameters of the shown run change (open, preset,
   structural edit, restart) and the screen is visible, the provider runs Core `RingEscapeDurationHint.Estimate` on a
-  worker within the tier's 🎲 budget (tick cap: 10 game seconds per budget second, the Core acceptance budget; plus a stop
-  on the wall clock), cancelled by the next change or when the screen hides; the same structural set is probed once. A
+  worker within the tier's 🎲 time budget, stopped by the worker's clock (§2.9 M01: «останавливает пробу по своим
+  часам»; a fast device probes further, a slow one gets Core's optimistic extrapolation; the tick cap
+  `SetupHintRegistry.MaxProbeTicks` = 3 × 180 s only bounds it), cancelled by the next change or when the screen hides;
+  the same structural set is probed once (a cleared hint or a mode change forgets the set, so it is probed again). A
   hint is raised as a `Notice` (toast) and kept in `SimulationViewModel.SetupHint`; its actions («Шире прорези»: gapSize
   +10°, «Меньше колец»: ringCount −25 %) run through `ApplySetupHintAction(id)`.
 - **Ads**: interstitials only at natural pauses (IN2): «Ещё раз» / 🎲 **on the result card**, Back, exit to the gallery.
@@ -110,7 +123,10 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   is lifted (`ResetInput` sends a zero-speed release at the next tick boundary, so M05's tower stops); the studio pauses
   export itself. Exception: Unity pauses the app while a full-screen ad shows (Android; iOS through
   `SetiOSAppPauseOnBackground(true)`), so while `AdBreaks.AdCoversScreen` (an interstitial break under way or the services'
-  `Ads.FullScreenChanged` reporting an ad) the pause does not cancel the 🎲 waiting behind the result-card interstitial. **Low memory**: thumbnails, previews, audio caches dropped.
+  `Ads.FullScreenChanged` reporting an ad) the pause does not cancel the 🎲 waiting behind the result-card interstitial.
+  The same holds for a screen the break pushes over the simulation (the iOS ATT pre-prompt before the first ad, §5.6:
+  the navigator hides the simulation screen → `SetScreenActive(false)`): the 🎲 behind that break survives, and the
+  break's continuation drops it only if the screen is still hidden then. **Low memory**: thumbnails, previews, audio caches dropped.
 
 ## Tests
 
@@ -123,7 +139,12 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   degraded studio, power-saver haptics, localization coverage, watermark default, generation success / cancel, ATT
   bridge; round 2 in `QaRegressionTests.Round2.cs`: 🎲 surviving the ad's app pause, look-timeline cost and parity with
   `ReplayParams.ParamsAtTick`, the forced-winner choice against Core's `AutoSearchLonger` / `AutoTakeNearest`, the M01
-  duration hint, the degraded studio on «В видео», the touch lost mid-drag).
+  duration hint, the degraded studio on «В видео», the touch lost mid-drag; round 3 in `QaRegressionTests.Round3.cs`: no
+  hint from a probe cut short after the merged Core estimator, «Победа в последнюю секунду» offered for M01
+  «Соревнование» only, sent as `Goal = LastSecond` with the colours kept and its miss notice, the fallback without
+  colours, the 🎲 behind the first ad surviving the ATT pre-prompt screen (and dropped when the screen stays hidden), the
+  hint after a mode switch, the clock-stopped probe on tier A (80 rings at 35°: no hint), the «Попробуйте увеличить
+  длительность» text).
 - `Assets/Ballverse/Tests/AppHarness~/run.sh` (no Unity, .NET 8): `CompileCheck` compiles App + Sim + every wired
   assembly's real sources against Unity stand-ins (warnings are errors), `Runtime` runs the EditMode tests above under
   plain .NET. GameCI's Unity compile remains the authority.
@@ -136,6 +157,12 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
 - **Setup hint row** (UI track): the M01 duration hint reaches the user as a toast; its two actions exist in the view
   model (`SimulationViewModel.SetupHint`, `ApplySetupHintAction`) but `IParamPanelViewModel` has no hint slot, so the
   settings sheet cannot show them as buttons until the UI track adds a hint row bound to those members.
+- **Director goal participants** (Core): `ModeGenerator` sets `ModeCandidateRequest.FixedParticipants` only for a forced
+  winner, so a goal of «Соревнование» could pick a one-ball candidate; the App wraps the mode in `ParticipantsKeepingMode`
+  for a 🎲 with a goal. Once Core fixes the participants whenever `Goal != None`, drop the wrapper.
+- **Goal label** (UI track): the choice's label comes from `AppText` (`app.generate.style.last_second`) until the UI
+  tables gain a `generate.style.last_second` key; a dedicated Director-group control (a goal switch visible only with
+  «Соревнование») would be clearer than a chip among the styles.
 - **Generation resume API** (Core): `ModeGenerator` has no "continue this session" entry, so `GenerationDecision.SearchLonger`
   mirrors its sequential loop for the extra budget (equivalence with `AutoSearchLonger = 1` is tested).
 

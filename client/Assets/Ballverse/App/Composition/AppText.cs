@@ -17,10 +17,12 @@ namespace Ballverse.App
         static readonly Dictionary<string, string[]> s_fallback = new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
             // key → { en, ru }
-            { AppStrings.GenerateWeak, new[] { "Couldn't find a great variant — here is the closest one", "Идеальный вариант не нашёлся — вот самый близкий" } },
+            // Spec §2.4 step 5: nothing passed the quality threshold — the best variant runs with the advice to lengthen the video.
+            { AppStrings.GenerateWeak, new[] { "Here is the best variant. Try a longer duration", "Показан лучший вариант. Попробуйте увеличить длительность" } },
             { AppStrings.GenerateFailed, new[] { "Generation failed. Try again", "Не удалось сгенерировать. Попробуйте ещё раз" } },
             { AppStrings.GenerateNone, new[] { "Couldn't find a working variant — try other settings", "Не удалось найти рабочий вариант — попробуйте другие настройки" } },
             { AppStrings.GenerateNearestWinner, new[] { "The chosen winner wasn't found — here is the closest variant", "Нужный победитель не найден — показан ближайший вариант" } },
+            { AppStrings.GenerateStyleLastSecond, new[] { "Last-second win", "Победа в последнюю секунду" } },
             { AppStrings.GenerateGoalMissed, new[] { "The director goal wasn't reached — here is the best variant", "Цель режиссуры не достигнута — показан лучший вариант" } },
             { AppStrings.WinnerNotFoundTitle, new[] { "The chosen winner wasn't found", "Нужный победитель не найден" } },
             { AppStrings.WinnerNotFoundBody, new[] { "Search longer, or take the closest variant with another winner?", "Искать дольше или взять ближайший вариант с другим победителем?" } },

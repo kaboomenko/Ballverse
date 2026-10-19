@@ -57,6 +57,9 @@ namespace Ballverse.App.Tests
         /// <summary>Replaces the GPU-free studio backend (e.g. a factory that throws); null = <see cref="FakeStudioBackend"/>.</summary>
         public Func<StudioEnvironment, IStudioBackend> StudioFactory;
 
+        /// <summary>The platform's ATT authorization (iOS-like when NotDetermined); null = the services' default.</summary>
+        public ITrackingAuthorization Tracking;
+
         /// <summary>No UI shell (the composition runs headless).</summary>
         public bool Headless;
 
@@ -96,6 +99,7 @@ namespace Ballverse.App.Tests
                     Monetization = MonetizationConfig.Release1,
                     FakeStore = StoreConfig,
                     InitialRemoteConfig = Remote,
+                    Tracking = Tracking,
                 }),
                 CreateMedia = () => MediaBridgeFactory.CreateFake(MediaOptions),
                 CreateStudio = StudioFactory ?? (s => Studio = new FakeStudioBackend(s.Paths, s.Gate) { Tier = s.Tier }),
