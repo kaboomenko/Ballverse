@@ -206,7 +206,8 @@ namespace Ballverse.Core.Sim
             if (qStart.Y >= lTop - ContactSlop) face = 0;
             else if (qStart.Y <= lBot + ContactSlop) face = 1;
             else face = q.Y >= oy ? 0 : 1;
-            return AddOverlap(bi, ci, new Vec2(q.X, face == 0 ? lTop : lBot), new Vec2(0f, face == 0 ? 1f : -1f), face, -1f, h);
+            var shape = new OverlapShape { Radius = c.HalfThickness + r, HardRadius = -1f, Core = CoreNone };
+            return AddOverlap(bi, ci, new Vec2(q.X, face == 0 ? lTop : lBot), new Vec2(0f, face == 0 ? 1f : -1f), face, -1f, h, in shape);
         }
 
         /// <summary>Sensor test for a spin platform: overlaps the band with a solid footprint, or (sweep) crosses its centre line on solid.</summary>
