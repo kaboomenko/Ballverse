@@ -83,7 +83,11 @@ Unity 6.3 is new and not used here). The material is therefore split:
    in linear space in this project, so a translucent fill would lift the clamped glass above the bound (12% white alone
    adds 0.12 luminance) and no lower bound could compensate. Every translucent fill in the styles is either one of these
    tokens or documented as never carrying text on glass (media overlays, scrims, lines, the timeline; a test keeps the
-   list complete). Only `Graphics.Blit` with a
+   list complete). Since the opaque glass control fill can equal the selected fill (`--color-surface-3`; both #2A2F40
+   on dark glass), a selected segment carries a `--color-text` outline (transparent of equal width on the others) plus
+   an accent-text, bold label/icon, and a selected row a `--color-text` leading bar plus a bold label; `QaRound5Tests`
+   checks >= 3:1 for these indicators against the track, the fill and the glass bound or page surfaces in all eight
+   theme/contrast/glass scopes (linear and gamma blending). Only `Graphics.Blit` with a
    material is used, so it works with URP and without camera hooks.
 2. **Each surface** (class `bv-glass`) shows that one texture as its background image, sized to the panel and offset by
    the element's `worldBound` every frame (`GlassSurfaces`, background-size / background-position API), so it displays
