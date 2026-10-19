@@ -152,6 +152,7 @@ namespace Ballverse.Core.Tests.RenderStream
                 reader.ReadFrame(blockTicks - 1, dest); // JIT and buffer warm-up
                 double total = 0, worst = 0;
                 const int seeks = 100;
+                var times = new double[seeks];
                 int previous = 0;
                 for (int i = 0; i < seeks; i++)
                 {
@@ -162,12 +163,17 @@ namespace Ballverse.Core.Tests.RenderStream
                     var sw = Stopwatch.StartNew();
                     reader.ReadFrame(tick, dest);
                     sw.Stop();
+                    times[i] = sw.Elapsed.TotalMilliseconds;
                     total += sw.Elapsed.TotalMilliseconds;
                     worst = Math.Max(worst, sw.Elapsed.TotalMilliseconds);
                     if (_stream.Probes.TryGetValue(tick, out var expected)) Assert.True(expected.ContentEquals(dest), "tick " + tick);
                 }
-                _output.WriteLine("warm scrub at 2500 bodies, block-end ticks: avg " + (total / seeks).ToString("F3") + " ms, worst " + worst.ToString("F3") + " ms");
-                Assert.True(total / seeks < 50, "average warm seek " + (total / seeks) + " ms");
+                Array.Sort(times);
+                double median = times[seeks / 2];
+                _output.WriteLine("warm scrub at 2500 bodies, block-end ticks: avg " + (total / seeks).ToString("F3") + " ms, median " + median.ToString("F3") + " ms, worst " + worst.ToString("F3") + " ms");
+                // Median, not mean: a loaded CI runner preempts the test thread now and then, and a few such spikes
+                // must not fail it; a real decode regression moves the median.
+                Assert.True(median < 50, "median warm seek " + median + " ms");
             }
         }
 

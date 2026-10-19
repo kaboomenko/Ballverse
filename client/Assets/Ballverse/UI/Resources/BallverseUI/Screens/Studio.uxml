@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="studio" class="bv-studio bv-page bv-fill">
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-header bv-header--compact">
+            <ui:VisualElement name="back" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--back" />
+            </ui:VisualElement>
+            <ui:VisualElement class="bv-header__spacer" />
+            <ui:VisualElement name="undo" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--undo" />
+            </ui:VisualElement>
+            <ui:VisualElement name="redo" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--redo" />
+            </ui:VisualElement>
+            <ui:VisualElement name="export" class="bv-btn bv-btn--primary bv-btn--small">
+                <ui:VisualElement class="bv-icon icon--share bv-btn__icon" />
+                <ui:Label text="#studio.export" class="bv-btn__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="preview-area" class="bv-studio__preview-area">
+            <ui:VisualElement name="preview" class="bv-studio__preview">
+                <ui:VisualElement name="add-video" class="bv-studio__add-video">
+                    <ui:VisualElement class="bv-icon icon--plus bv-studio__add-video-icon" />
+                    <ui:Label text="#studio.add_video" class="bv-studio__add-video-label" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement class="bv-studio__transport">
+            <ui:VisualElement name="play" class="bv-icon-btn">
+                <ui:VisualElement name="play-icon" class="bv-icon icon--play" />
+            </ui:VisualElement>
+            <ui:Label name="time" class="bv-studio__time" />
+            <ui:VisualElement class="bv-header__spacer" />
+            <ui:VisualElement name="no-video" class="bv-chip bv-studio__no-video">
+                <ui:Label text="#studio.no_video" class="bv-chip__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement name="fullscreen" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--fullscreen" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="timeline-host" class="bv-studio__timeline-host" />
+
+        <ui:VisualElement name="tools" class="bv-studio__tools bv-glass">
+            <ui:VisualElement name="tool-layout" class="bv-tool-tab">
+                <ui:VisualElement class="bv-icon icon--layout bv-tool-tab__icon" />
+                <ui:Label text="#studio.tool.layout" class="bv-tool-tab__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement name="tool-video" class="bv-tool-tab">
+                <ui:VisualElement class="bv-icon icon--video bv-tool-tab__icon" />
+                <ui:Label text="#studio.tool.video" class="bv-tool-tab__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement name="tool-sim" class="bv-tool-tab">
+                <ui:VisualElement class="bv-icon icon--simulation bv-tool-tab__icon" />
+                <ui:Label text="#studio.tool.simulation" class="bv-tool-tab__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement name="tool-text" class="bv-tool-tab">
+                <ui:VisualElement class="bv-icon icon--text bv-tool-tab__icon" />
+                <ui:Label text="#studio.tool.text" class="bv-tool-tab__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement name="tool-sound" class="bv-tool-tab">
+                <ui:VisualElement class="bv-icon icon--sound bv-tool-tab__icon" />
+                <ui:Label text="#studio.tool.sound" class="bv-tool-tab__label" picking-mode="Ignore" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:VisualElement class="bv-safe-bottom" />
+
+        <ui:VisualElement name="fullscreen-overlay" class="bv-studio__fullscreen bv-fill">
+            <ui:VisualElement name="fullscreen-preview" class="bv-studio__fullscreen-preview" />
+            <ui:VisualElement class="bv-studio__fullscreen-bar">
+                <ui:VisualElement class="bv-safe-top" />
+                <ui:VisualElement class="bv-header bv-header--compact">
+                    <ui:VisualElement name="fullscreen-close" class="bv-icon-btn bv-icon-btn--on-media">
+                        <ui:VisualElement class="bv-icon icon--close" />
+                    </ui:VisualElement>
+                    <ui:VisualElement class="bv-header__spacer" />
+                    <ui:VisualElement name="fullscreen-zones" class="bv-chip bv-chip--on-media">
+                        <ui:Label text="#studio.layout.zones" class="bv-chip__label" picking-mode="Ignore" />
+                    </ui:VisualElement>
+                    <ui:VisualElement name="fullscreen-play" class="bv-icon-btn bv-icon-btn--on-media">
+                        <ui:VisualElement name="fullscreen-play-icon" class="bv-icon icon--play" />
+                    </ui:VisualElement>
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

@@ -6,6 +6,12 @@
 // Threading: BVWriter_Append runs on the caller (Unity main) thread: it waits for one of 3 in-flight slots, copies the
 // RGBA frame into a pooled CVPixelBuffer (vImage RGBA→BGRA swizzle) and hands it to a private serial queue that
 // appends it (pumping audio so AVAssetWriter can interleave). Finish/cancel run on the same queue, after pending frames.
+//
+// Files: the writer owns exactly one file, the per-writer work path chosen by C# (<output>.bv<id>.part.mp4); every
+// abort path deletes only that path. C# renames it to the output after a successful finish.
+// Release: BVWriter_Release drops the C# handle at once and completes its request only when the writer has STOPPED —
+// all queued appends ran, an unfinished writer was cancelled (cancelWriting + work file deleted) or a running finish
+// reached its completion handler (_busy group) — so C# can open the next writer for the same output deterministically.
 #import "BVMediaCommon.h"
 #import <Accelerate/Accelerate.h>
 #import <AVFoundation/AVFoundation.h>
@@ -28,6 +34,7 @@ static const int64_t kStallLimitUs = 10000000;
 - (BOOL)isFinishing;
 - (void)finishWithRequest:(int64_t)requestId;
 - (void)cancel;
+- (void)releaseWithRequest:(int64_t)requestId;
 @end
 
 @implementation BVVideoWriter
@@ -39,6 +46,7 @@ static const int64_t kStallLimitUs = 10000000;
     AVAssetWriterInputPixelBufferAdaptor* _adaptor;
     dispatch_queue_t _queue;
     dispatch_semaphore_t _slots;
+    dispatch_group_t _busy; // entered while a finish is in progress (until its completion handler ran)
     std::atomic<int> _inFlight;
     std::atomic<bool> _failed;
     std::atomic<bool> _cancelled;
@@ -56,6 +64,7 @@ static const int64_t kStallLimitUs = 10000000;
     std::vector<uint8_t> _audioScratch;
     int64_t _lastPts;
     int _frames;
+    BOOL _finishCalled; // queue-only: finishWritingWithCompletionHandler was called; its handler owns the file's fate
 }
 
 - (instancetype)initWithPath:(NSString*)path width:(int)width height:(int)height fps:(int)fps bitrate:(int)bitrate
@@ -74,6 +83,7 @@ static const int64_t kStallLimitUs = 10000000;
     _finishing = false;
     _queue = dispatch_queue_create("com.ballverse.media.writer", DISPATCH_QUEUE_SERIAL);
     _slots = dispatch_semaphore_create(kSlots);
+    _busy = dispatch_group_create();
 
     NSFileManager* fm = [NSFileManager defaultManager];
     [fm createDirectoryAtPath:[path stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
@@ -339,8 +349,16 @@ static const int64_t kStallLimitUs = 10000000;
 {
     _finishing = true;
     BVRegisterCancel(requestId, ^{ [self cancel]; });
+    dispatch_group_t busy = _busy;
+    dispatch_group_enter(busy); // left exactly once: on every early return below or in the completion handler
     dispatch_async(_queue, ^{
-        if (self->_cancelled.load()) { BVCancelled(requestId); return; }
+        if (self->_cancelled.load())
+        {
+            // The cancel block queued after this one cancels the writer and deletes the file.
+            BVCancelled(requestId);
+            dispatch_group_leave(busy);
+            return;
+        }
         if (self->_failed.load() || self->_frames == 0)
         {
             NSString* e = self->_frames == 0 && !self->_failed.load() ? [NSString stringWithFormat:@"%@|no frames", BV_ERR_INVALID_STATE] : [self errorString];
@@ -349,6 +367,7 @@ static const int64_t kStallLimitUs = 10000000;
             NSRange bar = [e rangeOfString:@"|"];
             BVFail(requestId, bar.location == NSNotFound ? BV_ERR_ENCODER_FAILED : [e substringToIndex:bar.location],
                    bar.location == NSNotFound ? e : [e substringFromIndex:bar.location + 1]);
+            dispatch_group_leave(busy);
             return;
         }
         int64_t endUs = self->_lastPts + (1000000 + self->_fps - 1) / self->_fps;
@@ -373,7 +392,13 @@ static const int64_t kStallLimitUs = 10000000;
                 }
             }
         }
-        if (self->_cancelled.load()) { BVCancelled(requestId); return; }
+        if (self->_cancelled.load())
+        {
+            // As above: the queued cancel block deletes the file.
+            BVCancelled(requestId);
+            dispatch_group_leave(busy);
+            return;
+        }
         if (self->_failed.load())
         {
             [self->_writer cancelWriting];
@@ -382,12 +407,15 @@ static const int64_t kStallLimitUs = 10000000;
             NSRange bar = [e rangeOfString:@"|"];
             BVFail(requestId, bar.location == NSNotFound ? BV_ERR_ENCODER_FAILED : [e substringToIndex:bar.location],
                    bar.location == NSNotFound ? e : [e substringFromIndex:bar.location + 1]);
+            dispatch_group_leave(busy);
             return;
         }
         [self->_writer endSessionAtSourceTime:CMTimeMake(endUs, 1000000)];
         int frames = self->_frames;
+        self->_finishCalled = YES;
         [self->_writer finishWritingWithCompletionHandler:^{
-            if (self->_writer.status == AVAssetWriterStatusCompleted)
+            // A cancel that arrived while the writer was finishing left the file alone (see -cancel): delete it here.
+            if (self->_writer.status == AVAssetWriterStatusCompleted && !self->_cancelled.load())
             {
                 BVSucceed(requestId, @{ @"frames" : @(frames), @"durationUs" : @(endUs) });
             }
@@ -397,6 +425,7 @@ static const int64_t kStallLimitUs = 10000000;
                 if (self->_cancelled.load()) BVCancelled(requestId);
                 else BVFail(requestId, BV_ERR_MUXER_FAILED, self->_writer.error.localizedDescription ?: @"finishWriting failed");
             }
+            dispatch_group_leave(busy);
         }];
     });
 }
@@ -405,8 +434,25 @@ static const int64_t kStallLimitUs = 10000000;
 {
     if (_cancelled.exchange(true)) return;
     dispatch_async(_queue, ^{
+        // Serial queue: runs after every queued append and after a queued finish block. Once finishWriting was called,
+        // its completion handler sees _cancelled and deletes the file (no cancelWriting racing a running finish).
+        if (self->_finishCalled) return;
         if (self->_writer.status == AVAssetWriterStatusWriting) [self->_writer cancelWriting];
         [[NSFileManager defaultManager] removeItemAtPath:self->_path error:nil];
+    });
+}
+
+// Any thread (C# main thread). Aborts an unfinished writer and completes requestId once the writer has stopped: the
+// serial queue ran everything queued before (appends, the cancel block, the finish block) and a running finish has
+// reached its completion handler. Never fails.
+- (void)releaseWithRequest:(int64_t)requestId
+{
+    if (!_finishing.load()) [self cancel];
+    dispatch_group_t busy = _busy;
+    dispatch_async(_queue, ^{
+        dispatch_group_notify(busy, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            BVSucceed(requestId, @{});
+        });
     });
 }
 
@@ -458,15 +504,15 @@ void BVWriter_Cancel(void* handle)
     if (handle != NULL) [(__bridge BVVideoWriter*)handle cancel];
 }
 
-// Releases the handle. An unfinished writer is cancelled (partial file deleted). Pending queue blocks keep the object
-// alive until they have run.
-void BVWriter_Close(void* handle)
+// Releases the C# handle at once. An unfinished writer is cancelled (its work file deleted). requestId completes (ok)
+// when the native writer has stopped; queued blocks keep the object alive until then.
+void BVWriter_Release(void* handle, int64_t requestId)
 {
-    if (handle == NULL) return;
+    if (handle == NULL) { BVSucceed(requestId, @{}); return; }
     @autoreleasepool
     {
         BVVideoWriter* writer = (BVVideoWriter*)CFBridgingRelease(handle);
-        if (![writer isFinishing]) [writer cancel];
+        [writer releaseWithRequest:requestId];
         writer = nil;
     }
 }

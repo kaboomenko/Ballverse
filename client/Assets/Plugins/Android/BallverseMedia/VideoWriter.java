@@ -48,6 +48,21 @@ import java.util.concurrent.TimeUnit;
  * A segment of the segmented export has no audio (empty audioPcmPath); {@link SegmentConcat} encodes the mix once when
  * joining the segments.
  *
+ * Files: the writer owns exactly one file, {@code path} — a work file unique to this writer chosen by C#
+ * ({@code <output>.bv<id>.part.mp4}); C# renames it to the output after a successful finish. Every abort path deletes
+ * only that file, so a writer that stops late can never delete the output of a newer writer for the same output.
+ *
+ * Release: {@link #releaseAsync} aborts an unfinished writer and completes its request (MediaBridge.succeed) only after
+ * the writer thread has EXITED — codecs, EGL and muxer released and, if unfinished, the file deleted — so C# can open the
+ * next writer (and hardware encoder) deterministically.
+ *
+ * Encoder hand-over: many devices allow only ONE hardware AVC encoder instance. {@link #open()} therefore first waits
+ * (bounded by {@link #sOpenWaitForStoppingMs}) until every writer whose abort was requested ({@link #cancel()},
+ * {@link #release()}, {@link #releaseAsync}) has exited its thread and freed its codec — also when C# opens the next
+ * writer with plain OpenWriter one frame after a Dispose (studio redo / §3.8 segment retry on a new path). Writers that
+ * are still open (frames being appended) are never waited for. The wait never needs the Unity main thread: writer
+ * threads exit on their own.
+ *
  * Threading: the public methods are called from the Unity main thread; everything else runs on the writer thread.
  */
 public final class VideoWriter {
@@ -57,6 +72,12 @@ public final class VideoWriter {
     private static final long DRAIN_TIMEOUT_US = 10000;
     private static final long STALL_LIMIT_NS = 10000000000L;
     private static final int EGL_RECORDABLE_ANDROID = 0x3142;
+    private static final long OPEN_FAILURE_JOIN_MS = 5000;
+
+    /** Upper bound for open() to wait for stopping writers to free their encoders (then it tries anyway), ms. */
+    static volatile long sOpenWaitForStoppingMs = 3000;
+    /** Writers whose abort was requested and whose thread has not exited yet; guarded by itself (lock order: this, then mReleaseLock). */
+    private static final List<VideoWriter> sStopping = new ArrayList<>();
 
     private static final int JOB_FRAME = 1;
     private static final int JOB_FINISH = 2;
@@ -106,6 +127,11 @@ public final class VideoWriter {
     private volatile boolean mDone;
     private Thread mThread;
 
+    // Release signalling (guarded by mReleaseLock)
+    private final Object mReleaseLock = new Object();
+    private boolean mThreadExited;
+    private final List<Long> mReleaseWaiters = new ArrayList<>();
+
     // Writer thread state
     private MediaCodec mVideo;
     private AacPcmEncoder mAudio;
@@ -152,8 +178,12 @@ public final class VideoWriter {
         return mProfile;
     }
 
-    /** Configures codecs and muxer and starts the writer thread. On failure see lastError(). */
+    /**
+     * Configures codecs and muxer and starts the writer thread. On failure see lastError(). First waits (bounded) for
+     * writers that are stopping to free their encoders (see the class comment).
+     */
     public boolean open() {
+        waitForStoppingWriters(sOpenWaitForStoppingMs);
         try {
             File out = new File(mPath);
             File dir = out.getParentFile();
@@ -176,7 +206,11 @@ public final class VideoWriter {
             mThread = new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    threadMain(ready);
+                    try {
+                        threadMain(ready);
+                    } finally {
+                        onThreadExit();
+                    }
                 }
             }, "BallverseVideoWriter");
             mThread.start();
@@ -194,7 +228,15 @@ public final class VideoWriter {
             releaseCodecs();
             deleteOutput();
         } else {
+            // Do not return before the thread has released the encoder and deleted the file: C# may retry at once.
+            markStopping();
             mJobs.offer(new Job(JOB_CANCEL, -1, 0));
+            try {
+                mThread.join(OPEN_FAILURE_JOIN_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (mThread.isAlive()) Log.w(TAG, "VideoWriter thread still stopping after a failed open");
         }
         return false;
     }
@@ -251,15 +293,106 @@ public final class VideoWriter {
     /** Aborts encoding and deletes the partial file (asynchronously on the writer thread). */
     public void cancel() {
         mCancelled = true;
-        if (mThread != null) mJobs.offer(new Job(JOB_CANCEL, -1, 0));
+        if (mThread != null) {
+            markStopping();
+            mJobs.offer(new Job(JOB_CANCEL, -1, 0));
+        }
     }
 
-    /** Releases everything; aborts (and deletes the file) if not finished. Safe to call more than once. */
+    /** Releases everything; aborts (and deletes the file) if not finished. Safe to call more than once. Does not wait. */
     public void release() {
         if (!mDone) cancel();
     }
 
+    /**
+     * Like {@link #release()}, then completes requestId (MediaBridge.succeed, "{}") once the writer thread has exited:
+     * encoder, EGL and muxer released and an unfinished file deleted. Immediately if the thread already exited or never
+     * started. Never fails. Safe to call more than once (each request completes).
+     */
+    public void releaseAsync(long requestId) {
+        release();
+        boolean now;
+        synchronized (mReleaseLock) {
+            now = mThread == null || mThreadExited;
+            if (!now) mReleaseWaiters.add(requestId);
+        }
+        if (now) MediaBridge.succeed(requestId, "{}");
+    }
+
+    /** True once the writer thread has exited (or never started). For checks and diagnostics. */
+    public boolean isStopped() {
+        synchronized (mReleaseLock) {
+            return mThread == null || mThreadExited;
+        }
+    }
+
+    /** Number of writers whose abort was requested and whose thread is still running (checks and diagnostics). */
+    static int stoppingCount() {
+        synchronized (sStopping) {
+            return sStopping.size();
+        }
+    }
+
+    /**
+     * Waits until no writer is stopping (all aborted writers exited their threads and released their codecs), at most
+     * timeoutMs. Returns false on timeout (logged; the caller proceeds — opening may then fail on single-encoder
+     * devices, which C# reports as an encoder error).
+     */
+    static boolean waitForStoppingWriters(long timeoutMs) {
+        long deadline = System.nanoTime() + timeoutMs * 1000000L;
+        synchronized (sStopping) {
+            while (!sStopping.isEmpty()) {
+                long leftMs = (deadline - System.nanoTime()) / 1000000L;
+                if (leftMs <= 0) {
+                    Log.w(TAG, "VideoWriter.open: " + sStopping.size() + " stopping writer(s) still hold their encoder after "
+                            + timeoutMs + " ms; opening anyway");
+                    return false;
+                }
+                try {
+                    sStopping.wait(leftMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Registers this writer as stopping until its thread exits (no-op if it already exited). */
+    private void markStopping() {
+        synchronized (sStopping) {
+            synchronized (mReleaseLock) {
+                if (mThread == null || mThreadExited) return;
+            }
+            if (!sStopping.contains(this)) sStopping.add(this);
+        }
+    }
+
     // ================================================================== writer thread
+
+    /** Last code on the writer thread: makes sure nothing is left behind, then reports pending releases. */
+    private void onThreadExit() {
+        if (!mDone) {
+            // Only reachable through an unexpected Throwable escaping threadMain: abort like a cancel.
+            try {
+                abort();
+            } catch (Throwable t) {
+                Log.e(TAG, "VideoWriter cleanup failed: " + t);
+            }
+        }
+        List<Long> waiters;
+        synchronized (sStopping) {
+            synchronized (mReleaseLock) {
+                mThreadExited = true;
+                waiters = new ArrayList<>(mReleaseWaiters);
+                mReleaseWaiters.clear();
+            }
+            // The codec is released: a waiting open() of the next writer may proceed.
+            if (sStopping.remove(this)) sStopping.notifyAll();
+        }
+        for (Long id : waiters) MediaBridge.succeed(id, "{}");
+    }
 
     private void threadMain(CountDownLatch ready) {
         try {
@@ -380,6 +513,7 @@ public final class VideoWriter {
         deleteOutput();
     }
 
+    /** Deletes this writer's own (work) file — never any other path. */
     private void deleteOutput() {
         File f = new File(mPath);
         if (f.exists() && !f.delete()) Log.w(TAG, "cannot delete " + mPath);

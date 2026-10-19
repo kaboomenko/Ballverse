@@ -1,0 +1,386 @@
+/* Studio: 9:16 preview, transport, timeline (S / V / text / music), glass tool tabs, fullscreen preview. */
+
+.bv-studio__preview-area {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-height: 200px;
+    align-items: center;
+    justify-content: center;
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+}
+
+.bv-studio__preview {
+    border-radius: var(--radius-m);
+    overflow: hidden;
+    -unity-background-scale-mode: scale-to-fit;
+    background-color: #000000;
+    align-items: stretch;
+    justify-content: flex-end;
+}
+
+.bv-studio__add-video {
+    height: 46%;
+    margin: var(--space-3);
+    border-width: 2px;
+    border-color: rgba(255, 255, 255, 0.55);
+    border-radius: var(--radius-m);
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.35);
+}
+
+.bv-studio__add-video-icon {
+    width: 32px;
+    height: 32px;
+    color: #FFFFFF;
+}
+
+.bv-studio__add-video-label {
+    font-size: var(--font-s);
+    color: #FFFFFF;
+    margin-top: var(--space-1);
+    -unity-text-align: middle-center;
+}
+
+.bv-studio__transport {
+    flex-direction: row;
+    align-items: center;
+    height: 52px;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+}
+
+.bv-studio__time {
+    font-size: var(--font-s);
+    color: var(--color-text-2);
+    margin-left: var(--space-1);
+}
+
+.bv-studio__no-video {
+    margin-right: var(--space-1);
+}
+
+/* Sized by its content: ruler + visible track rows (44 pt each, spec §4.4); the preview takes the rest. */
+.bv-studio__timeline-host {
+    flex-shrink: 0;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+}
+
+.bv-studio__tools {
+    flex-direction: row;
+    height: var(--bar-height);
+    margin-left: var(--space-3);
+    margin-right: var(--space-3);
+    margin-top: var(--space-2);
+    margin-bottom: var(--space-2);
+    border-radius: 32px;
+    padding-left: var(--space-1);
+    padding-right: var(--space-1);
+}
+
+.bv-tool-tab {
+    flex-grow: 1;
+    flex-basis: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 28px;
+    margin-top: var(--space-1);
+    margin-bottom: var(--space-1);
+}
+
+.bv-tool-tab__icon {
+    color: var(--color-text-2);
+}
+
+.bv-tool-tab__label {
+    font-size: var(--font-xs);
+    color: var(--color-text-2);
+    margin-top: 2px;
+    white-space: nowrap;
+    border-bottom-width: 2px;
+    border-bottom-color: rgba(0, 0, 0, 0);
+}
+
+/* Selection on glass: like the tab bar (Components.uss), no translucent fill under the label. */
+.bv-tool-tab--selected .bv-tool-tab__icon,
+.bv-tool-tab--selected .bv-tool-tab__label {
+    color: var(--color-accent-text);
+}
+
+.bv-tool-tab--selected .bv-tool-tab__label {
+    -unity-font-style: bold;
+    border-bottom-color: var(--color-accent-text);
+}
+
+/* Fullscreen preview. */
+.bv-studio__fullscreen {
+    background-color: #000000;
+    display: none;
+}
+
+.bv-studio__fullscreen-preview {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    -unity-background-scale-mode: scale-to-fit;
+}
+
+.bv-studio__fullscreen-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+}
+
+.bv-studio__fullscreen-bar .bv-btn,
+.bv-studio__fullscreen-bar .bv-icon-btn,
+.bv-studio__fullscreen-bar .bv-chip {
+    margin-left: var(--space-2);
+}
+
+/* ---------- Timeline ---------- */
+
+.bv-timeline {
+    flex-shrink: 0;
+}
+
+.bv-timeline__ruler {
+    height: 28px;
+}
+
+.bv-timeline__tick {
+    position: absolute;
+    top: 4px;
+    width: 1px;
+    height: 20px;
+    background-color: var(--color-separator);
+}
+
+.bv-timeline__tick-label {
+    position: absolute;
+    left: 3px;
+    top: 0;
+    font-size: 10px;
+    color: var(--color-text-3);
+}
+
+.bv-timeline__area {
+    flex-shrink: 0;
+}
+
+.bv-timeline__row {
+    flex-direction: row;
+    height: var(--touch);
+    margin-bottom: var(--space-1);
+    align-items: stretch;
+}
+
+.bv-timeline__badge {
+    width: 24px;
+    align-items: center;
+    justify-content: center;
+}
+
+.bv-timeline__badge-label {
+    font-size: var(--font-xs);
+    -unity-font-style: bold;
+    color: var(--color-text-3);
+}
+
+.bv-timeline__badge-icon {
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-3);
+}
+
+/* Tracks do not clip: a trim handle at the start or end of the reel reaches past the track (over the badge column or
+   the side padding) and must still be hit there, since UI Toolkit never picks the children of a clipping element
+   outside its rect. No ancestor up to the screen layer clips either (ShellStaticChecksTests). What a segment draws lives
+   in its .bv-timeline__body, which TimelineView clips to the track (TimelineGeometry.ClipToTrack), so a V clip before S
+   or a text span past the reel end does not paint over the badges or the padding. The music track clips because its
+   bar slides while dragged. */
+.bv-timeline__track {
+    flex-grow: 1;
+    border-radius: 8px;
+    background-color: var(--color-surface);
+}
+
+.bv-timeline__track--music {
+    overflow: hidden;
+}
+
+/* Segments do not clip: their edge handles reach outside so the hit area is 44 pt wide (spec §4.4). The segment element
+   spans the true clip and draws nothing itself. */
+.bv-timeline__segment {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+}
+
+/* Drawn part of a segment or text span: placed and sized inline by TimelineView to the part inside the track; it clips
+   its thumbnails / label. The handles are its siblings, so this clip never cuts their hit areas. */
+.bv-timeline__body {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
+.bv-timeline__segment .bv-timeline__body {
+    border-radius: 8px;
+    border-width: 2px;
+}
+
+.bv-timeline__segment--sim .bv-timeline__body {
+    border-color: var(--color-accent);
+    background-color: rgba(108, 92, 255, 0.35);
+}
+
+.bv-timeline__segment--video .bv-timeline__body {
+    border-color: var(--color-accent-2);
+    background-color: rgba(61, 139, 255, 0.35);
+}
+
+/* A side cut by the track edge is not the clip's edge: no border there (same specificity as the border rule above, declared later). */
+.bv-timeline__segment .bv-timeline__body--cut-start {
+    border-left-width: 0;
+}
+
+.bv-timeline__segment .bv-timeline__body--cut-end {
+    border-right-width: 0;
+}
+
+.bv-timeline__segment--dragging {
+    opacity: 0.8;
+}
+
+/* Thumbnails of the whole clip (left / width inline: the clip's true extent inside the clipped body). */
+.bv-timeline__thumbs {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    flex-direction: row;
+}
+
+.bv-timeline__thumb {
+    flex-grow: 1;
+    -unity-background-scale-mode: scale-and-crop;
+    opacity: 0.75;
+}
+
+/* Edge handle: transparent 44 pt hit area, thin visible grip on the segment edge. These offsets centre it on the edge
+   until TimelineView places it (TimelineGeometry.PlaceHandles: outwards on short spans, inside the screen). */
+.bv-timeline__handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: var(--touch);
+    align-items: center;
+    justify-content: center;
+}
+
+.bv-timeline__handle--left {
+    left: -22px;
+}
+
+.bv-timeline__handle--right {
+    right: -22px;
+}
+
+.bv-timeline__text .bv-timeline__handle {
+    top: -4px;
+    bottom: -4px;
+}
+
+.bv-timeline__grip {
+    width: 6px;
+    height: 24px;
+    border-radius: 3px;
+    background-color: var(--color-accent);
+}
+
+.bv-timeline__segment--video .bv-timeline__grip {
+    background-color: var(--color-accent-2);
+}
+
+.bv-timeline__text .bv-timeline__grip {
+    width: 4px;
+    height: 18px;
+    background-color: var(--color-text-2);
+}
+
+.bv-timeline__handle--active .bv-timeline__grip {
+    background-color: var(--color-text);
+}
+
+.bv-timeline__add {
+    flex-grow: 1;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    border-width: 1px;
+    border-color: var(--color-text-3);
+    border-radius: 8px;
+}
+
+.bv-timeline__add-icon {
+    width: 16px;
+    height: 16px;
+    margin-right: var(--space-1);
+}
+
+.bv-timeline__add-label {
+    font-size: var(--font-xs);
+}
+
+.bv-timeline__text {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+}
+
+/* The clipped body of a text span has no horizontal padding or border: the layout never sizes a box below its padding
+   plus border, so 8 + 8 pt of padding would keep a span that ends past the reel at least 16 pt wide and paint it over
+   the side padding (QA round 4). The label keeps its inset as a margin instead, and the body can shrink to 0. */
+.bv-timeline__text .bv-timeline__body {
+    border-radius: 6px;
+    justify-content: center;
+    background-color: var(--color-surface-3);
+}
+
+.bv-timeline__text .bv-timeline__text-label {
+    margin-left: var(--space-2);
+    margin-right: var(--space-2);
+}
+
+.bv-timeline__music {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    border-radius: 6px;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+    justify-content: center;
+    background-color: rgba(47, 210, 122, 0.3);
+    overflow: hidden;
+}
+
+.bv-timeline__text-label {
+    font-size: var(--font-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bv-timeline__playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background-color: var(--color-text);
+}

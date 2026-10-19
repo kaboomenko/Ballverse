@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="export-progress" class="bv-export bv-fill">
+        <ui:VisualElement name="backdrop" class="bv-export__backdrop bv-fill" />
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-export__center">
+            <ui:VisualElement name="card" class="bv-export__card bv-glass">
+                <ui:VisualElement name="preview" class="bv-export__preview" />
+                <ui:Label text="#export.progress.title" class="bv-export__title" />
+                <ui:Label name="percent" class="bv-export__percent" />
+                <ui:VisualElement class="bv-progress bv-progress--large">
+                    <ui:VisualElement name="fill" class="bv-progress__fill" />
+                </ui:VisualElement>
+                <ui:Label name="remaining" class="bv-export__remaining" />
+                <ui:Label name="throttled" text="#export.progress.throttled" class="bv-note bv-note--center" />
+                <ui:Label text="#export.progress.keep_open" class="bv-note bv-note--center" />
+                <ui:VisualElement name="cancel" class="bv-btn bv-btn--secondary bv-btn--block">
+                    <ui:Label text="#common.cancel" class="bv-btn__label" picking-mode="Ignore" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:VisualElement class="bv-safe-bottom" />
+    </ui:VisualElement>
+</ui:UXML>

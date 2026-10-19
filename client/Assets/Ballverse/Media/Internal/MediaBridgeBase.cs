@@ -25,10 +25,14 @@ namespace Ballverse.Media.Internal
         protected abstract IFrameSource CreateFrameSource(string path, VideoReaderOptions options);
         /// <summary>Decodes audio to f32le interleaved at the source rate/channels (or already 48 kHz stereo) into <paramref name="rawPath"/>.</summary>
         protected abstract Task<NativeAudioDto> DecodeAudioNativeAsync(string path, string rawPath, AudioDecodeRange range, CancellationToken ct);
-        protected abstract VideoWriterBase CreateWriter(string outputPath, VideoWriterOptions options);
+        /// <summary>Creates the platform writer; the native encoder writes <paramref name="workPath"/> (unique per writer), never <paramref name="outputPath"/>.</summary>
+        protected abstract VideoWriterBase CreateWriter(string outputPath, string workPath, VideoWriterOptions options);
         /// <summary>
-        /// Remuxes the segments (validated, in order) into <paramref name="outFile"/> with one AAC track from
-        /// <paramref name="pcmPath"/> (null = silent). Cancellation must stop native work; the caller deletes the output.
+        /// Remuxes the segments (validated, in order) into <paramref name="outFile"/> (a work file unique to this call)
+        /// with one AAC track from <paramref name="pcmPath"/> (null = silent). Cancellation must stop native work, which
+        /// deletes its own output, and the returned task must complete only once native reported that it stopped
+        /// (<c>NativeOps.Run(..., cancelWaitsForNative: true)</c>): until then <paramref name="outFile"/>'s output stays
+        /// reserved for this join. The caller deletes the work file once more.
         /// </summary>
         protected abstract Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
             SegmentConcatOptions options, CancellationToken ct);
@@ -152,17 +156,162 @@ namespace Ballverse.Media.Internal
             }
         }
 
+        // Writers and joins of the whole process (all bridges) that have not settled yet; main thread only. Weak, so that
+        // a leaked (never disposed) writer can still be collected and released by its finalizer.
+        static readonly List<WeakReference<VideoWriterBase>> s_writers = new List<WeakReference<VideoWriterBase>>();
+        static readonly List<string> s_concatOutputs = new List<string>();
+
         public IVideoWriter OpenWriter(string outputPath, VideoWriterOptions options)
         {
             Enter(nameof(OpenWriter));
+            ValidateWriterArgs(outputPath, options);
+            // Never blocks: the native release completes through the main thread, so waiting here would deadlock.
+            if (FindUnsettledWriter(outputPath) != null || IsConcatRunning(outputPath))
+                throw new InvalidOperationException("a writer or join for " + outputPath + " is still open, finalizing or releasing; "
+                    + "dispose it and await IVideoWriter.ReleaseAsync() (or use OpenWriterAsync) before opening it again");
+            return OpenWriterCore(outputPath, options);
+        }
+
+        /// <summary>
+        /// Completes once a writer for <paramref name="outputPath"/> may be opened: every earlier writer for that path has
+        /// settled and every writer that is being released (any path) has stopped (frees the hardware encoder). Main
+        /// thread; resumes on it. Backs <see cref="MediaBridgeExtensions.OpenWriterAsync"/>.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">A writer for the same path is still open (never disposed), or a
+        /// <see cref="IMediaBridge.ConcatSegmentsAsync"/> is writing it: waiting would not end.</exception>
+        internal static async Task WaitUntilWriterCanOpenAsync(string outputPath, CancellationToken ct)
+        {
+            while (true)
+            {
+                MainThread.Assert(nameof(MediaBridgeExtensions.OpenWriterAsync));
+                ct.ThrowIfCancellationRequested();
+                var pending = new List<Task>();
+                string full = Path.GetFullPath(outputPath);
+                foreach (VideoWriterBase w in UnsettledWriters())
+                {
+                    bool samePath = SamePath(w.OutputPath, full);
+                    if (w.IsOpen)
+                    {
+                        if (samePath) throw new InvalidOperationException("a writer for " + outputPath + " is still open; dispose it first");
+                        continue; // another live writer: allowed, not waited for
+                    }
+                    // Released or finalizing: wait for the same path (its output) and for every release in progress (its encoder).
+                    if (samePath || !w.IsFinalizing) pending.Add(w.Settled);
+                }
+                if (pending.Count == 0 && !IsConcatRunning(outputPath)) return;
+                if (pending.Count == 0) throw new InvalidOperationException("ConcatSegmentsAsync is writing " + outputPath);
+                await WhenAllOrCancelled(pending, ct); // resumes on the main thread; re-check, new releases may have started
+            }
+        }
+
+        static void ValidateWriterArgs(string outputPath, VideoWriterOptions options)
+        {
             if (string.IsNullOrEmpty(outputPath)) throw new ArgumentNullException(nameof(outputPath));
             if (options == null) throw new ArgumentNullException(nameof(options));
             if (options.AudioPcmPath != null && !File.Exists(options.AudioPcmPath))
                 throw new MediaException(MediaErrorCode.FileNotFound, "audio PCM file not found: " + options.AudioPcmPath);
+        }
+
+        IVideoWriter OpenWriterCore(string outputPath, VideoWriterOptions options)
+        {
             string dir = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            TryDelete(outputPath);
-            return CreateWriter(outputPath, options);
+            // No writer or join of this process targets the path (checked by the caller): leftovers are a crashed
+            // run's work files or the previous output, which this writer replaces.
+            DeleteOrphanWorkFiles(outputPath);
+            DeleteOutput(ResultPathFor(outputPath));
+            VideoWriterBase writer = CreateWriter(outputPath, NewWorkPath(outputPath), options);
+            s_writers.Add(new WeakReference<VideoWriterBase>(writer));
+            return writer;
+        }
+
+        static async Task WhenAllOrCancelled(List<Task> tasks, CancellationToken ct)
+        {
+            Task all = Task.WhenAll(tasks);
+            if (!ct.CanBeCanceled)
+            {
+                await all;
+                return;
+            }
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (ct.Register(() => cancelled.TrySetResult(true)))
+            {
+                await Task.WhenAny(all, cancelled.Task);
+            }
+            ct.ThrowIfCancellationRequested();
+        }
+
+        static List<VideoWriterBase> UnsettledWriters()
+        {
+            var live = new List<VideoWriterBase>();
+            s_writers.RemoveAll(r => !r.TryGetTarget(out VideoWriterBase w) || w.Settled.IsCompleted);
+            foreach (WeakReference<VideoWriterBase> r in s_writers)
+            {
+                if (r.TryGetTarget(out VideoWriterBase w)) live.Add(w);
+            }
+            return live;
+        }
+
+        static VideoWriterBase FindUnsettledWriter(string outputPath)
+        {
+            string full = Path.GetFullPath(outputPath);
+            foreach (VideoWriterBase w in UnsettledWriters())
+            {
+                if (SamePath(w.OutputPath, full)) return w;
+            }
+            return null;
+        }
+
+        static bool IsConcatRunning(string outFile)
+        {
+            string full = Path.GetFullPath(outFile);
+            foreach (string o in s_concatOutputs)
+            {
+                if (SamePath(o, full)) return true;
+            }
+            return false;
+        }
+
+        static bool SamePath(string path, string fullPath)
+        {
+            return string.Equals(Path.GetFullPath(path), fullPath, StringComparison.Ordinal);
+        }
+
+        /// <summary>Marker between an output file name and the random id of its work files.</summary>
+        internal const string WorkInfix = ".bv";
+        /// <summary>Ending of every work file (keeps an .mp4 extension for AVAssetWriter / MediaMuxer).</summary>
+        internal const string WorkSuffix = ".part.mp4";
+
+        /// <summary>A new work file path next to <paramref name="outputPath"/>, unique to one writer or join.</summary>
+        internal static string NewWorkPath(string outputPath)
+        {
+            return outputPath + WorkInfix + Guid.NewGuid().ToString("N").Substring(0, 16) + WorkSuffix;
+        }
+
+        /// <summary>
+        /// Deletes work files (and their fast-start temps / fake frame directories) of <paramref name="outputPath"/> left
+        /// by a run that crashed. Only called when no writer or join of this process targets the path.
+        /// </summary>
+        void DeleteOrphanWorkFiles(string outputPath)
+        {
+            string dir = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+            string pattern = Path.GetFileName(outputPath) + WorkInfix + "*" + WorkSuffix + "*";
+            string[] entries;
+            try
+            {
+                entries = Directory.GetFileSystemEntries(dir, pattern);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Media] could not list " + dir + ": " + e.Message);
+                return;
+            }
+            foreach (string entry in entries)
+            {
+                if (Directory.Exists(entry)) DeleteDirectory(entry);
+                else TryDelete(entry);
+            }
         }
 
         public async Task<VideoWriterResult> FinalizeAsync(IVideoWriter writer, CancellationToken ct)
@@ -172,35 +321,55 @@ namespace Ballverse.Media.Internal
             if (!(writer is VideoWriterBase w)) throw new ArgumentException("writer was not created by this bridge", nameof(writer));
             // Preconditions are checked BEFORE the delete-on-failure region below:
             // - already finished, disposed or finalizing: the output belongs to the earlier call (a finished export, or
-            //   one still being written) — throw without touching it;
-            w.ThrowIfFinishedOrFinalizing();
-            // - pre-cancelled token: never start the native finish; abort the writer (deletes the partial file natively);
+            //   one still being written) — throw without touching it; a writer that was disposed (not finalized) reports
+            //   ObjectDisposedException only once its native release has stopped and deleted its work file, so a retry at
+            //   the same path may start right away (the documented FinalizeAsync contract);
+            try
+            {
+                w.ThrowIfFinishedOrFinalizing();
+            }
+            catch (ObjectDisposedException) when (!w.IsFinalizing)
+            {
+                await w.Released;
+                throw;
+            }
+            // - pre-cancelled token: never start the native finish; abort the writer (the native side deletes its work
+            //   file) and complete only once it has stopped;
             // - sticky encoder error or no frames: the writer can never finish — release it now (frees the hardware
-            //   encoder for the §3.8 segment retry; the native abort deletes the partial file) and report why.
+            //   encoder for the §3.8 segment retry; the native abort deletes the work file) and report why once released.
             if (ct.IsCancellationRequested)
             {
-                w.Dispose();
+                await w.ReleaseAsync();
                 ct.ThrowIfCancellationRequested();
             }
             Exception unfinishable = w.UnfinishableReason();
             if (unfinishable != null)
             {
-                w.Dispose();
+                await w.ReleaseAsync();
                 ExceptionDispatchInfo.Capture(unfinishable).Throw();
             }
-            // From here on this call owns the output: any failure or cancellation deletes it.
-            string path = ResultPathOf(w);
+            // From here on this call owns the work output: any failure or cancellation deletes it. The output path is
+            // written only by the final rename.
+            string work = ResultPathFor(w.WorkPath);
+            string path = ResultPathFor(w.OutputPath);
+            w.BeginCommit();
             try
             {
-                WriterFinish finish = await w.FinishAsync(ct);
+                WriterFinish finish = await w.FinishAsync(ct); // completes after the native release
                 Mp4Metadata metadata = w.Options.Metadata;
-                bool fastStart = w.Options.FastStart && await Task.Run(() => FinishFile(path, metadata, ct), ct);
+                bool fastStart = w.Options.FastStart && await Task.Run(() => FinishFile(work, metadata, ct), ct);
+                ct.ThrowIfCancellationRequested();
+                CommitOutput(work, path);
                 return new VideoWriterResult(path, finish.Frames, finish.DurationUs, fastStart, Backend == MediaBackend.Fake);
             }
             catch
             {
-                DeleteOutput(path);
+                DeleteOutput(work);
                 throw;
+            }
+            finally
+            {
+                w.EndCommit();
             }
         }
 
@@ -224,41 +393,69 @@ namespace Ballverse.Media.Internal
             }
             if (!string.IsNullOrEmpty(pcmPath) && !File.Exists(pcmPath))
                 throw new MediaException(MediaErrorCode.FileNotFound, "audio PCM file not found: " + pcmPath);
+            if (FindUnsettledWriter(outFile) != null || IsConcatRunning(outFile))
+                throw new InvalidOperationException("a writer or join for " + outFile + " is still running");
             string pcm = PcmFile.CountFrames(pcmPath) > 0 ? pcmPath : null;
             ct.ThrowIfCancellationRequested();
             string dir = Path.GetDirectoryName(outFile);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            string path = ConcatResultPath(outFile);
+            DeleteOrphanWorkFiles(outFile);
+            string path = ResultPathFor(outFile);
             DeleteOutput(path);
+            // The native join writes a work file unique to this call; a cancelled join that is still stopping in the
+            // background can therefore never delete or overwrite the output of a retry.
+            string workFile = NewWorkPath(outFile);
+            string work = ResultPathFor(workFile);
+            string key = Path.GetFullPath(outFile);
+            s_concatOutputs.Add(key);
             try
             {
-                WriterFinish finish = await ConcatNativeAsync(list, pcm, outFile, options, ct);
+                WriterFinish finish = await ConcatNativeAsync(list, pcm, workFile, options, ct);
                 if (options.DeleteSegmentsBeforeFastStart)
                 {
-                    // Opt-in: free ≈ 1× the export size before the rewrite's temp copy (peak ≈ 2E instead of 3E).
+                    // Free ≈ 1× the export size before the rewrite's temp copy (peak ≈ 2E instead of 3E).
                     foreach (string segment in list) DeleteOutput(segment);
                 }
                 Mp4Metadata metadata = options.Metadata;
-                bool fastStart = await Task.Run(() => FinishFile(path, metadata, ct), ct);
+                bool fastStart = await Task.Run(() => FinishFile(work, metadata, ct), ct);
+                ct.ThrowIfCancellationRequested();
+                CommitOutput(work, path);
                 return new VideoWriterResult(path, finish.Frames, finish.DurationUs, fastStart, Backend == MediaBackend.Fake);
             }
             catch
             {
-                DeleteOutput(path);
+                DeleteOutput(work);
                 throw;
+            }
+            finally
+            {
+                s_concatOutputs.Remove(key);
             }
         }
 
-        /// <summary>Where the finished output lives (the MP4 path; the fake backend returns its frame directory).</summary>
-        protected virtual string ResultPathOf(VideoWriterBase writer)
+        /// <summary>
+        /// Where the output of an MP4 path lives: the path itself; the fake backend returns its frame directory
+        /// (<c>path + ".frames"</c>). Used for both the output path and the work path.
+        /// </summary>
+        protected virtual string ResultPathFor(string mp4Path)
         {
-            return writer.OutputPath;
+            return mp4Path;
         }
 
-        /// <summary>Where <see cref="ConcatSegmentsAsync"/> output lives (the MP4; the fake backend: a frame directory).</summary>
-        protected virtual string ConcatResultPath(string outFile)
+        /// <summary>
+        /// Moves the finished work output to the output path (replacing it). Main thread, after the native side has
+        /// stopped. Default: file delete + rename (same directory, so the rename is atomic on the device file systems).
+        /// </summary>
+        protected virtual void CommitOutput(string workResult, string resultPath)
         {
-            return outFile;
+            try
+            {
+                PcmFile.ReplaceWith(workResult, resultPath);
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                throw new MediaException(MediaErrorCode.Io, "cannot move the finished file to " + resultPath + ": " + e.Message, e);
+            }
         }
 
         /// <summary>Checks that a segment exists (an MP4 file; the fake backend: a frame directory).</summary>
@@ -340,6 +537,18 @@ namespace Ballverse.Media.Internal
             }
             string s = new string(chars);
             return s == "." || s == ".." ? "Ballverse" : s;
+        }
+
+        internal static void DeleteDirectory(string dir)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) Directory.Delete(dir, true);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Media] could not delete " + dir + ": " + e.Message);
+            }
         }
 
         internal static void TryDelete(string path)

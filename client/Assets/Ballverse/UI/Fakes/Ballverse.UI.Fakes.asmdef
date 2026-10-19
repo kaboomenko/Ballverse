@@ -1,0 +1,22 @@
+{
+    "name": "Ballverse.UI.Fakes",
+    "rootNamespace": "Ballverse.UI.Fakes",
+    "references": [
+        "Ballverse.Core",
+        "Ballverse.Platform",
+        "Ballverse.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_EDITOR || DEVELOPMENT_BUILD || BALLVERSE_UI_FAKES"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

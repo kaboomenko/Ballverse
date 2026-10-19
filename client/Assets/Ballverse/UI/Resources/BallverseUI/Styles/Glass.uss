@@ -1,0 +1,30 @@
+/* BallverseGlass surfaces (spec §4.5). The blurred / refracted / tinted backdrop is a background image assigned per
+   frame by GlassSurfaces; USS supplies the crisp 1 px edge (lighter top-left) and the fallbacks:
+   - bv-glass-mode-backdrop: backdrop texture available (tiers A/B full, tier C simplified);
+   - bv-glass-mode-frosted: no backdrop source (e.g. gallery over plain content) or shader unavailable;
+   - bv-glass-mode-solid: Reduce Transparency, matte 92% surfaces. */
+
+.bv-glass {
+    border-width: 1px;
+    border-color: var(--glass-border);
+    border-top-color: var(--glass-highlight);
+    border-left-color: var(--glass-highlight);
+}
+
+.bv-glass-mode-backdrop .bv-glass {
+    background-color: var(--glass-frosted);
+}
+
+.bv-glass-mode-backdrop .bv-glass.bv-glass--tracked {
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.bv-glass-mode-backdrop .bv-glass.bv-glass--overflow,
+.bv-glass-mode-frosted .bv-glass {
+    background-color: var(--glass-frosted);
+}
+
+.bv-glass-mode-solid .bv-glass {
+    background-color: var(--glass-solid);
+    border-color: var(--color-separator);
+}

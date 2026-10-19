@@ -1,0 +1,42 @@
+/* Ballverse design tokens (spec §4.4): 4 pt grid, 16/24 pt paddings, 44 pt touch targets, 5 type sizes
+   (12/14/17/22/34). Panel units equal points: the panel is scaled to a 390-unit-wide reference (BallverseUIRoot). */
+
+.bv-app {
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --touch: 44px;
+    --radius-s: 10px;
+    --radius-m: 16px;
+    --radius-l: 24px;
+    --radius-xl: 28px;
+    --radius-pill: 999px;
+    --font-xs: 12px;
+    --font-s: 14px;
+    --font-m: 17px;
+    --font-l: 22px;
+    --font-xl: 34px;
+    --icon: 24px;
+    --icon-s: 16px;
+    --bar-height: 64px;
+}
+
+/* System text size up to 130% (spec §4.4, §4.8). */
+.bv-app.bv-text-115 {
+    --font-xs: 14px;
+    --font-s: 16px;
+    --font-m: 20px;
+    --font-l: 25px;
+    --font-xl: 38px;
+}
+
+.bv-app.bv-text-130 {
+    --font-xs: 16px;
+    --font-s: 18px;
+    --font-m: 22px;
+    --font-l: 28px;
+    --font-xl: 42px;
+}

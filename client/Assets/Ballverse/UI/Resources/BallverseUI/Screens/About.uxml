@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="about" class="bv-page bv-page--solid bv-fill">
+        <ui:VisualElement class="bv-safe-top" />
+        <ui:VisualElement class="bv-header bv-header--compact">
+            <ui:VisualElement name="back" class="bv-icon-btn">
+                <ui:VisualElement class="bv-icon icon--back" />
+            </ui:VisualElement>
+            <ui:Label text="#settings.about" class="bv-header__title bv-header__title--small" />
+            <ui:VisualElement class="bv-header__spacer" />
+        </ui:VisualElement>
+        <ui:ScrollView name="scroll" class="bv-page__scroll">
+            <ui:VisualElement name="content" class="bv-form bv-form--page" />
+            <ui:VisualElement class="bv-safe-bottom" />
+        </ui:ScrollView>
+    </ui:VisualElement>
+</ui:UXML>

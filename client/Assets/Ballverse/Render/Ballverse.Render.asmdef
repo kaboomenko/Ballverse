@@ -1,0 +1,17 @@
+{
+    "name": "Ballverse.Render",
+    "rootNamespace": "Ballverse.Render",
+    "references": [
+        "Ballverse.Core",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
