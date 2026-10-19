@@ -14,12 +14,14 @@ namespace Ballverse.UI.Fakes
         [SerializeField] Core.DeviceTier _tier = Core.DeviceTier.B;
 
         FakeViewModels _vms;
+        PreviewSafeAreaProvider _safeArea;
         BallverseUIRoot _root;
 
         void Start()
         {
             _vms = new FakeViewModels();
-            _root = BallverseUIRoot.Create(_vms, 0, transform);
+            _safeArea = new PreviewSafeAreaProvider();
+            _root = BallverseUIRoot.Create(_vms, _safeArea, 0, transform);
             _vms.SetLocalizer(_root.Shell.Localizer.Get);
             _root.Shell.SetDeviceTier(_tier);
             if (!string.IsNullOrEmpty(_openModeOnStart)) _root.Shell.OpenMode(_openModeOnStart);
@@ -27,6 +29,7 @@ namespace Ballverse.UI.Fakes
 
         void Update()
         {
+            _safeArea?.Poll();
             _vms?.Tick(Time.unscaledDeltaTime);
         }
 

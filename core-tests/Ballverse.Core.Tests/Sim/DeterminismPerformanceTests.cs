@@ -83,6 +83,41 @@ namespace Ballverse.Core.Tests.Sim
             Assert.Equal(long.MinValue, PhysicsWorld.QuantizeForHash(float.NaN));
         }
 
+        /// <summary>
+        /// Edge values for the hash quantizer: ±0, ±1, the half-unit rounding boundary and its neighbouring floats (half away
+        /// from zero), sub-resolution and denormal values, the ±9.2·10¹⁸ saturation boundary and its neighbours, ±MaxValue, ±∞, NaN.
+        /// </summary>
+        static readonly float[] s_quantizerEdgeValues =
+        {
+            0f, -0f, 1f, -1f, 0.5f / 65536f, -0.5f / 65536f, MathF.BitDecrement(0.5f / 65536f), MathF.BitIncrement(0.5f / 65536f),
+            -MathF.BitDecrement(0.5f / 65536f), -MathF.BitIncrement(0.5f / 65536f), 1.5f / 65536f, -1.5f / 65536f, 2.5f / 65536f,
+            123.456f, -98765.4321f, 1e-30f, float.Epsilon, -float.Epsilon,
+            9.2e18f / 65536f, -9.2e18f / 65536f, MathF.BitDecrement(9.2e18f / 65536f), MathF.BitIncrement(-9.2e18f / 65536f),
+            float.MaxValue, float.MinValue, float.PositiveInfinity, float.NegativeInfinity, float.NaN,
+        };
+
+        /// <summary>
+        /// The world hash must match the replay HASH record (spec §7.4), whose quantizer is
+        /// <c>Ballverse.Core.Replay.StateHashBuilder.AddQuantized</c> — a separate module this track cannot reference or edit.
+        /// The digest below was produced by <c>StateHashBuilder.AddQuantized</c> (main @ c7f0649, default 2^16 units) over the same
+        /// values; any change to either quantizer breaks one side of this pin. (Sharing one quantizer from Foundation is an
+        /// integration step outside this track's files.)
+        /// </summary>
+        [Fact]
+        public void QuantizeForHashMatchesReplayStateHashBuilder()
+        {
+            var hash = new XxHash64();
+            foreach (float v in s_quantizerEdgeValues) hash.AppendULong((ulong)PhysicsWorld.QuantizeForHash(v));
+            Assert.Equal(0xD700C4F90D47426AUL, hash.Digest());
+            Assert.Equal(1L, PhysicsWorld.QuantizeForHash(MathF.BitIncrement(0.5f / 65536f)));
+            Assert.Equal(0L, PhysicsWorld.QuantizeForHash(MathF.BitDecrement(0.5f / 65536f)));
+            Assert.Equal(-1L, PhysicsWorld.QuantizeForHash(-0.5f / 65536f));
+            Assert.Equal(3L, PhysicsWorld.QuantizeForHash(2.5f / 65536f));
+            Assert.Equal(0L, PhysicsWorld.QuantizeForHash(-0f));
+            Assert.Equal(long.MaxValue, PhysicsWorld.QuantizeForHash(9.2e18f / 65536f));
+            Assert.Equal(long.MinValue + 1, PhysicsWorld.QuantizeForHash(float.NegativeInfinity));
+        }
+
         [Fact]
         public void PerformanceSmoke500BallsInRotatingHexagon()
         {

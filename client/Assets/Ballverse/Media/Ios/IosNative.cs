@@ -55,7 +55,8 @@ namespace Ballverse.Media.Ios
         [DllImport(Lib)] internal static extern int BVWriter_FramesInFlight(IntPtr writer);
         [DllImport(Lib)] internal static extern void BVWriter_Finish(IntPtr writer, long requestId);
         [DllImport(Lib)] internal static extern void BVWriter_Cancel(IntPtr writer);
-        [DllImport(Lib)] internal static extern void BVWriter_Close(IntPtr writer);
+        /// <summary>Releases the handle (aborting an unfinished writer); completes <paramref name="requestId"/> once the native writer has stopped.</summary>
+        [DllImport(Lib)] internal static extern void BVWriter_Release(IntPtr writer, long requestId);
 
         /// <summary>Thread-local "CODE|message" of the last failed synchronous call on this thread.</summary>
         internal static string LastError()

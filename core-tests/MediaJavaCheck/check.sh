@@ -10,6 +10,11 @@
 #  3. run AacPcmEncoderCheck (plain JVM): the real AacPcmEncoder against a fake codec — audio is never queued past
 #     the video end (VideoWriter / SegmentConcat driving patterns, PCM longer/equal/shorter than the video), plus a
 #     static guard that no audio look-ahead constant came back into the callers.
+#  4. run VideoWriterReleaseCheck (plain JVM): the real VideoWriter lifecycle against fake codec/muxer/surface/EGL classes
+#     (writerfakes/) and a recording MediaBridge stand-in — releaseAsync reports only after the writer thread exited
+#     with codec + muxer released and its own unfinished work file deleted; no other file (output path, a newer
+#     writer's work file) is ever touched; open() failures return only after the thread stopped; open() waits (bounded)
+#     for stopping writers to free their encoder (single-encoder devices) but never for open writers; EGL and canvas paths.
 # Usage: core-tests/MediaJavaCheck/check.sh /path/to/android-all.jar
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -37,3 +42,14 @@ if grep -n 'AUDIO_LEAD' "$repo"/client/Assets/Plugins/Android/BallverseMedia/*.j
   echo "MediaJavaCheck: audio must not be queued ahead of the video (AUDIO_LEAD found)" >&2
   exit 1
 fi
+# 4. VideoWriterReleaseCheck (plain JVM): the REAL VideoWriter (+ AacPcmEncoder, MediaError, Json it links against)
+#    with writerfakes/ shadowing the framework classes it executes, including EGL14/GLES20/EGLExt: by default the fake
+#    EGL has no display (lockHardwareCanvas path); the "EGL path" cases enable it so the EGL renderer and its teardown run.
+vw="$out/writer"
+mkdir -p "$vw"
+src="$repo"/client/Assets/Plugins/Android/BallverseMedia
+javac --release 8 -Xlint:all -Xlint:-classfile -Xlint:-options -Werror -encoding UTF-8 -d "$vw" -cp "$jar" \
+  $(find "$here"/writerfakes -name '*.java' | sort) \
+  "$here"/VideoWriterReleaseCheck.java \
+  "$src"/VideoWriter.java "$src"/AacPcmEncoder.java "$src"/MediaError.java "$src"/Json.java
+java -cp "$vw:$jar" com.ballverse.media.VideoWriterReleaseCheck

@@ -3,6 +3,7 @@
     "rootNamespace": "Ballverse.UI",
     "references": [
         "Ballverse.Core",
+        "Ballverse.Platform",
         "Unity.InputSystem"
     ],
     "includePlatforms": [],

@@ -65,23 +65,42 @@ namespace Ballverse.Media
         Task<PcmFileInfo> DecodeAudioToFileAsync(string path, string outputPcmPath, AudioDecodeRange range, CancellationToken ct);
 
         /// <summary>
-        /// Starts an H.264 + AAC MP4 writer at <paramref name="outputPath"/>. Append frames in increasing pts order, then
-        /// call <see cref="FinalizeAsync"/>. Disposing an unfinalized writer cancels it and deletes the partial file.
+        /// Starts an H.264 + AAC MP4 writer for <paramref name="outputPath"/>. Append frames in increasing pts order, then
+        /// call <see cref="FinalizeAsync"/>. The encoder writes a temp file private to this writer next to the output
+        /// (<c>&lt;output&gt;.bv&lt;id&gt;.part.mp4</c>); the output path itself is only created by a successful
+        /// <see cref="FinalizeAsync"/>. An existing file at <paramref name="outputPath"/> (a previous result) and work files
+        /// left by a crashed run are deleted. Disposing an unfinalized writer aborts it and deletes its temp file
+        /// (asynchronously; see <see cref="IVideoWriter.Released"/>).
         /// </summary>
+        /// <remarks>
+        /// Never blocks on the C# side: it does not wait for writers of OTHER paths that are still being released. On
+        /// Android the native open waits (bounded, a few seconds at most) until the encoders of writers whose release was
+        /// requested are freed, because many devices allow a single hardware H.264 encoder; iOS (VideoToolbox) runs several
+        /// sessions side by side. For a redo or retry prefer <see cref="MediaBridgeExtensions.OpenWriterAsync"/>, or await
+        /// <see cref="IVideoWriter.ReleaseAsync"/> of the previous writer, which make the hand-over explicit on every
+        /// platform.
+        /// </remarks>
+        /// <exception cref="InvalidOperationException">Another writer (or a <see cref="ConcatSegmentsAsync"/>) for the same
+        /// output path has not settled yet: it is still open, finalizing, or its native side is still stopping after
+        /// Dispose. Await <see cref="IVideoWriter.ReleaseAsync"/> first or use <see cref="MediaBridgeExtensions.OpenWriterAsync"/>.</exception>
         /// <exception cref="MediaException">No suitable encoder, cannot create the file.</exception>
         IVideoWriter OpenWriter(string outputPath, VideoWriterOptions options);
 
         /// <summary>
         /// Flushes the encoders, writes the remaining audio, closes the MP4 (index <c>moov</c> at the front unless
-        /// <see cref="VideoWriterOptions.FastStart"/> is false) and disposes the writer. On failure or cancellation the
-        /// partial file is deleted and the writer is disposed.
+        /// <see cref="VideoWriterOptions.FastStart"/> is false), disposes the writer and renames its temp file to
+        /// <see cref="IVideoWriter.OutputPath"/>. On failure or cancellation the temp file is deleted and the writer is
+        /// disposed; the output path is never touched then.
         /// </summary>
+        /// <remarks>Unlike other operations, the returned task completes — also when cancelled or failed — only after the
+        /// writer's native side has stopped (<see cref="IVideoWriter.Released"/>), so a retry may start right away.</remarks>
         /// <exception cref="InvalidOperationException">FinalizeAsync was already called for this writer (finished or still
         /// running); the output of that call is not touched.</exception>
-        /// <exception cref="ObjectDisposedException">The writer was disposed (its partial file was deleted then).</exception>
+        /// <exception cref="ObjectDisposedException">The writer was disposed. The task faults only once that writer's
+        /// release has completed (<see cref="IVideoWriter.Released"/>: native side stopped, temp file deleted).</exception>
         /// <exception cref="MediaException">The encoder failed earlier (sticky error) or fails while finishing: the writer
-        /// is disposed (the hardware encoder is free for a retry) and the partial file deleted. A writer without frames
-        /// is disposed the same way and fails with <see cref="InvalidOperationException"/>.</exception>
+        /// is released (the hardware encoder is free for a retry) and the temp file deleted. A writer without frames
+        /// is released the same way and fails with <see cref="InvalidOperationException"/>.</exception>
         Task<VideoWriterResult> FinalizeAsync(IVideoWriter writer, CancellationToken ct);
 
         /// <summary>
@@ -95,14 +114,26 @@ namespace Ballverse.Media
         /// (<see cref="VideoWriterOptions.AudioPcmPath"/> = null), starts with an IDR frame and has the same size, fps and
         /// encoder settings as the others (checked: different codec configurations fail with
         /// <see cref="MediaErrorCode.InvalidState"/>). Timing rule: <see cref="SegmentConcatOptions"/>. The segment files
-        /// are not deleted.
+        /// are kept, UNLESS <see cref="SegmentConcatOptions.DeleteSegmentsBeforeFastStart"/> is set: then they are deleted
+        /// as soon as the remux succeeded — also when the following fast-start rewrite then fails or is cancelled (the
+        /// export must then restart from the first segment).
         /// </param>
         /// <param name="pcmPath">The mix in the <see cref="PcmFile"/> format, or null / empty file for a silent video. Audio past the video end is trimmed.</param>
-        /// <param name="outFile">Destination MP4 (replaced). Deleted again on failure or cancellation.</param>
+        /// <param name="outFile">Destination MP4 (an existing file is deleted first). The join writes a temp file private to
+        /// this call (<c>&lt;outFile&gt;.bv&lt;id&gt;.part.mp4</c>) and renames it to <paramref name="outFile"/> only on
+        /// success; on failure or cancellation only the temp file is deleted.</param>
         /// <returns>Frame count (sum of the segments' frames) and duration (frames / fps).</returns>
         /// <remarks>Spec §7.5 lists <c>Task&lt;string&gt; ConcatSegmentsAsync(segments, pcmPath, outFile, ct)</c>; this
         /// version also takes the fps (for exact segment offsets), audio bitrate and metadata, and returns the frame count
-        /// for the §3.8 acceptance check. The fake backend joins PNG-sequence segment directories.</remarks>
+        /// for the §3.8 acceptance check. The fake backend joins PNG-sequence segment directories.
+        /// <para><b>Disk space:</b> peak ≈ 3 × the export size with <c>DeleteSegmentsBeforeFastStart = false</c> on Android
+        /// (segments + remuxed file + fast-start copy), above the §3.8 pre-check of 2E + 200 MB; the studio should pass
+        /// <c>true</c> (peak ≈ 2E). See <see cref="SegmentConcatOptions"/>.</para>
+        /// <para>Cancellation (and bridge disposal) completes the task — as cancelled — only after the native join has
+        /// stopped and deleted its own temp file (bounded: after 20 s without a native report it completes anyway with an
+        /// error log), so a retry for the same <paramref name="outFile"/> may start right away. A writer or join for the
+        /// same <paramref name="outFile"/> that is still running makes this call throw
+        /// <see cref="InvalidOperationException"/>.</para></remarks>
         Task<VideoWriterResult> ConcatSegmentsAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
             SegmentConcatOptions options, CancellationToken ct);
 

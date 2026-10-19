@@ -17,6 +17,8 @@
   <ItemGroup>
     <Compile Include="../../../Core/**/*.cs" LinkBase="Core" />
     <Compile Include="../../Model/**/*.cs" LinkBase="Model" />
+    <!-- The platform's safe-area insets (engine-free, Ballverse.Platform): Model/Layout/PanelInsets scales them. -->
+    <Compile Include="../../../App/Platform/SafeAreaInsets.cs" Link="Platform/SafeAreaInsets.cs" />
     <Compile Include="*.cs" />
   </ItemGroup>
   <ItemGroup>

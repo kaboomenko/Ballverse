@@ -15,14 +15,23 @@ namespace Ballverse.UI.Screens
     /// to choose where the track starts. Edits are previewed while dragging and committed on release through the events.
     /// Handles are 44 pt wide hit areas (spec §4.4) with a thin visible grip on the segment edge, placed by
     /// <see cref="TimelineGeometry.PlaceHandles"/>: centred on the edges, pushed outwards on short spans so part of the
-    /// body stays free, and kept inside the screen. The tracks do not clip (Studio.uss), so a handle reaching past the
-    /// track is still hit. A press on a handle that does not move is a tap (on a text span it selects the layer).
+    /// body stays free, and kept inside the screen. The tracks and segments do not clip (Studio.uss), so a handle reaching
+    /// past the track is still hit; what a segment draws (fill, border, thumbnails, label) lives in its body element
+    /// (<c>bv-timeline__body</c>), which is clipped to the track by <see cref="TimelineGeometry.ClipToTrack"/>, so a V clip
+    /// before S or a text span past the reel end never paints over the badge column or the side padding. A press on a
+    /// handle that does not move is a tap (on a text span it selects the layer).
     /// </summary>
     public sealed class TimelineView : VisualElement
     {
         /// <summary>Minimum drawn width of a segment so both grips stay visible.</summary>
         const float MinSegmentWidth = 28f;
         const float ShiftThreshold = 8f;
+        /// <summary>Drawn part of a segment (clipped to the track); the segment element itself only holds it and the handles.</summary>
+        internal const string BodyClass = "bv-timeline__body";
+        const string BodyCutStartClass = "bv-timeline__body--cut-start";
+        const string BodyCutEndClass = "bv-timeline__body--cut-end";
+        internal const string LeftHandleClass = "bv-timeline__handle--left";
+        internal const string RightHandleClass = "bv-timeline__handle--right";
 
         readonly UiContext _ctx;
         readonly VisualElement _ruler;
@@ -109,8 +118,14 @@ namespace Ballverse.UI.Screens
 
         void Relayout()
         {
+            Build(TrackWidth);
+        }
+
+        /// <summary>Rebuilds the tracks for a track width in panel units (no-op before layout or without data).</summary>
+        internal void Build(float trackWidth)
+        {
             if (_data == null) return;
-            float w = TrackWidth;
+            float w = trackWidth;
             if (float.IsNaN(w) || w <= 0) return;
             _geo.SetViewWidth(w);
             _geo.SetTotal(Math.Max(_data.DurationUs, TimelineGeometry.MinClipUs));
@@ -172,6 +187,9 @@ namespace Ballverse.UI.Screens
             var seg = new VisualElement();
             seg.AddToClassList("bv-timeline__segment");
             seg.AddToClassList(isSim ? "bv-timeline__segment--sim" : "bv-timeline__segment--video");
+            // The segment spans the true clip (it may reach outside the track) and is not hit itself: its body is.
+            seg.pickingMode = PickingMode.Ignore;
+            var body = Body(seg);
             var thumbs = new VisualElement();
             thumbs.AddToClassList("bv-timeline__thumbs");
             thumbs.pickingMode = PickingMode.Ignore;
@@ -183,7 +201,7 @@ namespace Ballverse.UI.Screens
                 TextureSlot.Set(th, t);
                 thumbs.Add(th);
             }
-            seg.Add(thumbs);
+            body.Add(thumbs);
             var left = Handle(true);
             var right = Handle(false);
             seg.Add(left);
@@ -193,14 +211,23 @@ namespace Ballverse.UI.Screens
             var kind = isSim ? EditTarget.SimTrim : EditTarget.VideoTrim;
             new EdgeDrag(this, left, kind, true, null);
             new EdgeDrag(this, right, kind, false, null);
-            if (!isSim) new BodyDrag(this, seg, EditTarget.VideoShift, -1, null);
+            if (!isSim) new BodyDrag(this, body, EditTarget.VideoShift, -1, null);
+        }
+
+        /// <summary>Adds the drawn, clipped part of a segment (first child, so the handles stay on top of it).</summary>
+        static VisualElement Body(VisualElement segment)
+        {
+            var body = new VisualElement();
+            body.AddToClassList(BodyClass);
+            segment.Add(body);
+            return body;
         }
 
         static VisualElement Handle(bool left)
         {
             var h = new VisualElement();
             h.AddToClassList("bv-timeline__handle");
-            h.AddToClassList(left ? "bv-timeline__handle--left" : "bv-timeline__handle--right");
+            h.AddToClassList(left ? LeftHandleClass : RightHandleClass);
             var grip = new VisualElement();
             grip.AddToClassList("bv-timeline__grip");
             grip.pickingMode = PickingMode.Ignore;
@@ -221,40 +248,70 @@ namespace Ballverse.UI.Screens
             Place(seg, start, range.LengthUs);
         }
 
+        /// <summary>
+        /// Positions a segment (S / V clip, text span, music bar) at its true place, clips its body to the track and
+        /// places its handles. Call it once the segment and its handles are in the track: the handles are found inside the
+        /// segment and their pickable band is measured from the track.
+        /// </summary>
         void Place(VisualElement element, long startUs, long lengthUs)
         {
             float x = _geo.ToX(startUs);
             float width = Mathf.Max(MinSegmentWidth, _geo.Width(lengthUs));
             element.style.left = x;
             element.style.width = width;
-            PlaceHandles(element, x, width);
+            var clip = TimelineGeometry.ClipToTrack(x, width, _geo.ViewWidth);
+            ClipBody(element, width, clip);
+            PlaceHandles(element, x, width, clip);
+        }
+
+        /// <summary>Draws only the part of the segment inside the track (its fill, border, thumbnails, label).</summary>
+        static void ClipBody(VisualElement segment, float width, SegmentClip clip)
+        {
+            var body = segment.Q<VisualElement>(className: BodyClass);
+            if (body == null) return;
+            body.style.display = clip.Visible ? DisplayStyle.Flex : DisplayStyle.None;
+            body.style.left = clip.BodyX;
+            body.style.width = clip.BodyWidth;
+            // A cut side is the track edge, not the clip edge: it has no border.
+            body.EnableInClassList(BodyCutStartClass, clip.CutStart);
+            body.EnableInClassList(BodyCutEndClass, clip.CutEnd);
+            var thumbs = body.Q<VisualElement>(className: "bv-timeline__thumbs");
+            if (thumbs != null)
+            {
+                // The thumbnails keep the whole clip's scale; the body cuts off what lies outside the track.
+                thumbs.style.left = -clip.BodyX;
+                thumbs.style.width = width;
+            }
         }
 
         /// <summary>Positions the segment's trim handles (if it has any) and their grips on the segment edges.</summary>
-        void PlaceHandles(VisualElement segment, float x, float width)
+        void PlaceHandles(VisualElement segment, float x, float width, SegmentClip clip)
         {
-            var left = segment.Q<VisualElement>(className: "bv-timeline__handle--left");
-            var right = segment.Q<VisualElement>(className: "bv-timeline__handle--right");
+            var left = segment.Q<VisualElement>(className: LeftHandleClass);
+            var right = segment.Q<VisualElement>(className: RightHandleClass);
             if (left == null || right == null) return;
-            // Pickable band in track coordinates: up to the screen edges (no ancestor between the track and the screen
-            // layer clips; QaRound2StaticChecks keeps it so). Measured against the page root, which fills the screen
-            // layer and moves with the track, so a push transition's translate does not skew it.
-            float bandMin = float.NegativeInfinity;
-            float bandMax = float.PositiveInfinity;
-            var track = segment.parent;
-            var screen = PageRoot().worldBound;
-            if (track != null)
-            {
-                var tb = track.worldBound;
-                if (!float.IsNaN(tb.x) && !float.IsNaN(screen.x) && !float.IsNaN(screen.width))
-                {
-                    bandMin = screen.xMin - tb.xMin;
-                    bandMax = screen.xMax - tb.xMin;
-                }
-            }
+            HandleBand(segment.parent, out float bandMin, out float bandMax);
             var p = TimelineGeometry.PlaceHandles(x, width, bandMin, bandMax);
-            SetHandle(left, p.LeftX, p.LeftEdgeInHandle);
-            SetHandle(right, p.RightX, p.RightEdgeInHandle);
+            SetHandle(left, p.LeftX, TimelineGeometry.GripInHandle(0f, p.LeftX, clip));
+            SetHandle(right, p.RightX, TimelineGeometry.GripInHandle(width, p.RightX, clip));
+        }
+
+        /// <summary>
+        /// Pickable band of a track's handles, in track coordinates: up to the screen edges (no ancestor between the track
+        /// and the screen layer clips; QaRound2StaticChecks keeps it so). Measured against the page root, which fills the
+        /// screen layer and moves with the track, so a push transition's translate does not skew it. Unbounded while the
+        /// track or the page has no layout.
+        /// </summary>
+        internal void HandleBand(VisualElement track, out float bandMin, out float bandMax)
+        {
+            bandMin = float.NegativeInfinity;
+            bandMax = float.PositiveInfinity;
+            if (track == null) return;
+            var screen = PageRoot().worldBound;
+            var tb = track.worldBound;
+            if (float.IsNaN(tb.x) || float.IsNaN(screen.x) || !(screen.width > 0f)) return;
+            bandMin = screen.xMin - tb.xMin;
+            bandMax = screen.xMax - tb.xMin;
         }
 
         /// <summary>The screen this timeline is on (class <c>bv-page</c>, full screen), else the app root.</summary>
@@ -281,21 +338,25 @@ namespace Ballverse.UI.Screens
                 var pill = new VisualElement();
                 pill.AddToClassList("bv-timeline__text");
                 pill.userData = item.LayerIndex;
-                Place(pill, item.StartUs, item.EndUs - item.StartUs);
+                pill.pickingMode = PickingMode.Ignore;
+                var body = Body(pill);
                 var label = UiContext.TextLabel(item.Text, "bv-timeline__text-label");
                 label.pickingMode = PickingMode.Ignore;
-                pill.Add(label);
+                body.Add(label);
                 var left = Handle(true);
                 var right = Handle(false);
                 pill.Add(left);
                 pill.Add(right);
+                _textTrack.Add(pill);
+                // Placed only now: PlaceHandles finds the handles inside the pill and measures their band from the track
+                // (QA round 3: placed before, the handles kept their USS offsets and covered short pills).
+                Place(pill, item.StartUs, item.EndUs - item.StartUs);
                 int index = item.LayerIndex;
                 // Tap selects the layer (opens the text tool), drag moves it in time, the edges change in / out.
-                new BodyDrag(this, pill, EditTarget.TextShift, index, () => TextSelected?.Invoke(index));
+                new BodyDrag(this, body, EditTarget.TextShift, index, () => TextSelected?.Invoke(index));
                 // A handle that is pressed without moving acts like the body: on short spans the handles cover most of it.
                 new EdgeDrag(this, left, EditTarget.TextTrim, true, () => TextSelected?.Invoke(index), index);
                 new EdgeDrag(this, right, EditTarget.TextTrim, false, () => TextSelected?.Invoke(index), index);
-                _textTrack.Add(pill);
             }
         }
 
@@ -305,14 +366,15 @@ namespace Ballverse.UI.Screens
             var m = _data.Music;
             _musicTrack.parent.style.display = m != null ? DisplayStyle.Flex : DisplayStyle.None;
             if (m == null) return;
+            // The music track clips (its bar slides while dragged) and the bar has no handles: it is its own body.
             var bar = new VisualElement();
             bar.AddToClassList("bv-timeline__music");
-            Place(bar, m.StartUs, m.EndUs - m.StartUs);
             var label = UiContext.TextLabel(_ctx.L(m.Name), "bv-timeline__text-label");
             label.pickingMode = PickingMode.Ignore;
             bar.Add(label);
-            if (m.TrackLengthUs > 0) new BodyDrag(this, bar, EditTarget.MusicShift, -1, null);
             _musicTrack.Add(bar);
+            Place(bar, m.StartUs, m.EndUs - m.StartUs);
+            if (m.TrackLengthUs > 0) new BodyDrag(this, bar, EditTarget.MusicShift, -1, null);
         }
 
         void UpdatePlayhead()

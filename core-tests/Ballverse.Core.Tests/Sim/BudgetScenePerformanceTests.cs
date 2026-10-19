@@ -14,6 +14,12 @@ namespace Ballverse.Core.Tests.Sim
     /// a several-fold solver regression fails on any machine, a slow or busy CI runner does not. Limits are ~3–4× the ratios
     /// measured on the development container (x64, .NET 8 Release: tier A ≈ 0.55 ms/tick ≈ 0.3× calibration). Measured
     /// times and the ratio to the 0.5 ms target are written to the test output; the absolute target is tracked, not asserted.
+    /// <para>
+    /// Tier A at the default 8 substeps measures 0.51–0.76 ms/tick on the (shared, noisy) development container, 1.0–1.5× the
+    /// target, ~70 % of it in ball–ball contacts. §6.5's fallback therefore applies to the Geometry Bounce tier-A budget: fewer
+    /// substeps inside the 4–16 envelope covered by the tunnelling property tests. At 6 substeps (timed here too) it measures
+    /// 0.43–0.62 ms/tick, about 20–25 % less; 4 substeps ≈ 0.30 ms/tick. The mode (a later step) picks the count.
+    /// </para>
     /// </summary>
     [Collection(SimPerformanceCollection.Name)]
     public class BudgetScenePerformanceTests
@@ -133,9 +139,11 @@ namespace Ballverse.Core.Tests.Sim
 #endif
 
         /// <summary>Geometry Bounce (M02): balls of 0.34 m in a rotating hexagon (R 3.6 m, wall 0.12 m), 1 g, 8 substeps.</summary>
-        static PhysicsWorld GeometryBounce(int balls, float diameterSpread = 0f, float bigRadius = 0f, float radius = 0.17f)
+        static PhysicsWorld GeometryBounce(int balls, float diameterSpread = 0f, float bigRadius = 0f, float radius = 0.17f, int substeps = SimSettings.DefaultSubsteps)
         {
-            var w = new PhysicsWorld(SimSettings.Default);
+            var settings = SimSettings.Default;
+            settings.Substeps = substeps;
+            var w = new PhysicsWorld(settings);
             SimTestUtil.AddPolygonArena(w, 6, 3.6f, 0.12f, 45f * SimMath.DegToRad, 0.9f, 0.2f);
             w.ReserveBalls(balls + 1);
             var rng = Rng.FromSeed(11UL, 1);
@@ -155,15 +163,16 @@ namespace Ballverse.Core.Tests.Sim
         }
 
         [Theory]
-        [InlineData("A", 200, 2.5)]
-        [InlineData("B", 120, 1.0)]
-        [InlineData("C", 60, 0.4)]
-        public void GeometryBounceBudgetScenes(string tier, int balls, double ratioLimit)
+        [InlineData("A", 200, 2.5, 8)]
+        [InlineData("A", 200, 2.0, 6)]
+        [InlineData("B", 120, 1.0, 8)]
+        [InlineData("C", 60, 0.4, 8)]
+        public void GeometryBounceBudgetScenes(string tier, int balls, double ratioLimit, int substeps)
         {
-            var w = GeometryBounce(balls);
+            var w = GeometryBounce(balls, substeps: substeps);
             double ms = TimeTicks(w);
             Assert.Equal(balls, w.AliveBallCount);
-            Report("M02 tier " + tier + " (" + balls + " balls Ø0.34 m, rotating hexagon, 8 substeps)", ms, ratioLimit * Slack);
+            Report("M02 tier " + tier + " (" + balls + " balls Ø0.34 m, rotating hexagon, " + substeps + " substeps)", ms, ratioLimit * Slack);
         }
 
         [Fact]

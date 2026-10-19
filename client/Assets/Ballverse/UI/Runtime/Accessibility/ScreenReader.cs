@@ -49,7 +49,9 @@ namespace Ballverse.UI.Accessibility
     /// <summary>
     /// Mirrors the visible interactive UI into Unity's screen-reader hierarchy (<c>UnityEngine.Accessibility.AssistiveSupport</c>,
     /// iOS VoiceOver and Android TalkBack, Unity 6) while a screen reader is on: one node per registered button and
-    /// screen title in the top-most modal layer (dialog, else dimming sheet, else screen + open sheets + tab bar).
+    /// screen title in the top-most modal layer (dialog, else dimming sheet, else screen + open sheets + tab bar). Buttons
+    /// carry the Selected state when they are the chosen item of their group (<see cref="A11yStates"/>: the current tab,
+    /// tool tab, segment, chip) and Disabled when they cannot be used; both are updated in place on every check.
     /// Driven from <see cref="UiShell.LateUpdate"/>, after the panel update, and scheduled by <see cref="ScreenReaderSync"/>:
     /// a change (screen, sheet, dialog, language) is read once its elements are laid out (a new element has NaN bounds
     /// until the next panel update), and the visible UI is re-read twice a second so nodes that appear without an event
@@ -68,13 +70,15 @@ namespace Ballverse.UI.Accessibility
             public readonly string Label;
             public readonly bool Heading;
             public readonly Action Invoke;
+            public readonly AccessibilityState State;
 
-            public NodeSpec(VisualElement element, string label, bool heading, Action invoke)
+            public NodeSpec(VisualElement element, string label, bool heading, Action invoke, AccessibilityState state)
             {
                 Element = element;
                 Label = label;
                 Heading = heading;
                 Invoke = invoke;
+                State = state;
             }
 
             public bool SameAs(NodeSpec other)
@@ -88,6 +92,7 @@ namespace Ballverse.UI.Accessibility
         readonly ScreenReaderSync _sync = new ScreenReaderSync();
         readonly List<NodeSpec> _published = new List<NodeSpec>();
         readonly List<NodeSpec> _read = new List<NodeSpec>();
+        readonly List<AccessibilityNode> _nodes = new List<AccessibilityNode>();
         AccessibilityHierarchy _hierarchy;
         bool _enabled;
         float _sinceStatusPoll = StatusPollSeconds;
@@ -141,9 +146,17 @@ namespace Ballverse.UI.Accessibility
                     Publish(false);
                     break;
                 case ScreenReaderStep.RefreshFrames:
+                    UpdateStates();
                     _hierarchy?.RefreshNodeFrames();
                     break;
             }
+        }
+
+        /// <summary>Same nodes as published: carry over selection / enabled changes without rebuilding the hierarchy.</summary>
+        void UpdateStates()
+        {
+            int n = Math.Min(_nodes.Count, _read.Count);
+            for (int i = 0; i < n; i++) _nodes[i].state = _read[i].State;
         }
 
         bool SameAsPublished()
@@ -158,9 +171,11 @@ namespace Ballverse.UI.Accessibility
         {
             var hierarchy = new AccessibilityHierarchy();
             var scale = PanelToScreenScale();
+            _nodes.Clear();
             foreach (var spec in _read)
             {
                 var node = hierarchy.AddNode(spec.Label);
+                _nodes.Add(node);
                 var target = spec.Element;
                 node.frameGetter = () => Frame(target, scale);
                 if (spec.Heading)
@@ -169,6 +184,7 @@ namespace Ballverse.UI.Accessibility
                     continue;
                 }
                 node.role = AccessibilityRole.Button;
+                node.state = spec.State;
                 var invoke = spec.Invoke;
                 if (invoke != null)
                 {
@@ -191,6 +207,7 @@ namespace Ballverse.UI.Accessibility
         void Deactivate()
         {
             _published.Clear();
+            _nodes.Clear();
             if (_hierarchy == null) return;
             _hierarchy = null;
             AssistiveSupport.activeHierarchy = null;
@@ -246,7 +263,7 @@ namespace Ballverse.UI.Accessibility
             }
             if (IsHeading(element) && element is Label title && !string.IsNullOrEmpty(title.text))
             {
-                _read.Add(new NodeSpec(title, title.text, true, null));
+                _read.Add(new NodeSpec(title, title.text, true, null, AccessibilityState.None));
                 return;
             }
             if (A11y.TryGet(element, out var entry))
@@ -255,12 +272,20 @@ namespace Ballverse.UI.Accessibility
                 if (!string.IsNullOrEmpty(label))
                 {
                     // A labelled button is announced as one node; its inner texts are not separate nodes.
-                    _read.Add(new NodeSpec(element, label, false, entry.Invoke));
+                    _read.Add(new NodeSpec(element, label, false, entry.Invoke, ButtonState(element)));
                     return;
                 }
             }
             var children = element.hierarchy;
             for (int i = 0; i < children.childCount; i++) Collect(children[i], ref ready);
+        }
+
+        static AccessibilityState ButtonState(VisualElement element)
+        {
+            var state = AccessibilityState.None;
+            if (A11yStates.IsSelected(element.GetClasses())) state |= AccessibilityState.Selected;
+            if (!element.enabledInHierarchy) state |= AccessibilityState.Disabled;
+            return state;
         }
 
         string LabelOf(VisualElement element, A11y.Entry entry)
