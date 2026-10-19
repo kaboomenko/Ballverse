@@ -133,10 +133,10 @@ namespace Ballverse.App
             _items.Add(new PresetItemData(p.Id, NameOf(p), p.Source, p.IsNew, null));
         }
 
-        static LocalizedText NameOf(Preset p)
+        LocalizedText NameOf(Preset p)
         {
             if (p.Source == PresetSource.User || string.IsNullOrEmpty(p.NameKey)) return LocalizedText.FromLiteral(p.Name ?? p.Id);
-            return LocalizedText.FromKey(p.NameKey);
+            return _ctx.Notices.TextOf(p.NameKey);
         }
 
         public void Apply(string id)

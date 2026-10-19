@@ -62,6 +62,12 @@ namespace Ballverse.Sim
         /// explicit "keep" on end, is always kept).
         /// </summary>
         public int MinKeptTicks = 3 * SimConstants.TickRate;
+
+        /// <summary>
+        /// Mode-owned gesture → <c>SimInput</c> mappings (CONTRACT.md §3 rule 5). A mode without a mapper receives no player
+        /// input. Default: the release-1 mappers (M05 Helix Drop).
+        /// </summary>
+        public ArenaInputMapperRegistry InputMappers = ArenaInputMapperRegistry.CreateRelease1();
     }
 
     /// <summary>What a live run produced.</summary>
@@ -127,6 +133,7 @@ namespace Ballverse.Sim
         bool _finishRaised;
         bool _completed;
         bool _interactive;
+        IArenaInputMapper _mapper;
         LiveRunOutcome _outcome;
         GameRunKind _kind;
 
@@ -173,8 +180,19 @@ namespace Ballverse.Sim
         /// <summary>Stops stepping (display keeps the last frame); does not end the run.</summary>
         public bool Paused { get; set; }
 
-        /// <summary>The run accepts arena gestures (interactive catalog mode).</summary>
+        /// <summary>The run accepts arena gestures (interactive mode with an input mapper that accepts the run's parameters).</summary>
         public bool AcceptsInput => _session != null && _interactive && !_completed;
+
+        /// <summary>Displayed arena width in points (iOS pt / Android dp) used to turn finger speed into mode units.</summary>
+        public float PointsPerArenaWidth { get; set; } = 390f;
+
+        /// <summary>Whether a run of <paramref name="mode"/> with <paramref name="values"/> takes player input (spec §2.6).</summary>
+        public bool TakesPlayerInput(IModeDefinition mode, ParamSet values)
+        {
+            if (mode == null || !mode.Info.Interactive) return false;
+            IArenaInputMapper mapper = _options.InputMappers?.Find(mode.Info.Id);
+            return mapper != null && mapper.AcceptsInput(values);
+        }
 
         /// <summary>Playback speed 0.25×–3× (ticks per display frame).</summary>
         public float TimeScale => _session != null ? _session.TimeScale : 1f;
@@ -243,7 +261,9 @@ namespace Ballverse.Sim
                 throw;
             }
             _kind = kind;
-            _interactive = mode.Info.Interactive;
+            _mapper = _options.InputMappers?.Find(mode.Info.Id);
+            _interactive = mode.Info.Interactive && _mapper != null && _mapper.AcceptsInput(values);
+            if (_interactive) _mapper.BeginRun();
             RunGeneration++;
             _sound?.BeginRun();
             _haptics?.BeginRun();
@@ -255,6 +275,11 @@ namespace Ballverse.Sim
         /// Runs the ticks due for one display frame at <paramref name="displayFrameRate"/> Hz: pending gestures are enqueued at
         /// the tick boundary first; each tick's frame goes to the ring and its sounds to the sinks. When the rules finish the run
         /// is completed, committed and <see cref="RunFinished"/> is raised. Returns the ticks run.
+        /// <para>This reimplements Core <c>ModeSession.AdvanceDisplayFrame</c>'s integer accumulator (time scale × tick rate per
+        /// display frame, same catch-up cap) instead of calling it, because the live runtime needs a hook after every single
+        /// tick — the frame ring for trails / camera, and the sound events placed on the audio timeline at that tick — which the
+        /// Core method does not expose. Keep the two rules identical (a pacing test compares them). Pass the measured display
+        /// rate (<see cref="DisplayRateEstimator"/>), never the target rate.</para>
         /// </summary>
         public int AdvanceDisplayFrame(int displayFrameRate, double nowSeconds)
         {
@@ -364,8 +389,10 @@ namespace Ballverse.Sim
         {
             if (!_interactive) return;
             _gestures.Update(nowSeconds);
-            while (_gestures.TryDequeue(out ArenaCommand c))
+            float points = PointsPerArenaWidth > 1f ? PointsPerArenaWidth : 390f;
+            while (_gestures.TryDequeue(out ArenaGesture g))
             {
+                if (!_mapper.TryMap(in g, _session.Values, points, out ArenaCommand c)) continue;
                 try
                 {
                     _session.EnqueueInput(c.Type, c.A, c.B, c.C, c.D);

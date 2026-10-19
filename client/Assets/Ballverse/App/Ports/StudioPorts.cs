@@ -72,6 +72,9 @@ namespace Ballverse.App
         /// <summary>Applies an edit (sanitized; one undo step, coalesced with the previous edit of the same key within 1 s).</summary>
         IReadOnlyList<ValidationIssue> Apply(Action<ProjectDocument> edit, string coalesceKey = null);
 
+        /// <summary>A change that is not a user edit (new-project defaults): no undo step, Undo never takes it back.</summary>
+        void ApplyMetadata(Action<ProjectDocument> change);
+
         bool Undo();
         bool Redo();
 

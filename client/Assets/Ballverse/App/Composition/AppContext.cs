@@ -20,7 +20,7 @@ namespace Ballverse.App
         DeviceTier _tier = DeviceTier.B;
 
         public AppContext(BallverseServices services, IMediaBridge media, IStudioBackend studio, ModeRegistry modes,
-            RemoteSettings remote, AppSettingsStore settings, UserPresetStore presets, AppNotices notices, MainThreadQueue main,
+            RemoteSettings remote, AppSettingsStore settings, UserPresetStore presets, AppNotices notices, AppWorkQueue main,
             IAppClock clock, IDeviceInfo device, IPlatformActions platform, ITextureLoader textures, IAppLifecycle lifecycle,
             IScreenAwake screenAwake, IFrameRatePolicy frameRate, IAppPaths paths)
         {
@@ -51,7 +51,7 @@ namespace Ballverse.App
         public AppSettingsStore Settings { get; }
         public UserPresetStore Presets { get; }
         public AppNotices Notices { get; }
-        public MainThreadQueue Main { get; }
+        public AppWorkQueue Main { get; }
         public IAppClock Clock { get; }
         public IDeviceInfo Device { get; }
         public IPlatformActions Platform { get; }
@@ -91,7 +91,16 @@ namespace Ballverse.App
         /// <summary>The app is in the background.</summary>
         public bool AppPaused => Lifecycle.IsPaused;
 
-        /// <summary>Recomputes <see cref="Tier"/> from the detected tier, the quality setting and the power saver.</summary>
+        /// <summary>The system power saver (Low Power Mode / Battery Saver) as of the last <see cref="RefreshTier"/>.</summary>
+        public bool LowPowerMode { get; private set; }
+
+        bool _signalsErrorReported;
+
+        /// <summary>
+        /// Recomputes <see cref="Tier"/> from the detected tier, the quality setting and the power saver, and switches haptics
+        /// off while the power saver is on (spec §2.7 "Тактильный отклик … отключается … при включённом системном режиме
+        /// экономии энергии").
+        /// </summary>
         public void RefreshTier()
         {
             bool lowPower = false;
@@ -101,8 +110,11 @@ namespace Ballverse.App
             }
             catch (Exception e) when (e is InvalidOperationException || e is MediaException)
             {
-                Notices.Report("device.signals", e);
+                if (!_signalsErrorReported) Notices.Report("device.signals", e);
+                _signalsErrorReported = true;
             }
+            LowPowerMode = lowPower;
+            if (Haptics != null) Haptics.PowerSaving = lowPower;
             Tier = DeviceTierDetector.Effective(DetectedTier, Settings.Data.Quality, lowPower);
         }
     }

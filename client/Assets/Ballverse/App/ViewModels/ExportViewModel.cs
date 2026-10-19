@@ -434,10 +434,10 @@ namespace Ballverse.App
                     SetStage(ExportStage.Settings);
                     return;
                 case ExportErrorCode.InsufficientSpace:
-                    _failure = LocalizedText.FromKey(AppStrings.ExportLowSpace);
+                    _failure = _ctx.Notices.TextOf(AppStrings.ExportLowSpace);
                     break;
                 default:
-                    _failure = LocalizedText.FromKey(AppStrings.ExportFailed);
+                    _failure = _ctx.Notices.TextOf(AppStrings.ExportFailed);
                     break;
             }
             _canFallback = result.SuggestLowerSettings;
@@ -558,10 +558,13 @@ namespace Ballverse.App
             SetStage(ExportStage.Idle);
         }
 
+        /// <summary>
+        /// «Новое видео» on the export result. Not a natural break: IN3 forbids an interstitial right after an export, so a
+        /// pending one waits for the next real break (result card, back, exit to the gallery).
+        /// </summary>
         public void NewVideo()
         {
             Close();
-            _ctx.Ads?.At(NaturalBreakKind.ToGallery, null);
         }
 
         public void GoToProjects()

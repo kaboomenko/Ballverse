@@ -51,6 +51,12 @@ namespace Ballverse.App.Tests
         /// <summary>Raw Remote Config applied at start; null = build defaults.</summary>
         public Dictionary<string, string> Remote;
 
+        /// <summary>Fake media setup (device signals, picker); null = defaults.</summary>
+        public FakeMediaOptions MediaOptions;
+
+        /// <summary>Replaces the GPU-free studio backend (e.g. a factory that throws); null = <see cref="FakeStudioBackend"/>.</summary>
+        public Func<StudioEnvironment, IStudioBackend> StudioFactory;
+
         /// <summary>No UI shell (the composition runs headless).</summary>
         public bool Headless;
 
@@ -91,8 +97,8 @@ namespace Ballverse.App.Tests
                     FakeStore = StoreConfig,
                     InitialRemoteConfig = Remote,
                 }),
-                CreateMedia = () => MediaBridgeFactory.CreateFake(),
-                CreateStudio = s => Studio = new FakeStudioBackend(s.Paths, s.Gate) { Tier = s.Tier },
+                CreateMedia = () => MediaBridgeFactory.CreateFake(MediaOptions),
+                CreateStudio = StudioFactory ?? (s => Studio = new FakeStudioBackend(s.Paths, s.Gate) { Tier = s.Tier }),
                 CreateSurface = () => Surface,
                 Device = Device,
                 Platform = Platform,

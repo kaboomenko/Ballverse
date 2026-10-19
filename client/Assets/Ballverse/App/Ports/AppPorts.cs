@@ -23,6 +23,8 @@ namespace Ballverse.App
         /// <summary>BCP 47 device language, e.g. "ru-RU".</summary>
         string LanguageTag { get; }
         float FontScale { get; }
+        /// <summary>Screen width in points (iOS pt / Android dp: pixels · 160 / dpi), 0 when the density is unknown.</summary>
+        float ScreenWidthPoints { get; }
         /// <summary>"1.0.0 (42)".</summary>
         string AppVersion { get; }
     }

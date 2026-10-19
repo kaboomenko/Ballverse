@@ -23,7 +23,8 @@ namespace Ballverse.App
     /// Studio's <see cref="ISimFrameRenderer"/> over Ballverse.Render (the Studio assembly does not reference Render): every
     /// frame is drawn by <see cref="BallverseRenderer"/> from the clip's own render-stream reader, so trails and camera history
     /// are rebuilt from the stream for the shown tick (the determinism contract of the seam: an export segment redrawn after a
-    /// pause, or a resumed export, gives the same picture). The look comes from the clip's replay parameters, VFX from
+    /// pause, or a resumed export, gives the same picture). The look comes from the clip's replay parameters with the live
+    /// look changes (PARM) applied at their tick (<see cref="ClipLookTimeline"/>), VFX from
     /// <c>clip.bve</c>. Preview uses the device tier's real-time profile, export the Export profile. Main thread.
     /// </summary>
     public sealed class StudioSimRenderer : ISimFrameRenderer, IDisposable
@@ -34,6 +35,7 @@ namespace Ballverse.App
         readonly RenderThemeCatalog _themes = new RenderThemeCatalog();
         readonly Func<int, string> _labelLookup;
         IReadOnlyList<string> _labels;
+        ClipLookTimeline _look;
         FileStream _stream;
         RenderStreamReader _reader;
         bool _disposed;
@@ -89,15 +91,19 @@ namespace Ballverse.App
                 }
             }
             string dir = string.IsNullOrEmpty(clip.ReplayPath) ? null : Path.GetDirectoryName(clip.ReplayPath);
-            if (dir != null && ClipParams.TryRead(dir, _modes, out IModeDefinition _, out ParamSet values, out _))
+            _look = null;
+            if (dir != null && ClipLookTimeline.TryRead(dir, _modes, out ClipLookTimeline look))
             {
-                _ctx.Look.Apply(values, _themes);
+                _look = look;
+                if (look.Advance(0, out ParamSet values)) _ctx.Look.Apply(values, _themes);
             }
         }
 
         public void SetFrameTime(SimFrameTime time)
         {
             _ctx.Tick = Math.Max(0, time.Tick);
+            // Live look changes recorded during the run (PARM) appear at their tick in the preview and the export.
+            if (_look != null && _look.Advance(_ctx.Tick, out ParamSet values)) _ctx.Look.Apply(values, _themes);
         }
 
         public void Render(RenderFrame frame, IReadOnlyList<ShapeDefinition> shapes, IReadOnlyList<string> labels, RenderTexture target, StudioRenderQuality quality)
@@ -198,6 +204,7 @@ namespace Ballverse.App
         void OnChanged(ProjectDocument doc) => Changed?.Invoke(doc);
 
         public IReadOnlyList<Core.Projects.ValidationIssue> Apply(Action<ProjectDocument> edit, string coalesceKey = null) => Session.Apply(edit, coalesceKey);
+        public void ApplyMetadata(Action<ProjectDocument> change) => Session.ApplyMetadata(change);
         public bool Undo() => Session.Undo();
         public bool Redo() => Session.Redo();
         public void SaveNow() => Session.SaveNow();
@@ -396,12 +403,12 @@ namespace Ballverse.App
 
         public ExportSettings ResolveExportSettings(ProjectDocument doc, ExportRequest request)
         {
-            return _services.ResolveExportSettings(doc, Options(request));
+            return _services.ResolveExportSettings(doc, ToStudioOptions(request));
         }
 
         public Task<StudioExportResult> ExportAsync(string projectId, ExportRequest request, CancellationToken ct)
         {
-            return _services.ExportAsync(projectId, Options(request), ct);
+            return _services.ExportAsync(projectId, ToStudioOptions(request), ct);
         }
 
         public IReadOnlyList<ExportResumeState> ListResumable() => _services.Export.ListResumable();
@@ -423,7 +430,8 @@ namespace Ballverse.App
 
         public void ClearCaches() => _services.AudioMixer.ClearCache();
 
-        static StudioExportOptions Options(ExportRequest r)
+        /// <summary>The App's per-export choices as Studio's <see cref="StudioExportOptions"/> (every field carried over).</summary>
+        public static StudioExportOptions ToStudioOptions(ExportRequest r)
         {
             r = r ?? new ExportRequest();
             return new StudioExportOptions

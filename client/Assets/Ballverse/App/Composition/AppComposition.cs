@@ -89,10 +89,13 @@ namespace Ballverse.App
     public sealed class AppComposition : IDisposable
     {
         const float SettingsSaveInterval = 2f;
+        /// <summary>How often the power saver is re-read while the app is in the foreground (tier and haptics follow it).</summary>
+        const float PowerPollInterval = 10f;
 
         readonly AppCompositionOptions _o;
         readonly IDisposable _audioOutput;
         float _sinceSave;
+        float _sincePowerPoll;
         bool _disposed;
 
         public AppComposition(AppCompositionOptions options)
@@ -100,7 +103,7 @@ namespace Ballverse.App
             _o = options ?? throw new ArgumentNullException(nameof(options));
             Action<string, Exception> report = options.ReportError ?? ((c, e) => { });
             var notices = new AppNotices(report);
-            var main = new MainThreadQueue(report);
+            var main = new AppWorkQueue(report);
             var remote = new RemoteSettings(options.Modes, SafeRemote(options.Services), report);
             var settings = new AppSettingsStore(options.Paths.Settings, report);
             var presets = new UserPresetStore(options.Paths.Presets, report);
@@ -108,19 +111,21 @@ namespace Ballverse.App
                 options.Clock ?? new StopwatchClock(), options.Device, options.Platform, options.Textures, options.Lifecycle, options.ScreenAwake,
                 options.FrameRate, options.Paths);
             AppContext ctx = Context;
+            notices.Text = new AppText(() => LanguageResolver.Resolve(settings.Data.Language, SafeLanguageTag(options.Device)));
 
             ctx.DetectedTier = DeviceTierDetector.Detect(options.Device, remote.Values);
             ctx.RefreshTier();
 
             // Live simulation runtime.
             ctx.Audio = new LiveAudioEngine();
-            ctx.Haptics = new LiveHaptics(options.Haptics, report) { SettingEnabled = settings.Data.HapticsEnabled };
+            ctx.Haptics = new LiveHaptics(options.Haptics, report) { SettingEnabled = settings.Data.HapticsEnabled, PowerSaving = ctx.LowPowerMode };
             ctx.Live = new LiveSimController(new LiveSimOptions
             {
                 Tier = ctx.Tier,
                 AppVersion = SafeVersion(options.Device),
                 FrameHistory = ctx.Tier == DeviceTier.C ? 120 : 240,
             }, ctx.Audio, ctx.Haptics);
+            UpdateArenaMetrics();
             ctx.Surface = options.Surface;
             ctx.Surface?.Bind(ctx.Live);
             ctx.Surface?.SetTier(ctx.Tier, settings.Data.Quality);
@@ -160,6 +165,7 @@ namespace Ballverse.App
                 simulation.NotifyChanged();
             };
             appSettings.QualityChanged += OnQualityChanged;
+            appSettings.LanguageChanged += simulation.PresetsModel.Rebuild;
             appSettings.ApplyMotion();
 
             try
@@ -200,6 +206,7 @@ namespace Ballverse.App
             if (ui == null) return;
             ctx.Notices.AttachUi(ui.ShowToast);
             ui.SetDeviceTier(ctx.Tier);
+            if (ctx.Studio is UnavailableStudioBackend) ctx.Notices.Toast(AppStrings.StudioUnavailable);
             ui.ExitRequested += () =>
             {
                 try
@@ -244,6 +251,12 @@ namespace Ballverse.App
             ViewModels.GalleryModel.Tick(deltaSeconds);
             ViewModels.StudioModel.Tick(deltaSeconds);
             ViewModels.ProjectsModel.Tick(deltaSeconds);
+            _sincePowerPoll += deltaSeconds;
+            if (_sincePowerPoll >= PowerPollInterval)
+            {
+                _sincePowerPoll = 0f;
+                Context.RefreshTier();
+            }
             _sinceSave += deltaSeconds;
             if (_sinceSave >= SettingsSaveInterval)
             {
@@ -293,8 +306,24 @@ namespace Ballverse.App
             SaveAll();
         }
 
+        /// <summary>The arena spans the screen width on the simulation screen: finger speed in points for the mode's input mapper.</summary>
+        void UpdateArenaMetrics()
+        {
+            float points = 0f;
+            try
+            {
+                points = _o.Device != null ? _o.Device.ScreenWidthPoints : 0f;
+            }
+            catch (Exception e)
+            {
+                Context.Notices.Report("device.screen_points", e);
+            }
+            Context.Live.PointsPerArenaWidth = points > 100f && points < 2000f ? points : 390f;
+        }
+
         void OnResumed()
         {
+            UpdateArenaMetrics();
             Context.RefreshTier();
             ViewModels.SettingsModel.ApplyMotion();
         }
@@ -332,6 +361,18 @@ namespace Ballverse.App
             catch (Exception)
             {
                 return RemoteConfigValues.Defaults;
+            }
+        }
+
+        static string SafeLanguageTag(IDeviceInfo device)
+        {
+            try
+            {
+                return device?.LanguageTag;
+            }
+            catch (Exception)
+            {
+                return null;
             }
         }
 

@@ -27,8 +27,9 @@ namespace Ballverse.App
     /// settings sheet (live edits recorded, structural edits restart), presets, 🎲 generation on a worker thread within the tier
     /// budget (cancelled when the screen hides), the result card with the last 5 runs, «Ещё раз» (same seed), «В видео»
     /// (run → project → studio), «Сохранить клип», arena gestures for interactive modes, first-run hints and the first-video
-    /// quest. Interstitials only at natural breaks (Retry, Generate, Back, to the gallery). Modes come only through the
-    /// <see cref="ModeRegistry"/>. Main thread.
+    /// quest. Interstitials only at natural breaks (IN2: «Ещё раз» / 🎲 on the result card, Back, to the gallery — never
+    /// when ↻ or 🎲 is pressed while a run is still going). Modes come only through the <see cref="ModeRegistry"/> and only
+    /// while Remote Config has not switched them off (<c>modes_disabled</c>). Main thread.
     /// </summary>
     public sealed class SimulationViewModel : ViewModelBase, ISimulationViewModel
     {
@@ -69,6 +70,7 @@ namespace Ballverse.App
         IDisposable _awake;
         SimPhaseView _lastPhase = SimPhaseView.Setup;
         CancellationTokenSource _generation;
+        readonly DisplayRateEstimator _displayRate = new DisplayRateEstimator();
         int _generationProgressBits = BitConverter.ToInt32(BitConverter.GetBytes(-1f), 0);
 
         public SimulationViewModel(AppContext ctx)
@@ -117,7 +119,9 @@ namespace Ballverse.App
 
         public bool IsPlaying => _ctx.Live.HasRun && !_ctx.Live.IsCompleted && !_userPaused && !_blocked;
 
-        public bool IsInteractive => _mode != null && ModeInteraction.IsPlayerControlled(_mode, _values);
+        /// <summary>The run takes player touches: an interactive mode with a registered input mapper (M05 only with
+        /// <c>control = player</c>; «Авто-ролик» and «Бот» are driven by the rules).</summary>
+        public bool IsInteractive => _mode != null && _ctx.Live.TakesPlayerInput(_mode, _values);
 
         public float Speed => _ctx.Live.HasRun ? _ctx.Live.TimeScale : (_values != null && _values.TryGet(CommonParams.TimeScale, out ParamValue ts) ? (float)ts.AsFloat : 1f);
 
@@ -166,24 +170,33 @@ namespace Ballverse.App
 
         // ------------------------------------------------------------------ opening
 
-        /// <summary>Opens a mode with its last parameters, else its first built-in preset (spec §4.3 gallery tap, first run).</summary>
-        public void Open(string modeId)
+        /// <summary>
+        /// Opens a mode with its last parameters, else its first built-in preset (spec §4.3 gallery tap, first run). False
+        /// (toast) when the mode is unknown or switched off by Remote Config.
+        /// </summary>
+        public bool Open(string modeId)
         {
             if (!_ctx.Remote.IsAvailable(modeId, out IModeDefinition mode))
             {
-                if (!_ctx.Modes.TryGet(modeId, out mode))
-                {
-                    _ctx.Notices.Toast(AppStrings.SimStartFailed);
-                    return;
-                }
+                if (_ctx.Modes.TryGet(modeId, out _)) _ctx.Notices.Toast(AppStrings.ModeUnavailable);
+                else _ctx.Notices.Toast(AppStrings.SimStartFailed);
+                return false;
             }
-            OpenWith(mode, InitialValues(mode));
+            return OpenWith(mode, InitialValues(mode));
         }
 
-        /// <summary>Opens a mode with given parameters (studio "Перегенерировать", a saved clip).</summary>
-        public void OpenWith(IModeDefinition mode, ParamSet values)
+        /// <summary>
+        /// Opens a mode with given parameters (studio "Перегенерировать", a saved clip). False (toast, nothing started) when
+        /// Remote Config switched the mode off (<c>modes_disabled</c>, spec §7.6 "аварийный выключатель").
+        /// </summary>
+        public bool OpenWith(IModeDefinition mode, ParamSet values)
         {
             if (mode == null) throw new ArgumentNullException(nameof(mode));
+            if (!_ctx.Remote.IsAvailable(mode.Info.Id, out _))
+            {
+                _ctx.Notices.Toast(AppStrings.ModeUnavailable);
+                return false;
+            }
             CancelGeneration();
             EndRun(GameRunEnd.Abandoned, false);
             bool modeChanged = _mode != mode;
@@ -197,6 +210,7 @@ namespace Ballverse.App
             StartRun(_values);
             WarnPhotosensitivity();
             Notify();
+            return true;
         }
 
         ParamSet InitialValues(IModeDefinition mode)
@@ -240,7 +254,8 @@ namespace Ballverse.App
             ILiveRunRecording recording = null;
             try
             {
-                recording = new RunRecordingAdapter(_ctx.Studio.Clips.BeginRun());
+                ClipLibrary clips = _ctx.Studio.Clips; // null while the studio is unavailable: the run plays unrecorded
+                if (clips != null) recording = new RunRecordingAdapter(clips.BeginRun());
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException || e is ArgumentException)
             {
@@ -347,7 +362,9 @@ namespace Ballverse.App
             var alive = new HashSet<string>(StringComparer.Ordinal);
             try
             {
-                foreach (ClipEntry e in _ctx.Studio.Clips.ListRuns()) alive.Add(e.Id);
+                ClipLibrary clips = _ctx.Studio.Clips;
+                if (clips != null) foreach (ClipEntry e in clips.ListRuns()) alive.Add(e.Id);
+                else foreach (RecentRun r in _recent) alive.Add(r.RunId);
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
             {
@@ -404,9 +421,11 @@ namespace Ballverse.App
         /// <summary>Steps the live run for this display frame (main thread, before the UI update).</summary>
         public void Tick(float deltaSeconds)
         {
+            // The measured display rate, not the target: at 30 FPS each frame runs two ticks so the run plays in real time.
+            int rate = _displayRate.Sample(deltaSeconds);
             if (_screenActive && IsPlaying && !_ctx.AppPaused)
             {
-                _ctx.Live.AdvanceDisplayFrame(Math.Max(1, _ctx.FrameRate.TargetFps), _ctx.Clock.NowSeconds);
+                _ctx.Live.AdvanceDisplayFrame(rate, _ctx.Clock.NowSeconds);
             }
             SimPhaseView phase = Phase;
             if (phase != _lastPhase)
@@ -436,13 +455,21 @@ namespace Ballverse.App
             Notify();
         }
 
+        /// <summary>
+        /// The result card is up: a natural pause where a pending interstitial may show (IN2). ↻ / 🎲 pressed while the run is
+        /// still going are not one.
+        /// </summary>
+        internal bool AtNaturalBreak => _result != null && Phase == SimPhaseView.Finished;
+
         public void Retry()
         {
             if (_mode == null) return;
+            bool atBreak = AtNaturalBreak;
             CancelGeneration();
             EndRun(GameRunEnd.RestartedBeforeFinale, false);
             ParamSet values = _values;
-            _ctx.Ads.At(NaturalBreakKind.Retry, () => StartRun(values));
+            if (atBreak && _ctx.Ads != null) _ctx.Ads.At(NaturalBreakKind.Retry, () => StartRun(values));
+            else StartRun(values);
         }
 
         public void TogglePlay()
@@ -486,7 +513,8 @@ namespace Ballverse.App
             _generation = cts;
             SetProgress(0f);
             Notify();
-            _ctx.Ads.At(NaturalBreakKind.Generate, () => StartGeneration(cts, styleId, durationId));
+            if (AtNaturalBreak && _ctx.Ads != null) _ctx.Ads.At(NaturalBreakKind.Generate, () => StartGeneration(cts, styleId, durationId));
+            else StartGeneration(cts, styleId, durationId);
         }
 
         void StartGeneration(CancellationTokenSource cts, string styleId, string durationId)
@@ -551,11 +579,11 @@ namespace Ballverse.App
             }
             if (result == null || !result.HasSelection || result.Values == null)
             {
-                RaiseNotice(LocalizedText.FromKey(AppStrings.GenerateWeak));
+                RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateWeak));
                 Notify();
                 return;
             }
-            if (result.Result != null && result.Result.QualityBelowThreshold) RaiseNotice(LocalizedText.FromKey(AppStrings.GenerateWeak));
+            if (result.Result != null && result.Result.QualityBelowThreshold) RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateWeak));
             if (!_ctx.Settings.Data.QuestGenerated)
             {
                 _ctx.Settings.Update(d => d.QuestGenerated = true);
@@ -647,12 +675,12 @@ namespace Ballverse.App
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException || e is ArgumentException)
             {
-                _ctx.Notices.Report("sim.to_video", e, AppStrings.OpenProjectFailed);
+                _ctx.Notices.Report("sim.to_video", e, _ctx.Studio is UnavailableStudioBackend ? AppStrings.StudioUnavailable : AppStrings.OpenProjectFailed);
                 Notify();
                 return;
             }
             LibraryChanged?.Invoke();
-            Studio?.OpenProject(doc.Id);
+            Studio?.OpenProject(doc.Id, true);
             Notify();
         }
 
@@ -664,10 +692,16 @@ namespace Ballverse.App
                 _ctx.Notices.Toast(AppStrings.RunTooShort);
                 return;
             }
+            ClipLibrary library = _ctx.Studio.Clips;
+            if (library == null)
+            {
+                _ctx.Notices.Toast(AppStrings.StudioUnavailable);
+                return;
+            }
             try
             {
-                _ctx.Studio.Clips.SaveRunAsClip(runId);
-                RaiseNotice(LocalizedText.FromKey(AppStrings.ClipSaved));
+                library.SaveRunAsClip(runId);
+                RaiseNotice(_ctx.Notices.TextOf(AppStrings.ClipSaved));
                 LibraryChanged?.Invoke();
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException || e is ArgumentException)
@@ -827,6 +861,7 @@ namespace Ballverse.App
 
         void OnAppPaused()
         {
+            _displayRate.Reset(Math.Max(1, _ctx.FrameRate.TargetFps));
             CancelGeneration();
             SaveLastParams();
         }
@@ -844,19 +879,18 @@ namespace Ballverse.App
     /// <summary>Whether the player controls a mode right now (spec §2.6).</summary>
     public static class ModeInteraction
     {
-        /// <summary>Name of the control parameter of modes with automatic and player variants (M05 <c>control</c>).</summary>
-        public const string ControlParam = "control";
+        /// <summary>Name of the control parameter of modes with automatic, bot and player variants (M05 <c>control</c>).</summary>
+        public const string ControlParam = ArenaControl.Param;
 
         /// <summary>
-        /// An interactive catalog mode is player-controlled unless its <c>control</c> parameter is at the schema default (the
-        /// automatic «Авто-ролик», spec §2.9 M05). Modes without that parameter are player-controlled when interactive.
+        /// An interactive catalog mode is player-controlled when it has no <c>control</c> parameter or that parameter is
+        /// exactly <c>player</c> (spec §2.9 M05: «Авто-ролик» and «Бот» run without the player and record no touches).
+        /// Whether touches actually reach the run also needs a registered input mapper (<c>LiveSimController.TakesPlayerInput</c>).
         /// </summary>
         public static bool IsPlayerControlled(IModeDefinition mode, ParamSet values)
         {
             if (mode == null || !mode.Info.Interactive) return false;
-            if (values == null || !mode.Schema.TryGet(ControlParam, out ParamDef def)) return true;
-            if (!values.TryGet(ControlParam, out ParamValue v)) return false;
-            return !v.Equals(def.Default);
+            return ArenaControl.IsPlayer(values);
         }
     }
 

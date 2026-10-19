@@ -131,34 +131,34 @@ namespace Ballverse.App.Tests
         }
 
         [Test]
-        public void GestureTrackerTurnsTouchesIntoTickCommands()
+        public void GestureTrackerTurnsTouchesIntoGestures()
         {
             var g = new ArenaGestureTracker();
             g.OnTouch(ArenaTouchPhase.Down, 0.5f, 0.5f, 1, 0.0);
-            Assert.IsTrue(g.TryDequeue(out ArenaCommand down));
-            Assert.AreEqual(ArenaInputTypes.HorizontalDrag, down.Type);
-            Assert.AreEqual(1, down.B);
-            Assert.AreEqual(5000, down.C);
+            Assert.IsTrue(g.TryDequeue(out ArenaGesture down));
+            Assert.AreEqual(ArenaGestureKind.Press, down.Kind);
+            Assert.AreEqual(0.5f, down.U);
 
             g.OnTouch(ArenaTouchPhase.Up, 0.5f, 0.5f, 1, 0.1);
-            Assert.IsTrue(g.TryDequeue(out ArenaCommand release));
-            Assert.AreEqual(0, release.B);
-            Assert.IsTrue(g.TryDequeue(out ArenaCommand tap));
-            Assert.AreEqual(ArenaInputTypes.Tap, tap.Type);
+            Assert.IsTrue(g.TryDequeue(out ArenaGesture release));
+            Assert.AreEqual(ArenaGestureKind.Release, release.Kind);
+            Assert.IsTrue(g.TryDequeue(out ArenaGesture tap));
+            Assert.AreEqual(ArenaGestureKind.Tap, tap.Kind);
             Assert.IsFalse(g.TryDequeue(out _));
 
             g.OnTouch(ArenaTouchPhase.Down, 0.2f, 0.5f, 2, 1.0);
             g.TryDequeue(out _);
             g.OnTouch(ArenaTouchPhase.Move, 0.3f, 0.5f, 2, 1.05);
             g.Update(1.05);
-            Assert.IsTrue(g.TryDequeue(out ArenaCommand drag));
-            Assert.Greater(drag.A, 0, "rightward drag velocity");
+            Assert.IsTrue(g.TryDequeue(out ArenaGesture drag));
+            Assert.AreEqual(ArenaGestureKind.Drag, drag.Kind);
+            Assert.Greater(drag.Velocity, 0f, "rightward drag velocity");
             g.Update(1.5);
-            Assert.IsTrue(g.TryDequeue(out ArenaCommand still));
-            Assert.AreEqual(0, still.A, "a still finger decays to zero velocity");
+            Assert.IsTrue(g.TryDequeue(out ArenaGesture still));
+            Assert.AreEqual(0f, still.Velocity, "a still finger decays to zero velocity");
             g.OnTouch(ArenaTouchPhase.Up, 0.3f, 0.5f, 2, 1.6);
-            Assert.IsTrue(g.TryDequeue(out ArenaCommand up));
-            Assert.AreEqual(0, up.B);
+            Assert.IsTrue(g.TryDequeue(out ArenaGesture up));
+            Assert.AreEqual(ArenaGestureKind.Release, up.Kind);
             Assert.IsFalse(g.TryDequeue(out _), "a moved press is not a tap");
         }
 

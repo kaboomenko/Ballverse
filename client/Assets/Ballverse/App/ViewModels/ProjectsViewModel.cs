@@ -7,6 +7,7 @@ using Ballverse.Core.Modes;
 using Ballverse.Core.Params;
 using Ballverse.Core.Projects;
 using Ballverse.Core.Studio;
+using Ballverse.Studio;
 using Ballverse.UI.ViewModels;
 using UnityEngine;
 
@@ -98,7 +99,8 @@ namespace Ballverse.App
                 {
                     _projects.Add(new ProjectCardData(p.Id, p.Name, p.DurationUs / 1000, ParseLocal(p.UpdatedAt ?? p.CreatedAt), p.ModeId, Cover(p.Id)));
                 }
-                foreach (ClipEntry c in _ctx.Studio.Clips.ListClips())
+                ClipLibrary library = _ctx.Studio.Clips;
+                if (library != null) foreach (ClipEntry c in library.ListClips())
                 {
                     ClipRecord r = c.Record;
                     _clips.Add(new ProjectCardData(c.Id, r.Name ?? DefaultClipName(r.ModeId), r.DurationTicks * 1000L / SimConstants.TickRate,
@@ -164,7 +166,7 @@ namespace Ballverse.App
             ClipEntry clip;
             try
             {
-                clip = _ctx.Studio.Clips.GetClip(id);
+                clip = _ctx.Studio.Clips?.GetClip(id);
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
             {
@@ -176,8 +178,8 @@ namespace Ballverse.App
                 _ctx.Notices.Toast(AppStrings.ProjectActionFailed);
                 return OpenTarget.None;
             }
-            _sim.OpenWith(mode, values);
-            return OpenTarget.Simulation;
+            // A mode switched off by Remote Config (modes_disabled) does not run from a saved clip either.
+            return _sim.OpenWith(mode, values) ? OpenTarget.Simulation : OpenTarget.None;
         }
 
         public bool Rename(ProjectsTab tab, string id, string title)
@@ -186,7 +188,7 @@ namespace Ballverse.App
             if (string.IsNullOrEmpty(name) || name.Length > MaxTitleLength) return false;
             try
             {
-                bool ok = tab == ProjectsTab.Projects ? _ctx.Studio.Rename(id, name) != null : _ctx.Studio.Clips.RenameClip(id, name) != null;
+                bool ok = tab == ProjectsTab.Projects ? _ctx.Studio.Rename(id, name) != null : _ctx.Studio.Clips?.RenameClip(id, name) != null;
                 Invalidate();
                 return ok;
             }
@@ -223,7 +225,7 @@ namespace Ballverse.App
                 }
                 else
                 {
-                    _ctx.Studio.Clips.DeleteClip(id);
+                    _ctx.Studio.Clips?.DeleteClip(id);
                 }
                 Invalidate();
             }

@@ -6,6 +6,10 @@ namespace Ballverse.Sim
     /// Plays <see cref="LiveAudioEngine"/> on the Unity audio thread: an <see cref="AudioSource"/> loops a silent clip so Unity
     /// calls <see cref="OnAudioFilterRead"/>, where the engine renders the event mixer (spec §7.8, latency ≤ 50 ms). The
     /// engine's latency follows the DSP buffer size. Survives scene loads.
+    /// <para>Two device rules (Unity mixes nothing otherwise): the source must NOT set <c>bypassEffects</c> — that also
+    /// bypasses this component's <c>OnAudioFilterRead</c>, which is inserted as a custom filter in the source's DSP chain —
+    /// and an enabled <see cref="AudioListener"/> must exist for the whole app. The boot scene has no camera, so this
+    /// component adds a listener to its own (persistent) object when none is active; Studio's preview output then reuses it.</para>
     /// </summary>
     [RequireComponent(typeof(AudioSource))]
     public sealed class LiveAudioOutput : MonoBehaviour
@@ -42,10 +46,21 @@ namespace Ballverse.Sim
             _source.spatialBlend = 0f;
             _source.volume = 1f;
             _source.priority = 0;
-            _source.bypassEffects = true;
+            // Not bypassEffects: it would also bypass OnAudioFilterRead, the only thing producing sound.
             _source.bypassListenerEffects = true;
             _source.bypassReverbZones = true;
             AudioSettings.OnAudioConfigurationChanged += OnAudioConfigurationChanged;
+            EnsureListener();
+        }
+
+        /// <summary>The app-wide listener: added to this persistent object unless an enabled one already exists.</summary>
+        void EnsureListener()
+        {
+            AudioListener existing = Object.FindAnyObjectByType<AudioListener>();
+            if (existing != null && existing.isActiveAndEnabled) return;
+            AudioListener own = GetComponent<AudioListener>();
+            if (own == null) own = gameObject.AddComponent<AudioListener>();
+            own.enabled = true;
         }
 
         void OnEnable()

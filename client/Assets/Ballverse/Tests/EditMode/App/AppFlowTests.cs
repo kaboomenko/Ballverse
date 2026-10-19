@@ -202,9 +202,12 @@ namespace Ballverse.App.Tests
             app.Context.Ads.InStudio = false;
             Assert.AreEqual(0, app.Ui.AdNotices);
 
-            // Retry: «Реклама» plaque, the ad, then the run restarts.
+            // Retry on the result card (a natural pause, IN2): «Реклама» plaque, the ad, then the run restarts.
             bool? shown = null;
             app.Context.Ads.InterstitialDone += s => shown = s;
+            app.OpenQuickRun();
+            app.RunToEnd();
+            Assert.IsNotNull(app.Sim.Result, "result card");
             app.Sim.Retry();
             Assert.AreEqual(NaturalBreakKind.Retry, lastKind);
             Assert.IsTrue(lastDecision.IsShow);
@@ -213,14 +216,16 @@ namespace Ballverse.App.Tests
             Assert.IsTrue(app.Context.Live.HasRun && !app.Context.Live.IsCompleted, "the action continues after the ad");
 
             // The counter restarted: the next break shows nothing.
+            app.RunToEnd();
             app.Sim.Retry();
             Assert.AreEqual(InterstitialDecisionKind.None, lastDecision.Kind);
             Assert.AreEqual(1, app.Ui.AdNotices);
 
-            // Generate is a natural break too (after three more games and the 60 s minimum interval).
+            // 🎲 on the result card is a natural break too (after three more games and the 60 s minimum interval).
             for (int i = 0; i < 3; i++) app.Context.Ads.OnRunEnded(GameRunSummary.FinishedRegular(600));
             app.Clock.Advance(61_000);
             app.Services.Tick();
+            app.RunToEnd();
             app.Sim.Generate();
             Assert.AreEqual(NaturalBreakKind.Generate, lastKind);
             Assert.IsTrue(lastDecision.IsShow);

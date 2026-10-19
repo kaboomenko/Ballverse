@@ -243,7 +243,7 @@ namespace Ballverse.Tests
                 Assert.IsInstanceOf<PlatformModule>(modules[0]);
 
                 // The other device modules need Play Mode (DontDestroyOnLoad runners, SDKs); the whole catalog boots with
-                // fakes in Ballverse.App.Tests (AppCompositionTests).
+                // fakes in Ballverse.App.Tests (AppFlowTests).
                 var host = new AppHost(new[] { modules[0] }, Report);
                 host.Boot();
                 Assert.AreSame(platform.Lifecycle, host.Services.Get<IAppLifecycle>());

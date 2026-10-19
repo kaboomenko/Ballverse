@@ -19,6 +19,7 @@ namespace Ballverse.App
         readonly SimulationViewModel _sim;
         readonly List<ModeCardData> _cards = new List<ModeCardData>();
         bool _previewsActive;
+        readonly Ballverse.Sim.DisplayRateEstimator _displayRate = new Ballverse.Sim.DisplayRateEstimator();
 
         public GalleryViewModel(AppContext ctx, SimulationViewModel sim)
             : base(ctx.Notices.Report)
@@ -53,7 +54,7 @@ namespace Ballverse.App
             if (!_previewsActive || _ctx.Previews == null || _ctx.AppPaused) return;
             try
             {
-                _ctx.Previews.Update(deltaSeconds, Math.Max(1, _ctx.FrameRate.TargetFps), _ctx.Clock.NowSeconds);
+                _ctx.Previews.Update(deltaSeconds, _displayRate.Sample(deltaSeconds), _ctx.Clock.NowSeconds);
             }
             catch (Exception e) when (e is InvalidOperationException || e is ArgumentException)
             {

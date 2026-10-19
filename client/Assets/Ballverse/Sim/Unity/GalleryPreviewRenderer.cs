@@ -101,6 +101,9 @@ namespace Ballverse.Sim
         public void Update(float deltaSeconds, int displayFrameRate, double nowSeconds)
         {
             if (_disposed || !Active || _entries.Count == 0) return;
+            // At most one loop restart per display frame: a restart rebuilds the session (~100 KB of managed allocation), so
+            // the cards restart on successive frames instead of all in the same one (spec §8.2 P3 frame pacing).
+            bool restarted = false;
             for (int i = 0; i < _entries.Count; i++)
             {
                 Entry e = _entries[i];
@@ -110,6 +113,12 @@ namespace Ballverse.Sim
                         || (Animated && e.Controller.Tick >= LoopSeconds * SimConstants.TickRate))
                     {
                         if (e.Controller.HasRun && !Animated && e.Drawn) continue;
+                        if (restarted)
+                        {
+                            if (Animated && e.Controller.HasRun && !e.Controller.IsCompleted) e.Controller.AdvanceDisplayFrame(displayFrameRate, nowSeconds);
+                            continue;
+                        }
+                        restarted = true;
                         e.Controller.End(GameRunEnd.Abandoned, false);
                         e.Controller.Begin(e.Mode, e.Values, e.Seed, null);
                     }

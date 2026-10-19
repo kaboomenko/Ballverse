@@ -106,7 +106,8 @@ namespace Ballverse.App
     /// <summary>
     /// Studio runtime (spec §3, §7.5): storage, recent runs and clips, projects with autosave, preview, MP4 export with resume.
     /// The rewarded gate bridge is published at registration; the runtime is created at start from the media bridge and the
-    /// platform services.
+    /// platform services. When it cannot start (storage error, full disk) the failure is reported and an
+    /// <see cref="UnavailableStudioBackend"/> takes its place, so the rest of the app still comes up (spec §7.12).
     /// </summary>
     public sealed class StudioModule : IAppModule
     {
@@ -129,19 +130,28 @@ namespace Ballverse.App
 
         public void Start(AppModuleContext context)
         {
-            if (_env.CreateStudio == null) throw new InvalidOperationException("No studio factory");
             AppServices s = context.Services;
-            _runtime.Backend = _env.CreateStudio(new StudioEnvironment
+            try
             {
-                Paths = s.Get<IAppPaths>(),
-                Media = s.Get<IMediaBridge>(),
-                Lifecycle = s.Get<IAppLifecycle>(),
-                ScreenAwake = s.Get<IScreenAwake>(),
-                Gate = _runtime.Gate,
-                Modes = s.Get<ModeRegistry>(),
-                Tier = DeviceTierDetector.Detect(_env.Device, s.Get<BallverseServices>().RemoteConfig.Current),
-                ReportError = context.ReportError,
-            });
+                if (_env.CreateStudio == null) throw new InvalidOperationException("No studio factory");
+                _runtime.Backend = _env.CreateStudio(new StudioEnvironment
+                {
+                    Paths = s.Get<IAppPaths>(),
+                    Media = s.Get<IMediaBridge>(),
+                    Lifecycle = s.Get<IAppLifecycle>(),
+                    ScreenAwake = s.Get<IScreenAwake>(),
+                    Gate = _runtime.Gate,
+                    Modes = s.Get<ModeRegistry>(),
+                    Tier = DeviceTierDetector.Detect(_env.Device, s.Get<BallverseServices>().RemoteConfig.Current),
+                    ReportError = context.ReportError,
+                }) ?? throw new InvalidOperationException("The studio factory returned no backend");
+            }
+            catch (Exception e)
+            {
+                // Degraded: the simulation, gallery, shop and settings keep working without the studio (spec §7.12).
+                context.ReportError("Studio: start", e);
+                _runtime.Backend = new UnavailableStudioBackend(e);
+            }
         }
 
         public void Shutdown()
@@ -178,7 +188,7 @@ namespace Ballverse.App
         {
             AppServices s = context.Services;
             StudioRuntime studio = s.Get<StudioRuntime>();
-            if (studio.Backend == null) throw new InvalidOperationException("The studio runtime did not start");
+            if (studio.Backend == null) studio.Backend = new UnavailableStudioBackend(new InvalidOperationException("The studio runtime did not start"));
             var composition = new AppComposition(new AppCompositionOptions
             {
                 Services = s.Get<BallverseServices>(),

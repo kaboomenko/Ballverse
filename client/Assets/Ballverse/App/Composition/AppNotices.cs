@@ -6,9 +6,9 @@ using Ballverse.UI.Localization;
 namespace Ballverse.App
 {
     /// <summary>
-    /// Localization keys of the toasts the composition root raises. Keys marked "app.*" are not in the UI string tables yet
-    /// (the UI shows a readable stand-in until they are added, see the App README); the others exist in
-    /// <c>UI/Resources/BallverseUI/Localization</c>.
+    /// Localization keys of the toasts the composition root raises. Keys marked "app.*" are not in the UI string tables yet:
+    /// <see cref="AppText"/> supplies their EN / RU texts until the UI track adds them (see the App README); the others exist
+    /// in <c>UI/Resources/BallverseUI/Localization</c>.
     /// </summary>
     public static class AppStrings
     {
@@ -29,6 +29,8 @@ namespace Ballverse.App
         public const string GenerateWeak = "app.generate.weak";
         public const string GenerateFailed = "app.generate.failed";
         public const string SimStartFailed = "app.sim.start_failed";
+        public const string ModeUnavailable = "app.sim.mode_unavailable";
+        public const string StudioUnavailable = "app.studio.unavailable";
         public const string RunTooShort = "app.sim.run_too_short";
         public const string RecordingFailed = "app.sim.recording_failed";
         public const string OpenProjectFailed = "app.studio.open_failed";
@@ -55,9 +57,10 @@ namespace Ballverse.App
     }
 
     /// <summary>
-    /// One place for user-visible notices and non-fatal error reports: <see cref="Toast"/> queues a toast for the UI (shown on
-    /// the main thread at the next tick), <see cref="Report"/> logs an exception to the crash reporter / log with a context and
-    /// optionally shows a localized toast (spec §7.12: native and SDK failures never crash the app).
+    /// One place for user-visible notices and non-fatal error reports: <see cref="Toast"/> shows a toast through the UI shell
+    /// at once (main thread only — worker threads post through <see cref="AppWorkQueue"/> first), <see cref="Report"/> logs
+    /// an exception to the crash reporter / log with a context and optionally shows a localized toast (spec §7.12: native and
+    /// SDK failures never crash the app). Keys go through <see cref="Text"/> (EN / RU texts of keys the UI tables lack).
     /// </summary>
     public sealed class AppNotices
     {
@@ -74,9 +77,18 @@ namespace Ballverse.App
 
         public void AttachUi(Action<LocalizedText> show) => _show = show;
 
+        /// <summary>Texts of keys the UI tables do not have yet (set by the composition); null = keys only.</summary>
+        public AppText Text { get; set; }
+
+        /// <summary>The localized text of <paramref name="key"/> (see <see cref="AppText"/>).</summary>
+        public LocalizedText TextOf(string key, params object[] args)
+        {
+            return Text != null ? Text.Of(key, args) : LocalizedText.FromKey(key, args);
+        }
+
         public void Toast(string key, params object[] args)
         {
-            Toast(LocalizedText.FromKey(key, args));
+            Toast(TextOf(key, args));
         }
 
         public void Toast(LocalizedText text)
@@ -105,15 +117,17 @@ namespace Ballverse.App
     }
 
     /// <summary>
-    /// Work posted from worker threads (generation, file tasks) and run on the main thread at the next app tick. Lock-free
-    /// queue; actions that throw are reported and do not stop the others.
+    /// Work posted from the App's worker threads (generation, file tasks) and run on the main thread at the next app tick.
+    /// Lock-free queue; actions that throw are reported through the App's error sink and do not stop the others. (Services
+    /// keep their own <c>Ballverse.Services.MainThreadQueue</c> for SDK callbacks, drained by the services runner; this one is
+    /// drained by <see cref="AppComposition.Tick"/> first thing each frame.)
     /// </summary>
-    public sealed class MainThreadQueue
+    public sealed class AppWorkQueue
     {
         readonly ConcurrentQueue<Action> _queue = new ConcurrentQueue<Action>();
         readonly Action<string, Exception> _report;
 
-        public MainThreadQueue(Action<string, Exception> report)
+        public AppWorkQueue(Action<string, Exception> report)
         {
             _report = report ?? ((c, e) => { });
         }

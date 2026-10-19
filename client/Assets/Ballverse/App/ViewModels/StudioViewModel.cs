@@ -22,7 +22,9 @@ namespace Ballverse.App
     /// Studio screen (spec §3.3–§3.7, §4.3): one open project (autosaved, 50-step undo) with the composited 9:16 preview, the
     /// timeline built from Core <c>StudioTimeline</c>, the layout slots from Core <c>LayoutCalculator</c> (gestures), and the
     /// five tools. Every edit goes through the project session (sanitized by Core) and reaches the preview within one frame.
-    /// The preview is released before an export and reopened afterwards (memory budget, spec §7.11). Main thread.
+    /// The preview is released before an export and reopened afterwards (memory budget, spec §7.11): every preview opening
+    /// has its own generation and cancellation, so closing the project, opening another one or suspending for an export while
+    /// an opening is still rebuilding the render stream discards that opening's result. Main thread.
     /// </summary>
     public sealed class StudioViewModel : ViewModelBase, IStudioViewModel
     {
@@ -40,6 +42,8 @@ namespace Ballverse.App
         IStudioPreview _preview;
         IStudioThumbnails _thumbnails;
         bool _previewOpening;
+        int _previewGeneration;
+        CancellationTokenSource _previewCts;
         StudioTimelineData _timeline;
         bool _active;
         bool _suspended;
@@ -95,8 +99,12 @@ namespace Ballverse.App
 
         // ------------------------------------------------------------------ project
 
-        /// <summary>Opens a project for editing ("В видео", projects tab). Returns false (toast) when it cannot be opened.</summary>
-        public bool OpenProject(string projectId)
+        /// <summary>
+        /// Opens a project for editing ("В видео", projects tab). Returns false (toast) when it cannot be opened.
+        /// <paramref name="created"/>: the project was just made from a run — it takes the app-wide defaults (Settings
+        /// «Водяной знак» of a NO_WATERMARK owner) without an undo step.
+        /// </summary>
+        public bool OpenProject(string projectId, bool created = false)
         {
             Close();
             IStudioProject project;
@@ -116,6 +124,7 @@ namespace Ballverse.App
                 return false;
             }
             _project = project;
+            if (created) ApplyNewProjectDefaults(project);
             _project.Changed += OnDocumentChanged;
             _io = new CancellationTokenSource();
             _text.ResetSelection();
@@ -127,9 +136,24 @@ namespace Ballverse.App
             return true;
         }
 
+        void ApplyNewProjectDefaults(IStudioProject project)
+        {
+            try
+            {
+                if (!_ctx.Services.Entitlements.Contains(Entitlement.NoWatermark)) return;
+                bool keep = _ctx.Settings.Data.KeepWatermark;
+                if (project.Document.Output.Watermark != keep) project.ApplyMetadata(d => d.Output.Watermark = keep);
+            }
+            catch (Exception e) when (e is IOException || e is InvalidOperationException || e is ArgumentException)
+            {
+                _ctx.Notices.Report("studio.project_defaults", e);
+            }
+        }
+
         /// <summary>Saves and closes the open project and its preview.</summary>
         public void Close()
         {
+            CancelPreviewOpening();
             ClosePreview();
             if (_io != null)
             {
@@ -160,8 +184,9 @@ namespace Ballverse.App
         /// <summary>Releases the preview (before an export: its mix and textures are freed, spec §7.11).</summary>
         public void SuspendPreview()
         {
-            if (_preview == null) return;
+            // Also while an opening is still in flight: its result is discarded and nothing reopens until ResumePreview.
             _suspended = true;
+            CancelPreviewOpening();
             ClosePreview();
             Notify();
         }
@@ -178,12 +203,26 @@ namespace Ballverse.App
 
         void OpenPreview()
         {
-            if (_project == null || _preview != null || _previewOpening) return;
+            if (_project == null || _preview != null || _previewOpening || _suspended) return;
             _previewOpening = true;
-            OpenPreviewAsync(_project, _io != null ? _io.Token : CancellationToken.None);
+            int generation = ++_previewGeneration;
+            _previewCts = _io != null ? CancellationTokenSource.CreateLinkedTokenSource(_io.Token) : new CancellationTokenSource();
+            OpenPreviewAsync(_project, generation, _previewCts.Token);
         }
 
-        async void OpenPreviewAsync(IStudioProject project, CancellationToken ct)
+        /// <summary>Discards the opening in flight (its result is disposed when it arrives) and allows a new one.</summary>
+        void CancelPreviewOpening()
+        {
+            _previewGeneration++;
+            _previewOpening = false;
+            CancellationTokenSource cts = _previewCts;
+            _previewCts = null;
+            // Cancel only: the opening may still register on its token, so the source is left to the collector (a linked
+            // source's registration on _io ends when _io is disposed).
+            cts?.Cancel();
+        }
+
+        async void OpenPreviewAsync(IStudioProject project, int generation, CancellationToken ct)
         {
             IStudioPreview preview = null;
             try
@@ -193,16 +232,24 @@ namespace Ballverse.App
             catch (OperationCanceledException)
             {
             }
-            catch (Exception e) when (e is IOException || e is InvalidDataException || e is UnauthorizedAccessException
-                                      || e is InvalidOperationException || e is ArgumentException)
+            catch (Exception e)
             {
-                _ctx.Notices.Report("studio.preview", e, AppStrings.PreviewFailed);
+                // async void: every failure (media, render stream unavailable, storage) is reported, never rethrown.
+                if (generation == _previewGeneration) _ctx.Notices.Report("studio.preview", e, AppStrings.PreviewFailed);
+                else _ctx.Notices.Report("studio.preview_stale", e);
             }
-            _previewOpening = false;
-            if (preview == null) return;
-            if (_project != project || _suspended || ct.IsCancellationRequested)
+            bool current = generation == _previewGeneration;
+            if (current)
             {
-                preview.Dispose();
+                _previewOpening = false;
+                CancellationTokenSource cts = _previewCts;
+                _previewCts = null;
+                cts?.Dispose();
+            }
+            if (preview == null) return;
+            if (!current || _project != project || _suspended || ct.IsCancellationRequested || _preview != null)
+            {
+                SafeDispose(preview);
                 return;
             }
             _preview = preview;
@@ -268,6 +315,18 @@ namespace Ballverse.App
                 _ctx.Notices.Report("studio.preview_close", e);
             }
             _preview = null;
+        }
+
+        void SafeDispose(IStudioPreview preview)
+        {
+            try
+            {
+                preview.Dispose();
+            }
+            catch (Exception e) when (e is InvalidOperationException || e is IOException)
+            {
+                _ctx.Notices.Report("studio.preview_close", e);
+            }
         }
 
         void OnPreviewTarget(Texture t) => Notify();

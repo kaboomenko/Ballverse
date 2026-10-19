@@ -61,7 +61,7 @@ namespace Ballverse.App
                 _purchasing = null;
                 if (_ctx.Ads != null) _ctx.Ads.InPurchaseFlow = false;
                 _ctx.Notices.Report("shop.purchase", e);
-                Raise(LocalizedText.FromKey(AppStrings.PurchaseFailed));
+                Raise(_ctx.Notices.TextOf(AppStrings.PurchaseFailed));
                 Rebuild();
             }
         }
@@ -74,19 +74,19 @@ namespace Ballverse.App
             {
                 case PurchaseResultKind.Purchased:
                 case PurchaseResultKind.AlreadyOwned:
-                    Raise(LocalizedText.FromKey(AppStrings.PurchaseSuccess));
+                    Raise(_ctx.Notices.TextOf(AppStrings.PurchaseSuccess));
                     break;
                 case PurchaseResultKind.Pending:
-                    Raise(LocalizedText.FromKey(AppStrings.PurchasePending));
+                    Raise(_ctx.Notices.TextOf(AppStrings.PurchasePending));
                     break;
                 case PurchaseResultKind.Cancelled:
                     break;
                 case PurchaseResultKind.NotAvailable:
-                    Raise(LocalizedText.FromKey(AppStrings.StoreUnavailable));
+                    Raise(_ctx.Notices.TextOf(AppStrings.StoreUnavailable));
                     break;
                 default:
                     _ctx.Notices.Report("shop.purchase", new InvalidOperationException(outcome.ToString()));
-                    Raise(LocalizedText.FromKey(AppStrings.PurchaseFailed));
+                    Raise(_ctx.Notices.TextOf(AppStrings.PurchaseFailed));
                     break;
             }
             Rebuild();
@@ -102,11 +102,11 @@ namespace Ballverse.App
                 _ctx.Services.Purchases.Restore(outcome =>
                 {
                     IsRestoring = false;
-                    if (outcome.Success) Raise(LocalizedText.FromKey(AppStrings.RestoreDone));
+                    if (outcome.Success) Raise(_ctx.Notices.TextOf(AppStrings.RestoreDone));
                     else
                     {
                         _ctx.Notices.Report("shop.restore", new InvalidOperationException(outcome.ErrorCode ?? "restore failed"));
-                        Raise(LocalizedText.FromKey(AppStrings.RestoreFailed));
+                        Raise(_ctx.Notices.TextOf(AppStrings.RestoreFailed));
                     }
                     Rebuild();
                 });
@@ -115,7 +115,7 @@ namespace Ballverse.App
             {
                 IsRestoring = false;
                 _ctx.Notices.Report("shop.restore", e);
-                Raise(LocalizedText.FromKey(AppStrings.RestoreFailed));
+                Raise(_ctx.Notices.TextOf(AppStrings.RestoreFailed));
                 Notify();
             }
         }

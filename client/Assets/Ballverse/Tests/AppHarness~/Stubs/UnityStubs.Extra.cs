@@ -60,6 +60,7 @@ namespace UnityEngine
     {
         public static int width => 1080;
         public static int height => 1920;
+        public static float dpi => 420f;
         public static Rect safeArea => default;
         public static int sleepTimeout { get => 0; set { } }
     }

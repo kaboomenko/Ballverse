@@ -4,6 +4,7 @@ using System.IO;
 using Ballverse.Core;
 using Ballverse.Core.Modes;
 using Ballverse.Core.Monetization;
+using Ballverse.Core.Projects;
 using Ballverse.Media;
 using Ballverse.Services;
 using Ballverse.UI.Localization;
@@ -55,7 +56,12 @@ namespace Ballverse.App
         public bool HighContrast => D.HighContrast;
         public bool BallPatterns => D.BallPatterns;
         public bool HasNoWatermark => _ctx.Services.Entitlements.Contains(Entitlement.NoWatermark);
-        public bool WatermarkEnabled => !HasNoWatermark || D.KeepWatermark;
+        /// <summary>
+        /// The watermark of new videos (Core <see cref="WatermarkPolicy"/>: drawn without NO_WATERMARK, never while the remote
+        /// kill switch is off). Owners choose with <see cref="SetWatermarkEnabled"/>: it is the default "keep the watermark"
+        /// toggle of every new project (each project's export sheet can still change its own).
+        /// </summary>
+        public bool WatermarkEnabled => WatermarkPolicy.Resolve(D.KeepWatermark, HasNoWatermark, _ctx.Remote.WatermarkEnabled);
         public bool AutoSaveToGallery => D.AutoSaveToGallery;
         public bool CopyCaptionOnShare => D.CopyCaptionOnShare;
         public bool PrivacyOptionsAvailable => _ctx.Services.Consent.PrivacyOptions == PrivacyOptionsRequirement.Required;
@@ -97,7 +103,10 @@ namespace Ballverse.App
             QualityChanged?.Invoke();
         });
 
-        public void SetLanguage(LanguagePreference language) => Change(d => d.Language = language, null);
+        public void SetLanguage(LanguagePreference language) => Change(d => d.Language = language, () => LanguageChanged?.Invoke());
+
+        /// <summary>The interface language changed (texts the App resolves itself are rebuilt).</summary>
+        public event Action LanguageChanged;
         public void SetTheme(ThemePreference theme) => Change(d => d.Theme = theme, null);
         public void SetSafeFlashes(bool on) => Change(d => d.SafeFlashes = on, ApplyMotion);
         public void SetReduceMotion(ReduceMotionPreference preference) => Change(d => d.ReduceMotion = preference, ApplyMotion);
@@ -125,7 +134,7 @@ namespace Ballverse.App
                     if (error != null)
                     {
                         _ctx.Notices.Report("settings.privacy", new InvalidOperationException(error));
-                        Raise(LocalizedText.FromKey(AppStrings.PrivacyFailed));
+                        Raise(_ctx.Notices.TextOf(AppStrings.PrivacyFailed));
                     }
                     Notify();
                 });
@@ -133,7 +142,7 @@ namespace Ballverse.App
             catch (Exception e)
             {
                 _ctx.Notices.Report("settings.privacy", e);
-                Raise(LocalizedText.FromKey(AppStrings.PrivacyFailed));
+                Raise(_ctx.Notices.TextOf(AppStrings.PrivacyFailed));
             }
         }
 
@@ -190,7 +199,7 @@ namespace Ballverse.App
                 {
                     foreach (string f in Directory.GetFiles(thumbs)) File.Delete(f);
                 }
-                Raise(LocalizedText.FromKey(AppStrings.CacheCleared));
+                Raise(_ctx.Notices.TextOf(AppStrings.CacheCleared));
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException)
             {

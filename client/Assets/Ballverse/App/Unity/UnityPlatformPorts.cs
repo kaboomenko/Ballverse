@@ -40,6 +40,15 @@ namespace Ballverse.App
         }
 
         public string AppVersion => Application.version;
+
+        public float ScreenWidthPoints
+        {
+            get
+            {
+                float dpi = Screen.dpi;
+                return dpi > 1f ? Mathf.Min(Screen.width, Screen.height) * 160f / dpi : 0f;
+            }
+        }
     }
 
     /// <summary><see cref="IPlatformActions"/> on Android (JNI) / iOS (URL schemes) / the editor.</summary>

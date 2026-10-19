@@ -112,6 +112,7 @@ namespace Ballverse.App.Tests
         public string GpuName { get; set; } = "Adreno (TM) 740";
         public int SystemMemoryMb { get; set; } = 8192;
         public string LanguageTag { get; set; } = "en";
+        public float ScreenWidthPoints { get; set; } = 390f;
         public float FontScale { get; set; } = 1f;
         public string AppVersion { get; set; } = "1.0.0 (1)";
     }
@@ -256,11 +257,33 @@ namespace Ballverse.App.Tests
 
         public ClipReadiness RunReadiness(string runId) => _repair.Readiness(Clips.GetRun(runId));
 
+        /// <summary>Previews stay "opening" until the test completes their entry in <see cref="PendingPreviews"/> (in call order).</summary>
+        public bool HoldPreviews;
+        public readonly List<TaskCompletionSource<bool>> PendingPreviews = new List<TaskCompletionSource<bool>>();
+        /// <summary>Every preview this backend opened, with the project it belongs to.</summary>
+        public readonly List<KeyValuePair<string, FakePreview>> OpenedPreviews = new List<KeyValuePair<string, FakePreview>>();
+        /// <summary>The next preview opening throws this (e.g. a MediaException).</summary>
+        public Exception FailNextPreviewWith;
+
         public async Task<IStudioPreview> OpenPreviewAsync(IStudioProject project, IProgress<double> progress, CancellationToken ct)
         {
+            if (HoldPreviews)
+            {
+                var hold = new TaskCompletionSource<bool>();
+                PendingPreviews.Add(hold);
+                await hold.Task.ConfigureAwait(true);
+            }
+            if (FailNextPreviewWith != null)
+            {
+                Exception e = FailNextPreviewWith;
+                FailNextPreviewWith = null;
+                throw e;
+            }
             if (!await _repair.EnsureAsync(project.Directory, progress, ct).ConfigureAwait(true))
                 throw new RenderStreamUnavailableException("the clip's render stream is missing and cannot be rebuilt from its replay");
-            return new FakePreview(project);
+            var preview = new FakePreview(project);
+            OpenedPreviews.Add(new KeyValuePair<string, FakePreview>(project.ProjectId, preview));
+            return preview;
         }
 
         public IStudioThumbnails OpenThumbnails(IStudioProject project)
@@ -399,6 +422,12 @@ namespace Ballverse.App.Tests
             IReadOnlyList<ValidationIssue> issues = _edit.Apply(edit, coalesceKey);
             Changed?.Invoke(_edit.Document);
             return issues;
+        }
+
+        public void ApplyMetadata(Action<ProjectDocument> change)
+        {
+            _edit.ApplyMetadata(change);
+            Changed?.Invoke(_edit.Document);
         }
 
         public bool Undo()
