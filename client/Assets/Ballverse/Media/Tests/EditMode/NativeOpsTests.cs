@@ -234,11 +234,13 @@ namespace Ballverse.Media.Tests
         // CI failure (UiShellTests, ~20 s after this fixture): the fallback timer of an operation whose native side reported
         // in time was never stopped; it fired after the test, when no main-thread dispatcher existed any more, and logged an
         // error during an unrelated test. Now the report stops the timer, and nothing of the finished test runs or logs
-        // after its dispatcher is gone.
+        // after its dispatcher is gone. The timeout leaves a wide margin (the report arrives within a few ms of the cancel; only
+        // a main-thread stall of more than ~1 s, e.g. a GC pause on a loaded CI runner, would let the fallback fire first and
+        // log), while the sleep after the report still reaches well past it.
         [Test]
         public void CancelWaitsForNative_ReportInTime_TimerStopped_NothingLogsAfterTeardown()
         {
-            NativeOps.NativeCancelTimeoutMs = 100;
+            NativeOps.NativeCancelTimeoutMs = 1000;
             var cts = new CancellationTokenSource();
             Task<string> task = StartWaiting(cts.Token);
             cts.Cancel();
@@ -249,7 +251,7 @@ namespace Ballverse.Media.Tests
             Assert.IsTrue(task.IsCanceled);
             Assert.AreEqual(0, _ops.ArmedCancelTimerCount, "the fallback timer outlived its operation");
             _pump.Dispose(); // as after the end of a test: no main-thread dispatcher (idempotent; TearDown disposes again)
-            Thread.Sleep(400); // well past the 100 ms timeout
+            Thread.Sleep(1500); // well past the 1000 ms timeout
             LogAssert.NoUnexpectedReceived();
         }
 

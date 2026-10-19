@@ -162,12 +162,21 @@ namespace Unity.Collections.LowLevel.Unsafe
 namespace UnityEngine.TestTools
 {
     /// <summary>
-    /// Stand-in for the Unity Test Framework's LogAssert (com.unity.test-framework). Same rule as UTF's LogScope: every
-    /// <see cref="LogType.Error"/>, <see cref="LogType.Assert"/> or <see cref="LogType.Exception"/> log received while a test
-    /// runs — from any thread — fails that test unless an <see cref="Expect(LogType, Regex)"/> matches it (expectations are
-    /// matched in order against the logs in arrival order) or <see cref="ignoreFailingMessages"/> is set; an expectation
-    /// that no log matched fails the test too. A log that arrives after its test ended is charged to whichever test runs
-    /// then, exactly the CI failure mode of a leaked timer.
+    /// Stand-in for the Unity Test Framework's LogAssert (com.unity.test-framework), following UTF's LogScope
+    /// (LogScope.AddLog / ProcessExpectedLogs / EvaluateLogScope / NoUnexpectedReceived):
+    /// <list type="bullet">
+    /// <item>Every log received while a test runs — from any thread — is recorded. Expectations
+    /// (<see cref="Expect(LogType, Regex)"/>) are matched in order against the not yet matched logs in arrival order; a
+    /// matched log is "handled".</item>
+    /// <item>End of test: an <see cref="LogType.Error"/>, <see cref="LogType.Assert"/> or <see cref="LogType.Exception"/> log
+    /// that no expectation matched fails the test, unless <see cref="ignoreFailingMessages"/> was set when it arrived; an
+    /// expectation that no log matched fails the test too. Unmatched Log/Warning entries do not.</item>
+    /// <item><see cref="NoUnexpectedReceived"/>: fails on any log no expectation matched, whatever its type (Log and Warning
+    /// included) and regardless of <see cref="ignoreFailingMessages"/>.</item>
+    /// </list>
+    /// A log that arrives after its test ended is charged to whichever test runs then, exactly the CI failure mode of a
+    /// leaked timer. Not modelled: UTF's NUnit result-state exception filtering and its "failing log matched an expectation
+    /// out of order" message (such a case fails here too, as an unhandled log).
     /// </summary>
     public static class LogAssert
     {
@@ -181,7 +190,7 @@ namespace UnityEngine.TestTools
 
         public static void Expect(LogType type, Regex message) => LogScope.Expect(type, null, message);
 
-        /// <summary>Fails now if an unexpected failing log was received so far in this test.</summary>
+        /// <summary>Fails now if any log (of any type) received so far in this test was not matched by an expectation.</summary>
         public static void NoUnexpectedReceived()
         {
             string failure = LogScope.Check(false);
@@ -195,8 +204,10 @@ namespace UnityEngine.TestTools
         {
             public LogType Type;
             public string Message;
+            /// <summary>Error/Assert/Exception logged while <see cref="IgnoreFailingMessages"/> was off (UTF FailingLogs).</summary>
+            public bool Failing;
+            /// <summary>Matched by an expectation (UTF LogEvent.IsHandled).</summary>
             public bool Handled;
-            public bool Consumed;
         }
 
         sealed class Match
@@ -220,7 +231,7 @@ namespace UnityEngine.TestTools
         internal static void Add(LogType type, string message)
         {
             Console.WriteLine("[" + type + "] " + message);
-            lock (s_lock) s_logs.Add(new Entry { Type = type, Message = message, Handled = !IsFailing(type) || IgnoreFailingMessages });
+            lock (s_lock) s_logs.Add(new Entry { Type = type, Message = message, Failing = IsFailing(type) && !IgnoreFailingMessages });
         }
 
         internal static void Expect(LogType type, string message, Regex regex)
@@ -238,7 +249,11 @@ namespace UnityEngine.TestTools
             }
         }
 
-        /// <summary>Matches expectations to logs (UTF ProcessExpectedLogs) and describes what is left, or null.</summary>
+        /// <summary>
+        /// Matches expectations to logs (UTF ProcessExpectedLogs) and describes what is left, or null. <paramref name="end"/>:
+        /// the end-of-test rule (unmatched failing logs, unmet expectations); otherwise the NoUnexpectedReceived rule (every
+        /// unmatched log, whatever its type).
+        /// </summary>
         internal static string Check(bool end)
         {
             lock (s_lock)
@@ -246,15 +261,17 @@ namespace UnityEngine.TestTools
                 foreach (Entry e in s_logs)
                 {
                     if (s_expected.Count == 0) break;
-                    if (e.Consumed || !s_expected.Peek().Matches(e)) continue;
+                    if (e.Handled || !s_expected.Peek().Matches(e)) continue;
                     s_expected.Dequeue();
-                    e.Consumed = true;
                     e.Handled = true;
                 }
                 var problems = new List<string>();
                 foreach (Entry e in s_logs)
                 {
-                    if (!e.Handled) problems.Add("Unhandled log message: '[" + e.Type + "] " + e.Message + "'. Use UnityEngine.TestTools.LogAssert.Expect");
+                    if (!e.Handled && (!end || e.Failing))
+                    {
+                        problems.Add("Unhandled log message: '[" + e.Type + "] " + e.Message + "'. Use UnityEngine.TestTools.LogAssert.Expect");
+                    }
                 }
                 if (end)
                 {

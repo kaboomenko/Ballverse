@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Ballverse.Core.Config;
 using Ballverse.Core.Integration;
 using Ballverse.Core.Layout;
@@ -147,16 +149,99 @@ namespace Ballverse.Core.Tests.Config
             Single(r, RemoteConfigIssueKind.OutOfRange, RemoteConfigIssueSeverity.Warning); // 0.500004 overshoots by 4e-6
         }
 
-        // Same failure class in Layout: PlatformUiMasks keeps an in-frame rect bit-exact only if its right/bottom edge equals
-        // the clamped edge. Evaluated in double (as Mono did), 0.85 + 0.15 ≠ 1, so the defaults were rebuilt with a width
-        // 2 ulps smaller under Mono. The edge is now rounded to float explicitly, which equals the IEEE single sum.
-        [Theory]
-        [MemberData(nameof(DefaultRects))]
-        public void LayoutMasksOfDefaults_EdgeRoundedToFloatEqualsSingleSum(string name, float x, float y, float w, float h)
+        // Same failure class in Layout: PlatformUiMasks.Sanitize keeps an in-frame rect bit-exact only if its right/bottom
+        // edge equals the clamped edge. The former keep-check `rr == r.X + r.Width`, with the sum evaluated in double as Mono
+        // did (0.85 + 0.15 = 1.0000000298 ≠ 1), rebuilt most built-in defaults 1-2 ulps narrower. CoreCLR cannot evaluate the
+        // product code that way, so the revert guard is the static check below; this shows what it guards against.
+        static bool FormerLayoutKeepCheckEvaluatedInDouble(float x, float y, float w, float h)
         {
-            Assert.Equal(x + w, (float)((double)x + w));
-            Assert.Equal(y + h, (float)((double)y + h));
-            Assert.True(name.Length > 0);
+            float rr = Math.Min(Math.Max((float)((double)x + w), 0f), 1f); // ClampF's float parameter narrows the sum
+            float b = Math.Min(Math.Max((float)((double)y + h), 0f), 1f);
+            return rr == (double)x + w && b == (double)y + h;
+        }
+
+        [Fact]
+        public void FormerLayoutKeepCheckEvaluatedInDouble_RebuildsBuiltInDefaults()
+        {
+            var rebuilt = DefaultRects().Where(a => !FormerLayoutKeepCheckEvaluatedInDouble((float)a[1], (float)a[2], (float)a[3], (float)a[4]))
+                .Select(a => (string)a[0]).ToList();
+            Assert.Contains("reels #1", rebuilt);  // 0.85 + 0.15
+            Assert.Contains("shorts #2", rebuilt); // 0.8 + 0.2
+        }
+
+        // The parser's FitSize had the same raw sum (`origin + size > 1f`): evaluated in double it shrank a clamped 0.15 at
+        // x = 0.85 by 2 ulps. The product keeps 0.15f bit-exact (on Mono via the explicit float rounding; guarded statically).
+        static float FormerFitSizeEvaluatedInDouble(float origin, float size)
+        {
+            for (int i = 0; i < 8 && size > 0f && (double)origin + size > 1.0; i++)
+            {
+                size = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(size) - 1);
+            }
+            return size;
+        }
+
+        [Fact]
+        public void ClampedRectEndingOnTheEdge_KeepsItsFloatSize()
+        {
+            Assert.NotEqual(BitConverter.SingleToInt32Bits(0.15f), BitConverter.SingleToInt32Bits(FormerFitSizeEvaluatedInDouble(0.85f, 0.15f)));
+            var r = Parse(RemoteConfigKeys.PlatformSafeZones, "{\"p\":[{\"x\":0.85,\"y\":0.8,\"w\":0.150004,\"h\":0.2000003}]}");
+            Assert.True(r.Values.TryGetSafeZones("p", out var rects));
+            Assert.Equal(BitConverter.SingleToInt32Bits(0.15f), BitConverter.SingleToInt32Bits(rects[0].W));
+            Assert.Equal(BitConverter.SingleToInt32Bits(0.2f), BitConverter.SingleToInt32Bits(rects[0].H));
+        }
+
+        /// <summary>
+        /// Static check (CoreCLR rounds every float operation to single, so no runtime test here can see Mono's wider
+        /// evaluation; the real-Mono probe is manual, see the track notes): non-Sim Core must not compare an unwidened sum
+        /// against an exact float limit (<c>a + b &lt;= 1f</c>, <c>0f &gt; a + b</c>), and Config/Layout must not test a
+        /// value for equality with an unwidened sum (<c>rr == r.X + r.Width</c>). Write <c>(float)((double)a + b)</c> (the
+        /// IEEE single sum on every runtime) or compare in double. Sim and Replay are out of scope (determinism per binary).
+        /// Each former defect — NormalizedRect.IsValid, PlatformUiMasks.Sanitize, RemoteConfigParser.FitSize — matches.
+        /// </summary>
+        [Fact]
+        public void CoreSources_HaveNoUnwidenedFloatSumAgainstAnExactLimit()
+        {
+            const string Sum = @"(?<!\(double\))(?<![\w.])[\w.]+\s*\+\s*[\w.]+";
+            var againstLimit = new Regex(Sum + @"\s*(<=|>=|<|>|==|!=)\s*[01](\.0)?f\b|\b[01](\.0)?f\s*(<=|>=|<|>|==|!=)\s*" + Sum);
+            var equalsSum = new Regex(@"(==|!=)\s*" + Sum + "|" + Sum + @"\s*(==|!=)");
+            Assert.Matches(againstLimit, "&& x + w <= 1f && y + h <= 1f;");
+            Assert.Matches(againstLimit, "size > 0f && origin + size > 1f; i++");
+            Assert.Matches(againstLimit, "if ((float)x + w > 1f) return;");
+            Assert.Matches(equalsSum, "t == r.Y && rr == r.X + r.Width && b == r.Y + r.Height;");
+            Assert.DoesNotMatch(againstLimit, "return (float)((double)origin + size) <= 1f;");
+            Assert.DoesNotMatch(equalsSum, "bool inside = l == r.X && t == r.Y && rr == right && b == bottom;");
+
+            string core = FindCoreSourceDirectory();
+            int files = 0;
+            foreach (string path in Directory.GetFiles(core, "*.cs", SearchOption.AllDirectories))
+            {
+                string rel = path.Substring(core.Length + 1).Replace('\\', '/');
+                if (rel.StartsWith("Sim/", StringComparison.Ordinal) || rel.StartsWith("Replay/", StringComparison.Ordinal)) continue;
+                bool configOrLayout = rel.StartsWith("Config/", StringComparison.Ordinal) || rel.StartsWith("Layout/", StringComparison.Ordinal);
+                files++;
+                string[] lines = File.ReadAllLines(path);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    string code = lines[i];
+                    int comment = code.IndexOf("//", StringComparison.Ordinal);
+                    if (comment >= 0) code = code.Substring(0, comment);
+                    Assert.False(againstLimit.IsMatch(code), rel + ":" + (i + 1) + " compares an unwidened sum with an exact float limit: " + lines[i].Trim());
+                    Assert.False(configOrLayout && equalsSum.IsMatch(code), rel + ":" + (i + 1) + " tests equality with an unwidened sum: " + lines[i].Trim());
+                }
+            }
+            Assert.True(files >= 50, "found only " + files + " Core sources in " + core);
+        }
+
+        static string FindCoreSourceDirectory()
+        {
+            string d = AppContext.BaseDirectory;
+            while (d != null)
+            {
+                string candidate = Path.Combine(d, "client", "Assets", "Ballverse", "Core");
+                if (Directory.Exists(Path.Combine(candidate, "Config"))) return candidate;
+                d = Path.GetDirectoryName(d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            }
+            throw new DirectoryNotFoundException("client/Assets/Ballverse/Core not found above " + AppContext.BaseDirectory);
         }
 
         [Fact]

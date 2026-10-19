@@ -110,7 +110,10 @@ at ≈ 2E either way.
   a release outliving the bridge), joins whose cancel waits for the native stop (`NativeOpsTests`).
 - `Tests/DotNet~/run.sh` — the same tests under plain .NET 8 without Unity (Unity ignores `~` folders); compiles
   Api/Common/Internal/Fake with small Unity stand-ins, including a `LogAssert` stand-in that applies the Unity Test
-  Framework rule below to every test.
+  Framework rule below to every test. The stand-in follows UTF's `LogScope` and must never be more lenient:
+  `LogAssert.NoUnexpectedReceived()` fails on any log no `Expect` matched, Warning and Log included and even under
+  `ignoreFailingMessages`; the end-of-test check fails only on unmatched Error/Assert/Exception logs. Its own rules are
+  pinned by `Tests/DotNet~/LogScopeStandInTests.cs` (harness only).
 - **Logs and leaks (UTF rule).** The Unity Test Framework fails the running test on any `Debug.LogError` /
   `LogException` / assert log it did not expect — logged from any thread — unless `LogAssert.Expect` matches it (or
   `LogAssert.ignoreFailingMessages` is set). Two consequences, both of which once turned CI red:
