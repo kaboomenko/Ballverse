@@ -136,9 +136,30 @@ namespace Ballverse.Core.Tests.Sim
         }
 
         /// <summary>
+        /// Where the ball ended up if it left the legal side of the opening body, else null: through the opening (below the bridge
+        /// within reach of the gap), or through a wall elsewhere (out of the ring, below a segment).
+        /// </summary>
+        static string Escape(bool ring, float freeFraction, Vec2 local)
+        {
+            float halfGap = (2f * R * freeFraction + T) * 0.5f;
+            if (local.Y < 0f && MathF.Abs(local.X) < halfGap + R) return "pushed through the opening";
+            if (ring)
+            {
+                var centre = new Vec2(0f, MathF.Sqrt(1f - halfGap * halfGap));
+                if ((local - centre).Length > 1f) return "escaped through the ring wall";
+            }
+            else if (local.Y < 0f) return "pushed through a segment";
+            return null;
+        }
+
+        /// <summary>
         /// Covers the overlap pass's bridge guard (no projection candidate may jump across a bridge): pressed by the plate, the
         /// ball does not fit anywhere above the opening, and the nearest feasible candidate of the joint projection is the mirror
-        /// image of its cap–cap contact point below the bridge — without the guard the ball is put through the opening.
+        /// image of its cap–cap contact point below the bridge — without the guard the ball is put through the opening (all four
+        /// cases fail with the guard disabled). These are full-crush setups: the stopped plate leaves no legal position for the
+        /// ball (it would need its centre at most plateY − 0.175 m, while sitting above the opening needs at least 0.071 m at
+        /// 90 % and 0.132 m at 60 % free width), so they pin the chosen outcome — the ball stays on the bridge, overlapping the
+        /// plate — not a physically valid resting position. An escape through a wall elsewhere is reported as such.
         /// </summary>
         [Theory]
         [InlineData(false, 0.9f, 0.2f)]
@@ -152,9 +173,11 @@ namespace Ballverse.Core.Tests.Sim
             {
                 StepPlate(w, plate, tick, plateY);
                 Vec2 local = SimTestUtil.ToLocal(w, body, w.GetBall(b).Position);
-                Assert.True(local.Y > 0f, "ball was pushed through the opening at tick " + tick + ": " + local);
+                string escape = Escape(ring, freeFraction, local);
+                Assert.True(escape == null, "ball " + escape + " at tick " + tick + ": " + local);
             }
             Assert.Equal(plateY, w.GetBody(plate).Position.Y, 4);
+            Assert.True(SimTestUtil.ToLocal(w, body, w.GetBall(b).Position).Y > 0f, "ball is not above the bridge");
         }
 
         /// <summary>
@@ -182,6 +205,54 @@ namespace Ballverse.Core.Tests.Sim
             }
             Vec2 local = SimTestUtil.ToLocal(w, body, w.GetBall(b).Position);
             Assert.True(local.Y > 0f && local.Y < 0.1f, "ball is not pressed into the opening: " + local);
+        }
+        /// <summary>
+        /// Wedge responses (held balls, plates crushing balls, bouncing hits whose wedge impulse joins the Hit events) allocate
+        /// nothing in steady state.
+        /// </summary>
+        [Fact]
+        public void WedgeSceneDoesNotAllocateInSteadyState()
+        {
+            var w = new PhysicsWorld(SimSettings.Default);
+            var m = SimTestUtil.Wall(0.9f, 0.3f);
+            const int openings = 8;
+            var plates = new int[openings];
+            // A closed box keeps every ball in a bounded region (a ball squeezed out sideways falls onto its floor).
+            int box = w.AddBody(BodyDef.Static(new Vec2(0f, 0.5f)));
+            w.AddPolyline(box, ShapeBuilder.Rectangle(openings * 2.5f + 2f, 4f), true, T, m);
+            for (int i = 0; i < openings; i++)
+            {
+                bool ring = (i & 1) == 1;
+                float x = (i - (openings - 1) * 0.5f) * 2.5f;
+                int body = w.AddBody(BodyDef.Kinematic(new Vec2(x, 0f)));
+                float halfGap = (2f * R * 0.99f + T) * 0.5f;
+                if (ring)
+                {
+                    w.AddRing(body, new Vec2(0f, MathF.Sqrt(1f - halfGap * halfGap)), 1f, T, new[] { AngularGap.Centered(-SimMath.HalfPi, 2f * MathF.Asin(halfGap)) }, m);
+                }
+                else
+                {
+                    w.AddSegment(body, new Vec2(-1f, 0f), new Vec2(-halfGap, 0f), T, m);
+                    w.AddSegment(body, new Vec2(halfGap, 0f), new Vec2(1f, 0f), T, m);
+                }
+                w.AddBall(SimTestUtil.Ball(new Vec2(x, 0.4f), new Vec2(0f, -6f), R, 0.9f, 0.3f));
+                plates[i] = w.AddBody(BodyDef.Kinematic(new Vec2(x, 0.8f)));
+                w.AddSegment(plates[i], new Vec2(-0.6f, 0f), new Vec2(0.6f, 0f), T, m);
+            }
+            const int warmUp = 3 * SimConstants.TickRate;
+            long start = 0L;
+            for (int tick = 0; tick < warmUp + 5 * SimConstants.TickRate; tick++)
+            {
+                if (tick == warmUp) start = GC.GetAllocatedBytesForCurrentThread();
+                // Half the plates crush their ball, the others swing above it (the ball bounces and is pressed again).
+                for (int i = 0; i < openings; i++)
+                {
+                    float y = i < openings / 2 ? MathF.Max(0.2f, 0.8f - tick * 0.01f) : 0.45f + 0.3f * MathF.Sin(tick * 0.05f);
+                    w.MoveBodyTo(plates[i], new Vec2(w.GetBody(plates[i]).Position.X, y), 0f);
+                }
+                w.Step();
+            }
+            Assert.Equal(0L, GC.GetAllocatedBytesForCurrentThread() - start);
         }
     }
 }
