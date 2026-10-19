@@ -6,7 +6,7 @@ using UnityEngine.TestTools;
 namespace Ballverse.Media.Tests
 {
     /// <summary>
-    /// Harness-only checks that the LogAssert stand-in (UnityStubs.cs) is no more lenient than the real Unity Test Framework,
+    /// Harness-only checks that the LogAssert stand-in (LogAssertStandIn.cs) is no more lenient than the real Unity Test Framework,
     /// so a test that passes here cannot fail in Unity on log handling. Rules mirrored from UTF LogScope (AddLog,
     /// ProcessExpectedLogs, EvaluateLogScope, NoUnexpectedReceived). Each test resets the scope before it ends, so the
     /// end-of-test check of the harness sees a clean scope.

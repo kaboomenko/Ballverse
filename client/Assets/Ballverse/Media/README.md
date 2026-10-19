@@ -113,7 +113,12 @@ at ≈ 2E either way.
   Framework rule below to every test. The stand-in follows UTF's `LogScope` and must never be more lenient:
   `LogAssert.NoUnexpectedReceived()` fails on any log no `Expect` matched, Warning and Log included and even under
   `ignoreFailingMessages`; the end-of-test check fails only on unmatched Error/Assert/Exception logs. Its own rules are
-  pinned by `Tests/DotNet~/LogScopeStandInTests.cs` (harness only).
+  pinned by `Tests/DotNet~/LogScopeStandInTests.cs` (harness only). `UnityStubs.cs` and `EditMode/TestSupport.cs` are
+  also compiled by other harnesses (Ballverse.Studio's xunit harness), so they stay free of any test framework: the
+  NUnit-side `LogAssert` stand-in lives in `Tests/DotNet~/LogAssertStandIn.cs` (Media harness only) and receives logs
+  through `Debug.Sink`, which only it installs (no sink, nothing recorded). `run.sh` first builds
+  `Tests/DotNet~/StubsCompileCheck/` — those shared files with no test framework referenced — so a stand-in that starts
+  to need NUnit fails here, not in another harness after a merge.
 - **Logs and leaks (UTF rule).** The Unity Test Framework fails the running test on any `Debug.LogError` /
   `LogException` / assert log it did not expect — logged from any thread — unless `LogAssert.Expect` matches it (or
   `LogAssert.ignoreFailingMessages` is set). Two consequences, both of which once turned CI red:
