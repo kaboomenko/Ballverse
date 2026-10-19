@@ -24,9 +24,13 @@ namespace Ballverse.App
         public const string ListenerObjectName = "BallverseAudioListener";
 
         static AudioListener s_owned;
+        static AudioListener s_current;
 
         /// <summary>The listener created by <see cref="EnsureListener"/>, or null (none created, or an existing one was reused).</summary>
         public static AudioListener OwnedListener => s_owned;
+
+        /// <summary>The listener the last <see cref="EnsureListener"/> returned (the app's own or a reused one), or null.</summary>
+        public static AudioListener CurrentListener => s_current;
 
         /// <summary>
         /// Makes sure exactly one enabled listener exists, and returns it. The dedicated listener is created at most once (and
@@ -39,18 +43,40 @@ namespace Ballverse.App
             {
                 if (!s_owned.gameObject.activeSelf) s_owned.gameObject.SetActive(true);
                 if (!s_owned.enabled) s_owned.enabled = true;
-                return s_owned;
+                return s_current = s_owned;
             }
             AudioListener[] listeners = UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None);
             for (int i = 0; i < listeners.Length; i++)
             {
-                if (listeners[i].isActiveAndEnabled) return listeners[i];
+                if (listeners[i].isActiveAndEnabled) return s_current = listeners[i];
             }
             var go = new GameObject(ListenerObjectName);
             // A root object (DontDestroyOnLoad works only on root objects, and only in Play Mode).
             if (Application.isPlaying) UnityEngine.Object.DontDestroyOnLoad(go);
             s_owned = go.AddComponent<AudioListener>();
-            return s_owned;
+            return s_current = s_owned;
+        }
+
+        /// <summary>
+        /// Re-runs <see cref="EnsureListener"/> when the listener it last returned is gone or disabled, for example a reused
+        /// camera listener destroyed with its scene. Without this the live output and the studio preview would stay silent for
+        /// the rest of the session. Cheap when nothing changed (a destroyed-object check and <c>isActiveAndEnabled</c>, no
+        /// search), so the app runs it every frame through <see cref="KeepingListener"/>. Main thread.
+        /// </summary>
+        public static void KeepListener()
+        {
+            if (s_current != null && s_current.isActiveAndEnabled) return;
+            EnsureListener();
+        }
+
+        /// <summary>The app's per-frame tick with <see cref="KeepListener"/> in front of it (DeviceEnvironment.RunLoop).</summary>
+        public static Action<float> KeepingListener(Action<float> tick)
+        {
+            return dt =>
+            {
+                KeepListener();
+                tick?.Invoke(dt);
+            };
         }
 
         /// <summary>Destroys the dedicated listener if <see cref="EnsureListener"/> created it (app shutdown, tests).</summary>
@@ -58,6 +84,7 @@ namespace Ballverse.App
         {
             AudioListener owned = s_owned;
             s_owned = null;
+            s_current = null;
             if (owned == null) return;
             if (Application.isPlaying) UnityEngine.Object.Destroy(owned.gameObject);
             else UnityEngine.Object.DestroyImmediate(owned.gameObject);

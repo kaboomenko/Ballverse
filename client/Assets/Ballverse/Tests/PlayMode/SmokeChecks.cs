@@ -92,6 +92,8 @@ namespace Ballverse.PlayModeTests
         /// when the generation starts, after the view model set <see cref="SimulationViewModel.LastGenerationStyle"/> and
         /// <see cref="SimulationViewModel.LastGenerationGoal"/>, so the search uses the request the view model is about to send.
         /// Each seed handed out is added to <paramref name="pinned"/>.
+        /// The request is a copy of SimulationViewModel.StartGeneration's; QaRegressionTests.PinnedSeedHelpersMirrorTheViewModelsGenerationRequest
+        /// fails when the two drift apart.
         /// </summary>
         public static Func<ulong> ViableSessionSeedSource(SimulationViewModel sim, AppContext ctx, List<ulong> pinned)
         {

@@ -174,6 +174,8 @@ namespace Ballverse.App.Tests
         /// The source runs on the main thread when the generation starts, after the view model set
         /// <see cref="SimulationViewModel.LastGenerationStyle"/> / <see cref="SimulationViewModel.LastGenerationGoal"/>, so the
         /// search uses exactly the request the view model is about to send. A test that needs a failing seed pins its own.
+        /// The request is a copy of SimulationViewModel.StartGeneration's; QaRegressionTests.PinnedSeedHelpersMirrorTheViewModelsGenerationRequest
+        /// fails when the two drift apart.
         /// </summary>
         public void PinViableSessionSeeds()
         {

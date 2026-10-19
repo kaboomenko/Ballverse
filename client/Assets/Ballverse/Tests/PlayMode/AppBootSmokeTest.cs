@@ -453,6 +453,9 @@ namespace Ballverse.PlayModeTests
                 yield return null;
                 if (host != null) Assert.AreEqual(AppHostState.ShutDown, host.State, "host shut down with Bootstrap");
                 Assert.IsNull(Bootstrap.Host, "Bootstrap.Host after shutdown");
+                // DeviceEnvironment.Shutdown releases the app's listener (a leak would be reused by the next PlayMode test).
+                Assert.IsNull(DeviceAudio.OwnedListener, "DeviceAudio.OwnedListener after shutdown");
+                Assert.IsNull(DeviceAudio.CurrentListener, "DeviceAudio.CurrentListener after shutdown");
                 ReportLeftovers();
             }
             try
@@ -596,6 +599,11 @@ namespace Ballverse.PlayModeTests
             Collect<LiveAudioOutput>();
             Collect<BallverseUIRoot>();
             Collect<StudioRunner>();
+            // Only the app's own listener object: a listener the test runner's scene might carry is not the app's leftover.
+            foreach (AudioListener listener in UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None))
+            {
+                if (listener.gameObject.name == DeviceAudio.ListenerObjectName) left.Add(listener);
+            }
             if (left.Count == 0) return;
             _softFindings.Add("objects left after shutdown: " + string.Join(", ", left.Select(o => o.GetType().Name)));
             foreach (UnityEngine.Object o in left)

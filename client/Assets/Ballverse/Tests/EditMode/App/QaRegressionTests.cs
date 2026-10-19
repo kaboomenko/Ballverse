@@ -85,6 +85,9 @@ namespace Ballverse.App.Tests
             string environmentCode = File.ReadAllText(environment);
             StringAssert.Contains("CreateAudioOutput = DeviceAudio.CreateLiveOutput,", environmentCode);
             StringAssert.Contains("DeviceAudio.EnsureListener();", environmentCode, "the studio (preview output) starts with the listener in place");
+            // QA round 1: a reused listener destroyed with its scene is replaced (every frame), and shutdown releases the app's own.
+            StringAssert.Contains("RunLoop = (tick, late) => AppRunner.Create(DeviceAudio.KeepingListener(tick), late),", environmentCode);
+            StringAssert.Contains("DeviceAudio.ReleaseListener();", environmentCode, "host shutdown destroys the app's listener object");
 
             // No other runtime code adds a listener.
             string root = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(deviceAudio)));

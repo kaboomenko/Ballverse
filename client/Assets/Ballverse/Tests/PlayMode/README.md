@@ -28,7 +28,7 @@ none of these assets committed.
 | 9 | projects tab / cover | The Projects tab lists the new project and renders its cover. |
 | 9b | every registered mode | For each card in `Gallery.Modes` (today only `ring_escape`; Geometry Bounce and Helix Drop are covered as soon as `ReleaseModes` registers them), the gallery preview renders. Then every mode other than Ring Escape, which the main flow already ran, is opened like a card tap (`OpenMode` + `Push(Simulation)`). It must play, advance 60 live ticks and give `LiveSimView` a render target, and system back returns to the gallery. A photosensitive mode (`SimulationViewModel.PhotosensitiveModes`) gets its warning marked as acknowledged first; teardown removes the mark. |
 | 10 | pause, resume, low memory | `AppLifecycle.NotifyPause(true)` saves the settings (the store is clean and the file exists). Resume and low memory (caches dropped) follow; the host is still `Running` with no failures. |
-| 11 | cleanup | Deletes the project the test created. In teardown, destroying `Bootstrap` shuts the host down (`ShutDown`, `Bootstrap.Host == null`). Objects that are still alive are logged as soft findings and removed. |
+| 11 | cleanup | Deletes the project the test created. In teardown, destroying `Bootstrap` shuts the host down (`ShutDown`, `Bootstrap.Host == null`) and releases the app's listener (`DeviceAudio.OwnedListener` / `CurrentListener` are null). Objects that are still alive, the `BallverseAudioListener` object included, are logged as soft findings and removed. |
 
 ### Failure rules
 

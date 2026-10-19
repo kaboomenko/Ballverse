@@ -106,6 +106,43 @@ namespace Ballverse.App.Tests
         }
 
         [Test]
+        public void AReusedListenerDestroyedWithItsSceneIsReplacedOnTheNextFrame()
+        {
+            // QA: a camera listener reused at boot and later destroyed with its scene left the app silent for the session (the
+            // studio preview used to re-check on Play). DeviceEnvironment.RunLoop runs KeepListener in front of every frame.
+            _sceneListener = new GameObject("Main Camera");
+            AudioListener existing = _sceneListener.AddComponent<AudioListener>();
+            CreateBothOutputs();
+            Assert.AreSame(existing, DeviceAudio.CurrentListener);
+            Assert.IsNull(DeviceAudio.OwnedListener);
+
+            int ticks = 0;
+            Action<float> frame = DeviceAudio.KeepingListener(dt => ticks++);
+            frame(0.016f);
+            Assert.AreSame(existing, DeviceAudio.CurrentListener, "nothing changes while the reused listener is alive");
+            Assert.IsNull(DeviceAudio.OwnedListener, "no listener of the app's own while the reused one is alive");
+
+            Object.DestroyImmediate(_sceneListener); // the scene that owned it was unloaded
+            _sceneListener = null;
+            frame(0.016f);
+
+            Assert.AreEqual(2, ticks, "the app's tick still runs");
+            AudioListener[] listeners = Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None);
+            Assert.AreEqual(1, listeners.Length, "exactly one AudioListener again");
+            Assert.AreSame(DeviceAudio.OwnedListener, listeners[0]);
+            Assert.AreSame(listeners[0], DeviceAudio.CurrentListener);
+            Assert.AreEqual(DeviceAudio.ListenerObjectName, listeners[0].gameObject.name);
+            AssertNoListenerNextToAnAudioSource();
+            Assert.IsNull(DeviceAudio.FindPlacementProblem());
+
+            listeners[0].enabled = false; // something disabled the app's own listener
+            frame(0.016f);
+            Assert.IsTrue(DeviceAudio.OwnedListener.enabled, "re-enabled on the next frame");
+            Assert.AreEqual(1, Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None).Length);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void TheAppListenerIsCreatedOnceReenabledAndReleased()
         {
             AudioListener first = DeviceAudio.EnsureListener();
@@ -118,6 +155,7 @@ namespace Ballverse.App.Tests
             DeviceAudio.ReleaseListener();
             Assert.AreEqual(0, Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None).Length);
             Assert.IsNull(DeviceAudio.OwnedListener);
+            Assert.IsNull(DeviceAudio.CurrentListener);
             StringAssert.Contains("found 0", DeviceAudio.FindPlacementProblem());
             LogAssert.NoUnexpectedReceived();
         }

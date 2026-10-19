@@ -118,8 +118,10 @@ thumbnails) and disposes it (`IDisposable`) when done, so an export started over
   (`StudioAudioMixer`); the autosave JSON write (`StudioProjectSession`, never overlapping another write of the same project;
   on pause the save is synchronous).
 - **Audio thread**: `PreviewAudioOutput.OnAudioFilterRead` → Core `PcmPlaybackCursor` (lock-free: immutable buffer swap, atomic
-  seek/play words, no allocation). The filter runs only with an enabled `AudioListener` (the preview adds one to its own object
-  when the scene has none) and with `bypassEffects` off. The picture follows the audio through Core `PreviewAudioSync`: held
+  seek/play words, no allocation). The filter runs only with an enabled `AudioListener` and with `bypassEffects` off. The preview
+  object never carries a listener (a script's `OnAudioFilterRead` attaches to only one of the AudioSource or AudioListener on its
+  object, and on a listener it would overwrite the final mix): Ballverse.App's `DeviceAudio` owns the app's only listener, on a
+  dedicated persistent `BallverseAudioListener` object, ensured before the studio starts and re-checked every frame. The picture follows the audio through Core `PreviewAudioSync`: held
   during the DSP latency after Play/Seek, on the frame clock whenever the cursor stops moving for 2 frames (≥ 3 audio blocks:
   no listener, interruption, focus loss), audio re-seeked to the picture when it runs again. When the cursor has handed out the
   whole mix the picture runs on the frame clock to the end; a loop wrap (`StudioPreviewPlayer.Loop`) restarts the mix at 0.

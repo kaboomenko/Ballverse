@@ -82,7 +82,8 @@ namespace Ballverse.App
                 Textures = new UnityTextureLoader(),
                 Clock = new StopwatchClock(),
                 CreateUi = viewModels => new UnityAppUi(BallverseUIRoot.Create(viewModels, platform.SafeArea)),
-                RunLoop = AppRunner.Create,
+                // Every frame: a reused listener that went away (destroyed with its scene) is replaced by the app's own.
+                RunLoop = (tick, late) => AppRunner.Create(DeviceAudio.KeepingListener(tick), late),
                 Shutdown = () =>
                 {
                     resources?.Dispose();
