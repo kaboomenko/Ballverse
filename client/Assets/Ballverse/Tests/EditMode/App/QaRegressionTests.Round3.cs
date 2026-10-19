@@ -291,11 +291,13 @@ namespace Ballverse.App.Tests
             }
         }
 
-        static ParamSet RingSet(IModeDefinition mode, DeviceTier tier, int rings, double gap)
+        static ParamSet RingSet(IModeDefinition mode, DeviceTier tier, int rings, double gap, string placement = null)
         {
-            return ModeParams.Prepare(mode, ModeParams.Defaults(mode, tier)
+            ParamSet values = ModeParams.Defaults(mode, tier)
                 .With(RingEscapeParams.RingCount, ParamValue.Int(rings))
-                .With(RingEscapeParams.GapSize, ParamValue.Float(gap)), tier).Values;
+                .With(RingEscapeParams.GapSize, ParamValue.Float(gap));
+            if (placement != null) values = values.With(RingEscapeParams.GapPlacement, ParamValue.String(placement));
+            return ModeParams.Prepare(mode, values, tier).Values;
         }
 
         RecordingHintProvider BootWithRecordingProvider(out TestApp app, Func<long> clock)
@@ -378,17 +380,22 @@ namespace Ballverse.App.Tests
             var provider = new RingEscapeDurationHintProvider();
             var cases = new[]
             {
-                (rings: 80, gap: 35.0, rounds: new[] { 3, 4, 5, 40, 60, 100 }),
-                (rings: 60, gap: 30.0, rounds: new[] { 4, 7, 40, 100 }),
+                (rings: 80, gap: 35.0, placement: RingEscapeParams.PlacementRandom, rounds: new[] { 3, 4, 5, 40, 60, 100 }),
+                (rings: 60, gap: 30.0, placement: RingEscapeParams.PlacementRandom, rounds: new[] { 4, 7, 40, 100 }),
+                // QA round 3 (r2): the 1.5 × 180 s margin still showed these (each escapes within 180 s on the full probe).
+                (rings: 20, gap: 26.0, placement: RingEscapeParams.PlacementSpiral, rounds: new[] { 35 }),
+                (rings: 30, gap: 26.0, placement: RingEscapeParams.PlacementSpiral, rounds: new[] { 35, 40, 46 }),
+                (rings: 30, gap: 29.0, placement: RingEscapeParams.PlacementRandom, rounds: new[] { 37, 45 }),
+                (rings: 40, gap: 29.0, placement: RingEscapeParams.PlacementRandom, rounds: new[] { 37, 48 }),
             };
             foreach (var c in cases)
             {
-                ParamSet values = RingSet(mode, DeviceTier.A, c.rings, c.gap);
+                ParamSet values = RingSet(mode, DeviceTier.A, c.rings, c.gap, c.placement);
                 foreach (int rounds in c.rounds)
                 {
                     int calls = 0;
                     SetupHint hint = provider.Evaluate(values, SetupHintRegistry.MaxProbeTicks, () => ++calls >= rounds);
-                    Assert.IsNull(hint, c.rings + " rings at " + c.gap + "°, stopped after " + rounds + " rounds: no false hint");
+                    Assert.IsNull(hint, c.rings + " rings at " + c.gap + "° " + c.placement + ", stopped after " + rounds + " rounds: no false hint");
                 }
             }
 

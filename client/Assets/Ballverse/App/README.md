@@ -111,12 +111,16 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   worker within the tier's 🎲 time budget, stopped by the worker's clock (`SimulationViewModel.ProbeClockMs`, a
   Stopwatch by default; §2.9 M01: «останавливает пробу по своим часам»; the tick cap `SetupHintRegistry.MaxProbeTicks`
   = 3 × 180 s only bounds it). A fast device runs the probe to its end (conclusive). On a slow one the clock stops it
-  first and Core extrapolates each seed's rhythm, which overshoots once rings have been passed (a sweep of 100 sets
-  stopped after every round: a false hint at some stop for 47 of them), so the provider keeps such a verdict only when
-  it is clear — every seed passed a ring, ≥ 35 s of game time per seed, projection ≥ 1.5 × 180 s
-  (`RingEscapeDurationHintProvider.ShowsHint`; same sweep: no false hint, about half the true hints kept); otherwise a
-  slow device shows no hint and the run simply ends at the 180 s cap. The probe is cancelled by the next change or when
-  the screen hides;
+  first and Core extrapolates each seed's rhythm, which overshoots once rings have been passed (stopped after every
+  round, Core alone showed a false hint at some stop for 29 of 104 sets in the QA sweep and 241 of 516 in a wider one:
+  10–100 rings × gaps 26–58° × random / aligned / spiral, tiers A and C, plus 2–4 balls with pulse / reverse laws), so
+  the provider keeps such a verdict only when it is clear — every seed passed a ring, ≥ 35 s of game time per seed,
+  projection ≥ 3 × 180 s (`RingEscapeDurationHintProvider.ShowsHint`). On those sweeps that leaves no false hint on the
+  QA sweep and one parameter set with a false hint on the wider one (60 rings at 29°, random, whose best seed escapes at
+  175 s), and 36 of the 92 sets that need the hint get it by 40 s of game time per seed (100 rings at gapMin projects
+  600–1000 s from 30 s per seed on). This departs from §2.9 M01 (see "Placeholders and gaps"); otherwise a slow device
+  shows no hint and the run simply ends at the 180 s cap. The probe is cancelled by the next change or when the screen
+  hides;
   the same structural set is probed once (a cleared hint or a mode change forgets the set, so it is probed again). A
   hint is raised as a `Notice` (toast) and kept in `SimulationViewModel.SetupHint`; its actions («Шире прорези»: gapSize
   +10°, «Меньше колец»: ringCount −25 %) run through `ApplySetupHintAction(id)`.
@@ -156,7 +160,9 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   colours, the 🎲 behind the first ad surviving the ATT pre-prompt screen (and dropped when the screen stays hidden), the
   hint after a mode switch, the probe on tier A driven by an injected clock (never running out: the full probe of 80
   rings at 35° gives no hint; running out at once: stopped after the first round, no hint), an extrapolated verdict
-  kept only when clear, the goal over «Любой» and the remembered goal surviving a short 🎲 on a one-ball set, the
+  kept only when clear (20 rings at 26° spiral stopped after 35 rounds and four more swept false-hint cases included),
+  the Studio sound conversion of an M01 clip equal to the live run only through `ModeSoundMapping.ForReplay` with the
+  App's registry, the goal over «Любой» and the remembered goal surviving a short 🎲 on a one-ball set, the
   «Попробуйте увеличить длительность» text). Tests that expect a hint pin `ProbeClockMs`, so no verdict depends on the
   test machine's speed.
 - `Assets/Ballverse/Tests/AppHarness~/run.sh` (no Unity, .NET 8): `CompileCheck` compiles App + Sim + every wired
@@ -178,6 +184,24 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   tables gain a `generate.style.last_second` key. A dedicated Director-group control (a goal switch visible only with
   «Соревнование», beside the style) would be clearer than a chip among the styles and would let the goal combine with a
   style such as «Хаос»; `ISimulationViewModel` has no such slot, so the goal is a style choice generated over «Любой».
+- **Studio export / preview sound of M01** (Studio track, integration step of Core/Modes CONTRACT §3 rule 4): Studio
+  `StudioAudioMixer.Mix` converts a clip's replay with a bare `new RenderStreamSoundBodySource(reader)` (or
+  `UniformSoundBodySource` without a stream) and never asks the mode for its `IModeSoundMapping`, so an exported or
+  previewed M01 clip gives every ring hit the ball's size (one note instead of the rising pentatonic step per ring) and
+  every break size 0.5 (no rising break pitch) — 249 of 250 events differ from the live run for the M01 defaults (QA
+  round 3 probe). The App cannot reach that code (`Mix` is private and takes no hook; the App may not edit Studio). Fix
+  in Studio: add `Func<string, ISoundBodySource, ISoundBodySource> SoundBodySourceMapping` (or a `ModeRegistry`) to
+  `StudioServicesOptions`, pass it to `StudioAudioMixer`, and in `Mix` wrap both sources with
+  `ModeSoundMapping.ForReplay(registry, replay.Header.ModeId, source)`; then in `App/Unity/DeviceEnvironment.cs`
+  (`CreateStudio`) pass `SoundBodySourceMapping = (modeId, source) => ModeSoundMapping.ForReplay(studio.Modes, modeId,
+  source)`. `QaRegressionTests.StudioSoundConversionMatchesTheLiveRunOnlyThroughTheModeMapping` pins that this exact call
+  with the App's registry gives the live list field for field (and that the bare conversion does not).
+- **M01 duration hint rule** (docs track / owner): §2.9 M01 shows the hint when no seed escaped and the smallest
+  projection exceeds 180 s, and its test (д) expects a hint for 100 rings at gapMin with a 25 s game-time budget over
+  3 seeds. The App shows a probe stopped by the clock only when every seed passed a ring, each ran ≥ 35 s of game time
+  and the projection is ≥ 3 × 180 s, so a clock-stopped probe under 35 s of game time per seed never shows the hint
+  (test (д)'s budget included), because the raw rule gave false hints on 241 of 516 swept sets (see "Setup hints").
+  Update the card's rule and test (д) to match, or decide otherwise.
 - **Generation resume API** (Core): `ModeGenerator` has no "continue this session" entry, so `GenerationDecision.SearchLonger`
   mirrors its sequential loop for the extra budget (equivalence with `AutoSearchLonger = 1` is tested).
 

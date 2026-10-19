@@ -104,12 +104,19 @@ namespace Ballverse.App
     /// actions «Шире прорези» (gapSize +10°) and «Меньше колец» (ringCount −25 %, at least one ring fewer).
     /// <para>
     /// A probe that ran to its end (an escape, or every seed at the 180 s cap) is conclusive. A probe stopped by the clock
-    /// first (a slow device) rests on Core's rhythm extrapolation, which overshoots once rings have been passed (the early
-    /// rings take longer than the rest): a sweep of 100 sets (10–100 rings × gaps 26–62°, tier A) stopped after every round
-    /// showed a false hint at some stop for 47 sets. So such a verdict is trusted only when it is clear: every seed passed a
-    /// ring, each seed ran at least <see cref="MinExtrapolatedSecondsPerSeed"/> s of game time, and the projection is at least
-    /// <see cref="ExtrapolationMargin"/> × 180 s (same sweep: no false hint at any stop, about half of the true hints kept
-    /// on stops; a missed hint only means the run ends by the 180 s cap, as without the hint).
+    /// first (a slow device) rests on Core's rhythm extrapolation, which overshoots after the first rings (the early rings
+    /// take longer than the rest, then rings fall in combos): stopped after every round, Core alone showed a false hint at
+    /// some stop for 29 of 104 sets in the QA sweep and for 241 of 516 in a wider one (10–100 rings × gaps 26–58° × random /
+    /// aligned / spiral placement on tiers A and C, plus 2–4 balls with pulse / reverse speed laws), even when the full probe
+    /// escapes in 113 s. So such a verdict is trusted only when it is clear: every seed passed a ring, each seed ran at
+    /// least <see cref="MinExtrapolatedSecondsPerSeed"/> s of game time, and the projection is at least
+    /// <see cref="ExtrapolationMargin"/> × 180 s. On the QA sweep that shows no false hint at any stop; on the wider sweep
+    /// one parameter set (60 rings at 29°, random placement, whose best seed escapes at 175 s) still shows it at stops from
+    /// 37 s per seed, and 36 of the 92 sets that need the hint get it by 40 s per seed (100 rings at gapMin projects
+    /// 600–1000 s from 30 s per seed on). Not a rule of the spec: §2.9 M01 shows Core's raw verdict, so its test (д) (100
+    /// rings at gapMin with 25 s of game time over 3 seeds) gives no hint here — no extrapolation rule tells such a set from
+    /// one that escapes in time that early (README «Placeholders and gaps»). A missed hint only means the run ends by the
+    /// 180 s cap, as without the hint.
     /// </para>
     /// </summary>
     public sealed class RingEscapeDurationHintProvider : ISetupHintProvider
@@ -120,8 +127,12 @@ namespace Ballverse.App
         /// <summary>Probe base seed: fixed, so the verdict depends only on the parameter set.</summary>
         public const ulong ProbeSeed = 0x4D3031UL;
         public const double GapStepDeg = 10.0;
-        /// <summary>An extrapolated verdict (probe stopped by the clock) needs a projection of at least this × 180 s.</summary>
-        public const float ExtrapolationMargin = 1.5f;
+        /// <summary>
+        /// An extrapolated verdict (probe stopped by the clock) needs a projection of at least this × 180 s. 1.5 (QA round 3)
+        /// still showed a false hint for 20 rings at 26°, spiral placement, stopped after 35 rounds (350 s projected, escapes
+        /// in 164 s) and for 4 more parameter sets of the wider sweep.
+        /// </summary>
+        public const float ExtrapolationMargin = 3f;
         /// <summary>An extrapolated verdict needs at least this much game time simulated per probe seed, seconds.</summary>
         public const int MinExtrapolatedSecondsPerSeed = 35;
 
