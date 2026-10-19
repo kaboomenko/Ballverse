@@ -35,6 +35,11 @@ namespace Ballverse.Core.Modes
         DurationMismatch = 6,
         /// <summary>A stored input or parameter change could not be applied (hand-made or corrupted file).</summary>
         InvalidData = 7,
+        /// <summary>
+        /// The bytes are not a readable <c>.bvr</c> (corrupt or truncated file, bad magic, or a format version this build cannot
+        /// read); only from <see cref="ModeReplay.Resimulate(IModeDefinition, byte[], ModeReplayOptions)"/>.
+        /// </summary>
+        Unreadable = 8,
     }
 
     /// <summary>Sinks of a re-simulation (all optional): the regenerated render stream and visual caches.</summary>
@@ -202,11 +207,34 @@ namespace Ballverse.Core.Modes
                 resultMatches);
         }
 
-        /// <summary>Reads a <c>.bvr</c> and re-simulates it (see <see cref="Resimulate(IModeDefinition, ReplayFile, ModeReplayOptions)"/>).</summary>
+        /// <summary>
+        /// Reads a <c>.bvr</c> and re-simulates it (see <see cref="Resimulate(IModeDefinition, ReplayFile, ModeReplayOptions)"/>).
+        /// Stored data never throws: bytes that are not a readable replay (corrupt, truncated, unsupported format version) give
+        /// <see cref="ModeReplayStatus.Unreadable"/> with the reader's message. Throws only for null arguments.
+        /// </summary>
         public static ModeReplayResult Resimulate(IModeDefinition mode, byte[] bvr, ModeReplayOptions options = null)
         {
+            if (mode == null) throw new ArgumentNullException(nameof(mode));
             if (bvr == null) throw new ArgumentNullException(nameof(bvr));
-            return Resimulate(mode, ReplayReader.Read(bvr), options);
+            ReplayFile file;
+            try
+            {
+                file = ReplayReader.Read(bvr);
+            }
+            catch (InvalidDataException e)
+            {
+                return Unreadable(e);
+            }
+            catch (IOException e) // EndOfStreamException, UnsupportedReplayVersionException
+            {
+                return Unreadable(e);
+            }
+            return Resimulate(mode, file, options);
+        }
+
+        static ModeReplayResult Unreadable(Exception e)
+        {
+            return Fail(ModeReplayStatus.Unreadable, "not a readable replay: " + e.Message, new HashVerificationResult(HashMismatchKind.None, 0, 0, 0, 0));
         }
 
         static ModeReplayResult Fail(ModeReplayStatus status, string message, HashVerificationResult none, ModeSession session = null)

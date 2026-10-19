@@ -1,12 +1,15 @@
 using Ballverse.Core.Audio;
 using Ballverse.Core.RenderStream;
+using Ballverse.Core.Replay;
 
 namespace Ballverse.Core.Modes
 {
     /// <summary>
     /// Sound events with body size and pan taken from the render stream's quantized values (spec §7.8; Audio
     /// <see cref="SoundEvent"/> remarks): the live run and the export (which rebuilds sound from the replay EVNT records and the
-    /// stream) then compute identical pitch and pan.
+    /// stream) then compute identical pitch and pan. Impulses go through the EVNT quantization
+    /// (<see cref="ReplayQuantization.QuantizeImpulse"/> → <see cref="ReplayQuantization.DequantizeImpulse"/>) for the same
+    /// reason: the export reads the dequantized EVNT impulse, so the live volume must use the same value.
     /// </summary>
     public static class ModeSound
     {
@@ -27,16 +30,28 @@ namespace Ballverse.Core.Modes
             return p > 1f ? 1f : p;
         }
 
-        /// <summary>A sound event of a ball (render id <paramref name="bodyId"/>, radius, x) with the given impulse (N·s).</summary>
-        public static SoundEvent ForBall(SoundEventType type, int bodyId, float impulse, RenderQuantization q, float radius, float x)
+        /// <summary>The impulse as the export reads it from the EVNT record (quantized and dequantized, N·s).</summary>
+        public static float Impulse(float impulse)
         {
-            return new SoundEvent(0, type, bodyId, impulse, BodySize(q, radius), Pan(q, x));
+            return ReplayQuantization.DequantizeImpulse(ReplayQuantization.QuantizeImpulse(impulse));
         }
 
-        /// <summary>A sound event without an emitting body (finale, escape chord): body id −1, centre pan.</summary>
+        /// <summary>
+        /// A sound event of a ball (render id <paramref name="bodyId"/>, radius, x) with the given impulse (N·s, quantized like
+        /// the EVNT record, see <see cref="Impulse"/>).
+        /// </summary>
+        public static SoundEvent ForBall(SoundEventType type, int bodyId, float impulse, RenderQuantization q, float radius, float x)
+        {
+            return new SoundEvent(0, type, bodyId, Impulse(impulse), BodySize(q, radius), Pan(q, x));
+        }
+
+        /// <summary>
+        /// A sound event without an emitting body (finale, escape chord): body id −1 (exempt from the mixer's per-body 50 ms
+        /// limit), centre pan, impulse quantized like the EVNT record.
+        /// </summary>
         public static SoundEvent Bodiless(SoundEventType type, float impulse, float bodySize)
         {
-            return new SoundEvent(0, type, -1, impulse, bodySize, 0f);
+            return new SoundEvent(0, type, -1, Impulse(impulse), bodySize, 0f);
         }
     }
 }

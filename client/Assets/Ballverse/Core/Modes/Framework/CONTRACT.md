@@ -20,7 +20,9 @@ interfaces below do not change in release 1.
 | `ModeVisualTable` | Render-stream shape / label table of the run (same ids as `RenderStreamWriter`). |
 | `ModeEventBuffer` | Per-tick render (`RenderGeometry.RenderEvent`), sound (`Audio.SoundEvent`) and replay (`Replay.ReplayEvent`) events. |
 | `ModeMetrics` | Allocation-free collector for `Generation.CandidateRunSummary` (collisions, significant ticks, standings). |
-| `ModeSound` | Sound events with size / pan from quantized render values (spec §7.8). |
+| `ModeSound` | Sound events with size / pan from quantized render values and EVNT-quantized impulse (spec §7.8). |
+| `IModeSoundMapping` / `ModeSoundMapping` | Optional: the mode's export wrapper of the render-stream sound source, resolved by `modeId`. |
+| `ModeSoundBudget` | Optional: mode-side priority of key sounds within the mixer's 40/s. |
 | `ModeParams` | `Prepare` = schema sanitize + `Constrain`; `ApplyPreset`; `Defaults`; `IsRunnable`. |
 | `HudKeys` | Shared HUD keys of render frames. |
 | `ModeRegistry` | Explicit registration (spec §7.6), kill switch filter. |
@@ -122,8 +124,21 @@ Rules:
    Hit events below the card's audible / visible threshold may be dropped (resting contacts: `Speed < 0.5 m/s`).
    Pitch that the card ties to progress rather than to body size (M01: ring number, combo) travels in
    `SoundEvent.BodySize` as a *pitch size* (the mixer's size-dependent pitch reads it); it must be a pure function of the
-   EVNT record, and the mode provides an `Integration.ISoundBodySource` wrapper for the export (M01:
-   `RingEscapeSound.BodySource`). Re-simulation (`ModeReplay` with `SoundEvents`) reproduces the live list exactly.
+   EVNT record, and the mode provides an `Integration.ISoundBodySource` wrapper for the export by implementing the
+   optional `IModeSoundMapping` on its definition (M01: `RingEscapeMode` → `RingEscapeSound.BodySource`). The Studio
+   mixer / export resolve it without knowing the mode:
+   `ModeSoundMapping.ForReplay(registry, replay.Header.ModeId, new RenderStreamSoundBodySource(reader))` (integration step,
+   Studio owner). Re-simulation (`ModeReplay` with `SoundEvents`) reproduces the live list exactly, and the converted
+   export list must equal the live list in every field (tick, type, body id, impulse, size, pan); `ModeSound.ForBall` /
+   `Bodiless` quantize the impulse like EVNT for that reason.
+   **Emitters and the mixer's limits (spec §2.7).** The mixer plays at most one sound per body id per 50 ms (3 ticks) and
+   40 sounds per second overall. An event that follows a hit of the same ball in the same tick, or 1–2 ticks later (a
+   break, a score, an escape / finish chord, a combo step), must not reuse the ball's body id: use the id of the body that
+   really emits it (M01: the ring's render id for a break) or make it bodiless (body id −1, EVNT
+   `BodilessReplayBodyId`), with the same id in the sound event and the EVNT record. Key sounds that must not drown in a
+   crowded scene take priority with `ModeSoundBudget` (lower caps for hits, the full 40 for the finale); a sound the budget
+   drops is dropped from the sound list and EVNT alike, and the decision must not depend on which sinks are attached.
+   At playback faster than 1× the mixer can still refuse (Audio-side priority is an open issue).
 5. **Inputs** (M05 «Игрок»): `SimInput.Type` = mode-defined byte, payload in `A..D` (quantized ints). The session records
    INPT as `(tick, type, [A, B, C, D])` and replays it identically. An autopilot («Бот») runs inside the rules
    (deterministic from state) and is not recorded.
@@ -163,7 +178,8 @@ ModeSessionOutcome o = session.Complete();          // finishes sinks, RSLT, Gam
 ModeReplayResult r = ModeReplay.Resimulate(def, replayFile, options);   // HashVerifier + optional render stream rebuild
 // statuses, never exceptions, for stored data: Verified, HashMismatch (a hash differs or a recorded hash was not reached),
 // DurationMismatch (hashes fine but the run did not end on header.DurationTicks), WrongMode, SimVersionMismatch,
-// UnsupportedBackend, InvalidParams, InvalidData (an input / PARM the rules cannot apply). With options.LastTick (trim-out)
+// UnsupportedBackend, InvalidParams, InvalidData (an input / PARM the rules cannot apply), Unreadable (byte[] overload:
+// corrupt / truncated bytes or an unsupported format version — ReplayReader's exceptions are caught). With options.LastTick (trim-out)
 // only hashes up to that tick are required.
 ModeGenerationResult g = ModeGenerator.Generate(def, request);         // chosen seed + values (+ forced winner / goal)
 ```

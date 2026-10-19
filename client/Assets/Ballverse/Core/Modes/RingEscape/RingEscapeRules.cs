@@ -18,7 +18,9 @@ namespace Ballverse.Core.Modes.RingEscape
     /// <item>rule 7 (start layout) → lower <c>ballCount</c>;</item>
     /// <item>rule 6 (motion) → raise <c>restitution</c> to 0.95 when the launch is ≥ 2 m/s, otherwise raise <c>gravity</c> to 0.2 g;</item>
     /// <item>rule 6b (rotation) → lengthen <c>reversePeriod</c> when even 360 °/s cannot sweep a turn, then raise <c>rotationSpeed</c>;</item>
-    /// <item>«Сжатие» → <c>destroyPassed</c> = on; <c>forcedWinner</c> beyond the teams → any.</item>
+    /// <item>«Сжатие» → <c>destroyPassed</c> = on; <c>forcedWinner</c> beyond the teams → any;</item>
+    /// <item>«Новый шар»: <c>maxRoundBalls</c> ≥ <c>ballCount</c> → raise <c>maxRoundBalls</c> (only while «Новый шар» is
+    /// selected, the only variant that reads it; the slider is narrowed to [ballCount, tier cap] there).</item>
     /// </list>
     /// Rules 4 (growth) and 5 (speed envelope) are enforced while running (growth clipped to d_grow, ω clamped per tick).
     /// </summary>
@@ -110,6 +112,11 @@ namespace Ballverse.Core.Modes.RingEscape
                 v = v.With(RingEscapeParams.DestroyPassed, ParamValue.Bool(true));
                 issues.Add(new ParamIssue(RingEscapeParams.DestroyPassed, ParamIssueCode.OutOfRange, "progression compress: passed rings are always destroyed"));
             }
+            if (c.AfterEscape == AfterEscapeKind.NewBall && c.MaxRoundBalls < c.BallCount)
+            {
+                // Card: «не меньше ballCount». ballCount is already tier-capped and maxRoundBalls has the same cap.
+                v = SetInt(v, RingEscapeParams.MaxRoundBalls, c.BallCount, "new ball: maxRoundBalls >= ballCount", issues);
+            }
             int teams = c.TeamCount;
             if (c.ForcedWinner > teams) v = SetInt(v, CommonParams.ForcedWinner, 0, "forced winner beyond the " + teams + " colours", issues);
             return v;
@@ -117,7 +124,7 @@ namespace Ballverse.Core.Modes.RingEscape
 
         /// <summary>
         /// Slider ranges that keep the rules for the other values fixed (spec §2.9 "зависимый ползунок сужает диапазон"):
-        /// ringCount, ballCount, ballSize, ringSpacing, gapSize, gapShrink, rotationSpeed, gravity.
+        /// ringCount, ballCount, ballSize, ringSpacing, gapSize, gapShrink, rotationSpeed, gravity, maxRoundBalls («Новый шар»).
         /// </summary>
         public static bool TryGetDynamicRange(string id, ParamSet values, DeviceTier tier, out double min, out double max)
         {
@@ -166,6 +173,9 @@ namespace Ballverse.Core.Modes.RingEscape
                     return IntRange(def, tier, 0, (int)MathF.Floor(RingEscapeGeometry.MaxGapShrink(c) * 100f + 1e-3f), out min, out max);
                 case RingEscapeParams.RotationSpeed:
                     return FloatRange((FloatParam)def, tier, RingEscapeGeometry.MinRotationSpeedDeg(c), double.PositiveInfinity, out min, out max);
+                case RingEscapeParams.MaxRoundBalls:
+                    if (c.AfterEscape != AfterEscapeKind.NewBall) return false;
+                    return IntRange(def, tier, c.BallCount, int.MaxValue, out min, out max);
                 case CommonParams.Gravity:
                     if (c.LaunchSpeed + 1e-4f >= RingEscapeGeometry.MotionMinLaunch && c.Restitution + 1e-4f >= RingEscapeGeometry.MotionMinRestitution)
                         return false;
