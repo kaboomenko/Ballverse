@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Ballverse.UI;
+using Ballverse.UI.Components;
 using Ballverse.UI.Localization;
 using UnityEngine;
 
@@ -142,6 +143,30 @@ namespace Ballverse.App
         }
 
         public void ShowPhotosensitivityWarning(Action acknowledged) => Shell.ShowPhotosensitivityWarning(acknowledged);
+
+        public IDisposable ShowChoice(AppChoice choice)
+        {
+            if (choice == null) throw new ArgumentNullException(nameof(choice));
+            var spec = new DialogSpec
+            {
+                Title = choice.Title,
+                Body = choice.Body,
+                Cancellable = true,
+                Cancelled = choice.Cancelled,
+            };
+            for (int i = 0; i < choice.Options.Count; i++)
+            {
+                AppChoiceOption option = choice.Options[i];
+                spec.Buttons.Add(new DialogButton(option.Label, i == 0 ? DialogButtonStyle.Primary : DialogButtonStyle.Secondary,
+                    _ => option.Chosen?.Invoke()));
+            }
+            DialogHandle handle = Shell.Dialogs.Show(spec);
+            return new ActionDisposable(() =>
+            {
+                if (handle.IsOpen) handle.Close();
+            });
+        }
+
         public void SetDeviceTier(Core.DeviceTier tier) => Shell.SetDeviceTier(tier);
 
         void OnExit() => ExitRequested?.Invoke();

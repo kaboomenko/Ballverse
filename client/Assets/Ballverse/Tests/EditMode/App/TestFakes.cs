@@ -61,6 +61,39 @@ namespace Ballverse.App.Tests
             acknowledged?.Invoke();
         }
 
+        /// <summary>Every choice shown (oldest first) and the one still open.</summary>
+        public readonly List<AppChoice> Choices = new List<AppChoice>();
+        public AppChoice OpenChoice;
+        public int ChoicesClosedByApp;
+
+        public IDisposable ShowChoice(AppChoice choice)
+        {
+            Choices.Add(choice);
+            OpenChoice = choice;
+            return new ActionDisposable(() =>
+            {
+                if (OpenChoice != choice) return;
+                OpenChoice = null;
+                ChoicesClosedByApp++;
+            });
+        }
+
+        /// <summary>Taps option <paramref name="index"/> of the open choice (the dialog closes first, as in the UI).</summary>
+        public void Choose(int index)
+        {
+            AppChoice c = OpenChoice ?? throw new InvalidOperationException("no choice is open");
+            OpenChoice = null;
+            c.Options[index].Chosen?.Invoke();
+        }
+
+        /// <summary>Back / scrim on the open choice.</summary>
+        public void CancelChoice()
+        {
+            AppChoice c = OpenChoice ?? throw new InvalidOperationException("no choice is open");
+            OpenChoice = null;
+            c.Cancelled?.Invoke();
+        }
+
         public void SetDeviceTier(DeviceTier tier) => Tier = tier;
 
         public void RaiseExit() => ExitRequested?.Invoke();

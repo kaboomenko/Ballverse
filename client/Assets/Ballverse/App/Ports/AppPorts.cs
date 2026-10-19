@@ -97,8 +97,44 @@ namespace Ballverse.App
         /// <summary>Closes the ATT explanation screen when it is still open (flow abandoned).</summary>
         void DismissTrackingPrePrompt();
         void ShowPhotosensitivityWarning(Action acknowledged);
+        /// <summary>
+        /// A modal choice (e.g. «Искать дольше» / «Взять ближайший вариант» when the forced winner was not found, spec §2.5).
+        /// Exactly one of the option actions or <see cref="AppChoice.Cancelled"/> (back / scrim) runs, after the dialog closed.
+        /// Disposing the result closes the dialog without any callback (the screen was left, the choice is stale).
+        /// </summary>
+        IDisposable ShowChoice(AppChoice choice);
         void SetDeviceTier(DeviceTier tier);
         /// <summary>Android back on the Modes root.</summary>
         event Action ExitRequested;
+    }
+
+    /// <summary>A modal choice for <see cref="IAppUi.ShowChoice"/>: title, body, options (first = primary) and the cancel action.</summary>
+    public sealed class AppChoice
+    {
+        public AppChoice(LocalizedText title, LocalizedText body, IReadOnlyList<AppChoiceOption> options, Action cancelled)
+        {
+            if (options == null || options.Count == 0) throw new ArgumentException("A choice needs options", nameof(options));
+            Title = title;
+            Body = body;
+            Options = options;
+            Cancelled = cancelled;
+        }
+
+        public LocalizedText Title { get; }
+        public LocalizedText Body { get; }
+        public IReadOnlyList<AppChoiceOption> Options { get; }
+        public Action Cancelled { get; }
+    }
+
+    public sealed class AppChoiceOption
+    {
+        public AppChoiceOption(LocalizedText label, Action chosen)
+        {
+            Label = label;
+            Chosen = chosen;
+        }
+
+        public LocalizedText Label { get; }
+        public Action Chosen { get; }
     }
 }

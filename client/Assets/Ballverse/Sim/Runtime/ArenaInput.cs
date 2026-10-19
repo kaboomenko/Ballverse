@@ -321,7 +321,21 @@ namespace Ballverse.Sim
             return true;
         }
 
-        /// <summary>Drops the touch and every pending gesture (new run, screen hidden).</summary>
+        /// <summary>
+        /// Lifts a finger that is still down (screen hidden, app paused, touch lost): drops the pending gestures and queues one
+        /// <see cref="ArenaGestureKind.Release"/> with zero velocity at the last position, so the mode ends what the drag
+        /// commanded (M05: the tower stops instead of turning at the last drag speed until the next touch). Without a finger
+        /// down it is <see cref="Reset"/>.
+        /// </summary>
+        public void CancelTouch()
+        {
+            bool down = _pointer >= 0;
+            float u = _lastU, v = _lastV;
+            Reset();
+            if (down) Enqueue(new ArenaGesture(ArenaGestureKind.Release, 0f, Clamp01(u), Clamp01(v)));
+        }
+
+        /// <summary>Drops the touch and every pending gesture (new run).</summary>
         public void Reset()
         {
             _pointer = -1;

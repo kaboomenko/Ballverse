@@ -31,7 +31,7 @@ namespace Ballverse.App.Tests
     /// studio, power-saver haptics, localization fallbacks, the Settings watermark, generation, the ATT bridge). Public API
     /// only (the Unity test assembly is separate from Ballverse.App).
     /// </summary>
-    public sealed class QaRegressionTests
+    public sealed partial class QaRegressionTests
     {
         TestApp _app;
 

@@ -407,6 +407,8 @@ namespace Ballverse.App
                 // services already torn down
             }
             ViewModels.SimulationModel.CancelGeneration();
+            ViewModels.SimulationModel.CancelSetupHint();
+            ctx.Ads?.Detach();
             ViewModels.StudioModel.Close();
             ctx.Live.Dispose();
             _audioOutput?.Dispose();

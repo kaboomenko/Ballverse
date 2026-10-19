@@ -69,7 +69,9 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   saved clip, studio «Перегенерировать», `Open`): `SimulationViewModel.Open` / `OpenWith` refuse with a toast.
 - **Live look in the video**: live look edits (theme, colours, skin, trail, background, glow, impact / break FX, labels,
   HUD) are recorded as PARM; `StudioSimRenderer` applies them at their tick through `ClipLookTimeline`, so the preview
-  and the MP4 repeat them (§2.2).
+  and the MP4 repeat them (§2.2). The timeline decodes every change once when the clip opens and applies only the changes
+  since the last frame (binary search for the tick, a backward seek replays decoded values): no allocation while the look
+  holds, one small look set on a frame that crosses changes (a slider drag records one PARM per tick).
 - **Studio preview**: every opening has its own generation and cancellation; closing / switching the project or the
   export's `SuspendPreview` while an opening is still rebuilding the render stream discards its result.
 - **Watermark**: the Settings switch of a NO_WATERMARK owner is the "keep the watermark" default of each new project
@@ -77,7 +79,23 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   with the RC kill switch.
 - **Simulation**: gallery tap → last parameters or first preset; finished runs → result card, recent-runs strip,
   `GameCompleted` to the interstitial coordinator; «Сгенерировать» runs `ModeGenerator` on a worker thread (RC budgets),
-  «В видео» → `CreateFromRun` → studio; «Сохранить клип» → clip library.
+  «В видео» → `CreateFromRun` → studio; «Сохранить клип» → clip library. Without the studio (it failed to start) both
+  toast «Студия недоступна» and leave the live run alone.
+- **🎲 outcomes** (§2.4, §2.5): generation runs with `AutoTakeNearest = false`. A forced winner not found within the
+  budget (M01 «Соревнование») shows a modal choice (`IAppUi.ShowChoice`, the UI shell's `DialogHost`): «Искать дольше»
+  continues the same Core session for one more budget on a worker (`GenerationDecision.SearchLonger`, the user's
+  decision time excluded; the candidate's parameters are rebuilt from its seed — `GenerateCandidate` is pure), «Взять
+  ближайший вариант» completes it and starts the nearest run with the notice «Нужный победитель не найден — показан
+  ближайший вариант»; dismissing keeps the current run; leaving the screen or a new 🎲 closes a stale choice. Other
+  notices: below the quality threshold → «try a longer duration» text, director goal missed, and «Не удалось найти рабочий
+  вариант» when nothing was chosen (nothing starts). Headless (no UI) the nearest variant is taken with its notice.
+- **Setup hints** (§2.9 M01): `SetupHintRegistry` (mode-owned, like `ArenaInputMapperRegistry`) — release 1 registers
+  `RingEscapeDurationHintProvider`. Whenever the structural parameters of the shown run change (open, preset,
+  structural edit, restart) and the screen is visible, the provider runs Core `RingEscapeDurationHint.Estimate` on a
+  worker within the tier's 🎲 budget (tick cap: 10 game seconds per budget second, the Core acceptance budget; plus a stop
+  on the wall clock), cancelled by the next change or when the screen hides; the same structural set is probed once. A
+  hint is raised as a `Notice` (toast) and kept in `SimulationViewModel.SetupHint`; its actions («Шире прорези»: gapSize
+  +10°, «Меньше колец»: ringCount −25 %) run through `ApplySetupHintAction(id)`.
 - **Ads**: interstitials only at natural pauses (IN2): «Ещё раз» / 🎲 **on the result card**, Back, exit to the gallery.
   ↻ / 🎲 pressed while the run is still going start at once without evaluating a break. Never at «В видео», in the
   studio, during or right after an export («Новое видео» on the export result evaluates nothing — a pending interstitial
@@ -88,8 +106,11 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
 - **Export**: settings (RC bitrates, safe-zone masks, watermark policy) → gate → `IStudioBackend.ExportAsync` →
   done (gallery status, upsell every 3rd export after the 2nd) / failed (lower settings retry) / resume after
   interruption (deferred start).
-- **Pause**: settings, presets and the open project are saved; the live run and generation stop; the studio pauses
-  export itself. **Low memory**: thumbnails, previews, audio caches dropped.
+- **Pause**: settings, presets and the open project are saved; the live run and generation stop; a finger still down
+  is lifted (`ResetInput` sends a zero-speed release at the next tick boundary, so M05's tower stops); the studio pauses
+  export itself. Exception: Unity pauses the app while a full-screen ad shows (Android; iOS through
+  `SetiOSAppPauseOnBackground(true)`), so while `AdBreaks.AdCoversScreen` (an interstitial break under way or the services'
+  `Ads.FullScreenChanged` reporting an ad) the pause does not cancel the 🎲 waiting behind the result-card interstitial. **Low memory**: thumbnails, previews, audio caches dropped.
 
 ## Tests
 
@@ -100,12 +121,23 @@ can call `HelixDropInput` directly. A future interactive mode registers its own 
   audio static check, mode-owned input with recorded INPT, live look timeline, export option mapping, real-rate pacing at
   30 / 45 / 60 FPS and parity with `ModeSession.AdvanceDisplayFrame`, IN2 / IN3, preview sequencing, kill switch,
   degraded studio, power-saver haptics, localization coverage, watermark default, generation success / cancel, ATT
-  bridge).
+  bridge; round 2 in `QaRegressionTests.Round2.cs`: 🎲 surviving the ad's app pause, look-timeline cost and parity with
+  `ReplayParams.ParamsAtTick`, the forced-winner choice against Core's `AutoSearchLonger` / `AutoTakeNearest`, the M01
+  duration hint, the degraded studio on «В видео», the touch lost mid-drag).
 - `Assets/Ballverse/Tests/AppHarness~/run.sh` (no Unity, .NET 8): `CompileCheck` compiles App + Sim + every wired
   assembly's real sources against Unity stand-ins (warnings are errors), `Runtime` runs the EditMode tests above under
   plain .NET. GameCI's Unity compile remains the authority.
 
 ## Placeholders and gaps (owner action)
+
+- **CI**: `.github/workflows/unity-free-checks.yml` does not run this harness yet (outside this track's files). Add a step
+  `bash "client/Assets/Ballverse/Tests/AppHarness~/run.sh" --blame-hang-timeout 5m` with `client/Assets/Ballverse/App/**`,
+  `Sim/**` and `Tests/**` in its path triggers (integration).
+- **Setup hint row** (UI track): the M01 duration hint reaches the user as a toast; its two actions exist in the view
+  model (`SimulationViewModel.SetupHint`, `ApplySetupHintAction`) but `IParamPanelViewModel` has no hint slot, so the
+  settings sheet cannot show them as buttons until the UI track adds a hint row bound to those members.
+- **Generation resume API** (Core): `ModeGenerator` has no "continue this session" entry, so `GenerationDecision.SearchLonger`
+  mirrors its sequential loop for the extra budget (equivalence with `AutoSearchLonger = 1` is tested).
 
 - **UI strings** (UI track): the `app.*` keys in `AppStrings` and the built-in preset names (`presets.m01.*`,
   `presets.m02.*`, `presets.m05.*`) are not in `UI/Resources/BallverseUI/Localization/{en,ru}.json`. Until the UI track

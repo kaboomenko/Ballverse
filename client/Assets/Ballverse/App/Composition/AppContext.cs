@@ -131,11 +131,45 @@ namespace Ballverse.App
         readonly AppNotices _notices;
         readonly Func<IAppUi> _ui;
 
+        int _pendingBreaks;
+        bool _fullScreen;
+
         public AdBreaks(BallverseServices services, AppNotices notices, Func<IAppUi> ui)
         {
             _services = services ?? throw new ArgumentNullException(nameof(services));
             _notices = notices ?? throw new ArgumentNullException(nameof(notices));
             _ui = ui ?? (() => null);
+            try
+            {
+                _services.Ads.FullScreenChanged += OnFullScreenChanged;
+            }
+            catch (Exception e)
+            {
+                _notices.Report("ads.subscribe_full_screen", e);
+            }
+        }
+
+        /// <summary>
+        /// An interstitial break is under way (the «Реклама» plaque or the ad, until its continuation runs) or a full-screen ad
+        /// (interstitial or rewarded) is on screen. Unity pauses the app while a full-screen ad shows (Android always; iOS through
+        /// <c>SetiOSAppPauseOnBackground(true)</c>), so the app pause that follows is the ad covering the screen, not the user
+        /// leaving it: a pending 🎲 must survive it (spec §2.4 cancels only when the user leaves the screen).
+        /// </summary>
+        public bool AdCoversScreen => _pendingBreaks > 0 || _fullScreen;
+
+        void OnFullScreenChanged(bool showing) => _fullScreen = showing;
+
+        /// <summary>Unsubscribes from the services (composition shutdown).</summary>
+        public void Detach()
+        {
+            try
+            {
+                _services.Ads.FullScreenChanged -= OnFullScreenChanged;
+            }
+            catch (Exception e)
+            {
+                _notices.Report("ads.unsubscribe_full_screen", e);
+            }
         }
 
         /// <summary>The user is in the studio (IN3).</summary>
@@ -186,18 +220,28 @@ namespace Ballverse.App
                 return;
             }
             IAppUi ui = _ui();
+            _pendingBreaks++;
+            bool finished = false;
+            Action done = () =>
+            {
+                if (finished) return;
+                finished = true;
+                _pendingBreaks = Math.Max(0, _pendingBreaks - 1);
+            };
             Action show = () =>
             {
                 try
                 {
                     _services.Interstitials.ShowInterstitial(shown =>
                     {
+                        done();
                         InterstitialDone?.Invoke(shown);
                         then?.Invoke();
                     });
                 }
                 catch (Exception e)
                 {
+                    done();
                     _notices.Report("ads.show_interstitial", e);
                     then?.Invoke();
                 }

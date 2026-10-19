@@ -106,7 +106,11 @@ namespace Ballverse.App
     /// <summary>
     /// The look of a clip over time (spec §2.2: a live look change during the run — theme, colours, trail, glow… — is recorded
     /// as PARM and the export repeats it): the replay's start values with the look PARM records applied up to the shown tick.
-    /// <see cref="Advance"/> is allocation-free while the look does not change (seeking backwards recomputes). Main thread.
+    /// Incremental: every look change is decoded once when the clip opens; <see cref="Advance"/> finds the tick's position by
+    /// binary search and applies only the changes since the last call to a running look (a backward seek replays the decoded
+    /// values from the start: array writes, no parsing). It allocates nothing while the look does not change and one small
+    /// look-only <see cref="ParamSet"/> on a frame that crosses changes (however many: changes within one frame coalesce). Main
+    /// thread.
     /// </summary>
     public sealed class ClipLookTimeline
     {
@@ -119,40 +123,65 @@ namespace Ballverse.App
         });
 
         readonly ParamSet _initial;
-        readonly ParamSchema _schema;
-        readonly List<ReplayParamChange> _changes;
+        // Decoded look changes, stable by tick (record order within a tick, as ReplayParams.ParamsAtTick applies them).
+        readonly uint[] _ticks;
+        readonly int[] _params;
+        readonly ParamValue[] _values;
+        // Look values of the start set by LookParams index (null = absent) and the running look.
+        readonly ParamValue[] _start;
+        readonly ParamValue[] _current;
+        readonly List<KeyValuePair<string, ParamValue>> _scratch;
         int _applied = -1;
 
         public ClipLookTimeline(ParamSet initial, IReadOnlyList<ReplayParamChange> changes, ParamSchema schema)
         {
             _initial = initial ?? throw new ArgumentNullException(nameof(initial));
-            _schema = schema ?? throw new ArgumentNullException(nameof(schema));
-            _changes = new List<ReplayParamChange>();
+            if (schema == null) throw new ArgumentNullException(nameof(schema));
+            var decoded = new List<KeyValuePair<uint, KeyValuePair<int, ParamValue>>>();
             if (changes != null)
             {
                 foreach (ReplayParamChange c in changes)
                 {
-                    if (c != null && IsLook(c.ParamId)) _changes.Add(c);
+                    if (c == null) continue;
+                    int index = LookIndex(c.ParamId);
+                    if (index < 0 || !ReplayParams.TryReadParamChange(c, schema, out ParamValue v, out _)) continue;
+                    decoded.Add(new KeyValuePair<uint, KeyValuePair<int, ParamValue>>(c.Tick, new KeyValuePair<int, ParamValue>(index, v)));
                 }
             }
-            // Stable by tick (record order within a tick), as ReplayParams.ParamsAtTick expects.
-            for (int i = 1; i < _changes.Count; i++)
+            // Stable insertion sort by tick (records are written in tick order, so this is linear in practice).
+            for (int i = 1; i < decoded.Count; i++)
             {
-                ReplayParamChange c = _changes[i];
+                var c = decoded[i];
                 int j = i - 1;
-                while (j >= 0 && _changes[j].Tick > c.Tick)
+                while (j >= 0 && decoded[j].Key > c.Key)
                 {
-                    _changes[j + 1] = _changes[j];
+                    decoded[j + 1] = decoded[j];
                     j--;
                 }
-                _changes[j + 1] = c;
+                decoded[j + 1] = c;
             }
+            _ticks = new uint[decoded.Count];
+            _params = new int[decoded.Count];
+            _values = new ParamValue[decoded.Count];
+            for (int i = 0; i < decoded.Count; i++)
+            {
+                _ticks[i] = decoded[i].Key;
+                _params[i] = decoded[i].Value.Key;
+                _values[i] = decoded[i].Value.Value;
+            }
+            _start = new ParamValue[LookParams.Count];
+            _current = new ParamValue[LookParams.Count];
+            for (int i = 0; i < _start.Length; i++)
+            {
+                if (initial.TryGet(LookParams[i], out ParamValue v)) _start[i] = v;
+            }
+            _scratch = new List<KeyValuePair<string, ParamValue>>(LookParams.Count);
         }
 
         public ParamSet Initial => _initial;
 
-        /// <summary>Look changes recorded in the clip.</summary>
-        public int ChangeCount => _changes.Count;
+        /// <summary>Decodable look changes recorded in the clip.</summary>
+        public int ChangeCount => _ticks.Length;
 
         public static bool TryRead(string clipDirectory, ModeRegistry modes, out ClipLookTimeline timeline)
         {
@@ -164,36 +193,70 @@ namespace Ballverse.App
         }
 
         /// <summary>
-        /// The look in effect during <paramref name="tick"/>: true (with <paramref name="values"/>) on the first call and whenever
-        /// it differs from the last call's, else false.
+        /// The look in effect during <paramref name="tick"/> (the look parameters only — what <c>LookSettings.Apply</c> reads):
+        /// true (with <paramref name="values"/>) on the first call and whenever it differs from the last call's, else false.
         /// </summary>
         public bool Advance(int tick, out ParamSet values)
         {
-            int count = 0;
-            while (count < _changes.Count && _changes[count].Tick <= (uint)Math.Max(0, tick)) count++;
+            int count = CountAt(tick);
             if (count == _applied)
             {
                 values = null;
                 return false;
             }
+            int from = _applied;
+            if (from < 0 || count < from)
+            {
+                Array.Copy(_start, _current, _start.Length);
+                from = 0;
+            }
+            for (int i = from; i < count; i++) _current[_params[i]] = _values[i];
             _applied = count;
-            values = count == 0 ? _initial : ReplayParams.ParamsAtTick(_initial, _changes, (uint)Math.Max(0, tick), _schema);
+            _scratch.Clear();
+            for (int i = 0; i < _current.Length; i++)
+            {
+                if (_current[i] != null) _scratch.Add(new KeyValuePair<string, ParamValue>(LookParams[i], _current[i]));
+            }
+            values = new ParamSet(_scratch);
             return true;
         }
 
-        /// <summary>The look values at <paramref name="tick"/> (no state change).</summary>
+        /// <summary>The whole parameter set at <paramref name="tick"/>: the start values with the look changes applied (no state change).</summary>
         public ParamSet ValuesAt(int tick)
         {
-            return ReplayParams.ParamsAtTick(_initial, _changes, (uint)Math.Max(0, tick), _schema);
+            int count = CountAt(tick);
+            if (count == 0) return _initial;
+            var look = new ParamValue[LookParams.Count];
+            for (int i = 0; i < count; i++) look[_params[i]] = _values[i];
+            var overlay = new List<KeyValuePair<string, ParamValue>>();
+            for (int i = 0; i < look.Length; i++)
+            {
+                if (look[i] != null) overlay.Add(new KeyValuePair<string, ParamValue>(LookParams[i], look[i]));
+            }
+            return _initial.Overlay(new ParamSet(overlay));
         }
 
-        static bool IsLook(string id)
+        /// <summary>Number of changes whose tick is ≤ <paramref name="tick"/> (binary search; a change applies at its tick's boundary).</summary>
+        int CountAt(int tick)
+        {
+            uint t = (uint)Math.Max(0, tick);
+            int lo = 0, hi = _ticks.Length;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) >> 1;
+                if (_ticks[mid] <= t) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo;
+        }
+
+        static int LookIndex(string id)
         {
             for (int i = 0; i < LookParams.Count; i++)
             {
-                if (string.Equals(LookParams[i], id, StringComparison.Ordinal)) return true;
+                if (string.Equals(LookParams[i], id, StringComparison.Ordinal)) return i;
             }
-            return false;
+            return -1;
         }
     }
 }

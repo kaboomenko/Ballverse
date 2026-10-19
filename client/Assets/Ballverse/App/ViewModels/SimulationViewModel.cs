@@ -70,6 +70,10 @@ namespace Ballverse.App
         IDisposable _awake;
         SimPhaseView _lastPhase = SimPhaseView.Setup;
         CancellationTokenSource _generation;
+        GenerationDecision _decision;
+        CancellationTokenSource _hintProbe;
+        ParamSet _hintFor;
+        SetupHint _setupHint;
         readonly DisplayRateEstimator _displayRate = new DisplayRateEstimator();
         int _generationProgressBits = BitConverter.ToInt32(BitConverter.GetBytes(-1f), 0);
 
@@ -90,6 +94,25 @@ namespace Ballverse.App
             if (ctx.Surface != null) ctx.Surface.TargetChanged += Notify;
             ctx.Lifecycle.Paused += OnAppPaused;
         }
+
+        /// <summary>Mode-owned Setup hints (release 1: the M01 duration hint); replaceable in tests.</summary>
+        public SetupHintRegistry SetupHints { get; set; } = SetupHintRegistry.CreateRelease1();
+
+        /// <summary>
+        /// The current Setup hint of the mode (M01 «Побег может не успеть за 180 с …»), or null. Raised once as a
+        /// <see cref="Notice"/>; its actions run through <see cref="ApplySetupHintAction"/> (a hint row in the settings sheet is
+        /// for the UI track to add, see the README "Open issues").
+        /// </summary>
+        public SetupHint SetupHint => _setupHint;
+
+        /// <summary>A Setup probe is running on a worker.</summary>
+        public bool SetupHintPending => _hintProbe != null;
+
+        /// <summary>Session seed of each 🎲 (random by default; Core is pure, the app supplies it). Tests pin it.</summary>
+        public Func<ulong> SessionSeedSource { get; set; } = NewSessionSeed;
+
+        /// <summary>A forced-winner 🎲 is waiting for «Искать дольше» / «Взять ближайший вариант» (spec §2.5).</summary>
+        public bool AwaitingWinnerDecision => _decision != null;
 
         /// <summary>The studio view model "В видео" opens projects in (set by the composition).</summary>
         public StudioViewModel Studio { get; set; }
@@ -285,6 +308,7 @@ namespace Ballverse.App
             SaveLastParams();
             UpdateAwake();
             _lastPhase = Phase;
+            RequestSetupHint();
             Notify();
         }
 
@@ -501,6 +525,7 @@ namespace Ballverse.App
         public void Generate(string styleId, string durationId)
         {
             if (_mode == null || _generation != null) return;
+            DropDecision();
             styleId = Array.IndexOf(s_styleIds, styleId) >= 0 ? styleId : "any";
             durationId = Array.IndexOf(s_durationIds, durationId) >= 0 ? durationId : "auto";
             _ctx.Settings.Update(d =>
@@ -529,11 +554,12 @@ namespace Ballverse.App
             {
                 BaseValues = baseValues,
                 Tier = _ctx.Tier,
-                SessionSeed = NewSessionSeed(),
+                SessionSeed = (SessionSeedSource ?? NewSessionSeed)(),
                 Style = StyleOf(styleId),
                 Budgets = _ctx.Remote.Budgets,
                 Profiles = _ctx.Remote.Profiles,
-                AutoTakeNearest = true,
+                // Spec §2.5: when the forced winner is not found the user chooses «Искать дольше» or «Взять ближайший вариант».
+                AutoTakeNearest = false,
                 IsCancelled = () => cts.IsCancellationRequested,
             };
             var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -550,18 +576,31 @@ namespace Ballverse.App
                 try
                 {
                     ModeGenerationResult result = ModeGenerator.Generate(mode, request);
-                    _ctx.Main.Post(() => OnGenerated(cts, mode, result, null));
+                    _ctx.Main.Post(() => OnGenerated(cts, mode, request, result, null));
                 }
                 catch (Exception e)
                 {
-                    _ctx.Main.Post(() => OnGenerated(cts, mode, null, e));
+                    _ctx.Main.Post(() => OnGenerated(cts, mode, request, null, e));
                 }
             }, token);
         }
 
-        void OnGenerated(CancellationTokenSource cts, IModeDefinition mode, ModeGenerationResult result, Exception error)
+        void OnGenerated(CancellationTokenSource cts, IModeDefinition mode, ModeGenerationRequest request, ModeGenerationResult result, Exception error)
         {
-            if (_generation != cts) return;
+            if (!FinishGeneration(cts, mode, error)) return;
+            if (result != null && result.Session.Status == GenerationStatus.AwaitingDecision)
+            {
+                OfferWinnerDecision(new GenerationDecision(mode, request, result.Session));
+                Notify();
+                return;
+            }
+            ApplyGenerated(result?.Result, result?.Values, result?.Seed ?? 0UL);
+        }
+
+        /// <summary>Common end of a generation worker: false when the result is stale (cancelled, other mode) or failed.</summary>
+        bool FinishGeneration(CancellationTokenSource cts, IModeDefinition mode, Exception error)
+        {
+            if (_generation != cts) return false;
             _generation = null;
             bool cancelled = cts.IsCancellationRequested;
             cts.Dispose();
@@ -569,31 +608,173 @@ namespace Ballverse.App
             if (cancelled || mode != _mode)
             {
                 Notify();
-                return;
+                return false;
             }
             if (error != null)
             {
                 _ctx.Notices.Report("sim.generate", error, AppStrings.GenerateFailed);
                 Notify();
-                return;
+                return false;
             }
-            if (result == null || !result.HasSelection || result.Values == null)
+            return true;
+        }
+
+        /// <summary>
+        /// Starts the generated run, or tells why nothing started. Notices: «Нужный победитель не найден — показан ближайший
+        /// вариант» (NearestWinner), «try a longer duration» (below the quality threshold, spec §2.4 step 5), the director goal
+        /// missed (§2.5), and a distinct text when nothing was chosen (the current run stays).
+        /// </summary>
+        void ApplyGenerated(GenerationResult r, ParamSet generated, ulong seed)
+        {
+            if (r == null || r.Selected == null || generated == null)
             {
-                RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateWeak));
+                RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateNone));
                 Notify();
                 return;
             }
-            if (result.Result != null && result.Result.QualityBelowThreshold) RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateWeak));
+            if (r.Outcome == GenerationOutcome.NearestWinner) RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateNearestWinner));
+            else if (r.QualityBelowThreshold) RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateWeak));
+            if (r.DirectorGoalMissed) RaiseNotice(_ctx.Notices.TextOf(AppStrings.GenerateGoalMissed));
             if (!_ctx.Settings.Data.QuestGenerated)
             {
                 _ctx.Settings.Update(d => d.QuestGenerated = true);
                 QuestChanged?.Invoke();
             }
             EndRun(GameRunEnd.RestartedBeforeFinale, false);
-            ParamSet values = Prepare(result.Values.With(CommonParams.Seed, ParamValue.Seed(result.Seed)));
+            ParamSet values = Prepare(generated.With(CommonParams.Seed, ParamValue.Seed(seed)));
             _presets.MarkCustom();
             StartRun(values);
             _params.NotifyChanged();
+        }
+
+        /// <summary>
+        /// Spec §2.5: the forced winner was not found within the budget — «Искать дольше» (one more budget) or «Взять ближайший
+        /// вариант». Without a UI shell (headless) the nearest variant is taken with its notice.
+        /// </summary>
+        void OfferWinnerDecision(GenerationDecision decision)
+        {
+            DropDecision();
+            IAppUi ui = _ctx.Ui;
+            _decision = decision;
+            if (ui == null)
+            {
+                TakeNearest(decision);
+                return;
+            }
+            var options = new[]
+            {
+                new AppChoiceOption(_ctx.Notices.TextOf(AppStrings.SearchLonger), () => SearchLonger(decision)),
+                new AppChoiceOption(_ctx.Notices.TextOf(AppStrings.TakeNearest), () => TakeNearest(decision)),
+            };
+            try
+            {
+                decision.Dialog = ui.ShowChoice(new AppChoice(_ctx.Notices.TextOf(AppStrings.WinnerNotFoundTitle),
+                    _ctx.Notices.TextOf(AppStrings.WinnerNotFoundBody), options, () => DeclineDecision(decision)));
+            }
+            catch (Exception e)
+            {
+                _ctx.Notices.Report("sim.winner_choice", e);
+                TakeNearest(decision);
+            }
+        }
+
+        void TakeNearest(GenerationDecision decision)
+        {
+            if (_decision != decision) return;
+            _decision = null;
+            if (decision.Mode != _mode || !decision.IsPending)
+            {
+                Notify();
+                return;
+            }
+            ParamSet values;
+            ulong seed;
+            try
+            {
+                values = decision.TakeNearest(out seed);
+            }
+            catch (Exception e) when (e is InvalidOperationException || e is ArgumentException)
+            {
+                _ctx.Notices.Report("sim.take_nearest", e, AppStrings.GenerateFailed);
+                Notify();
+                return;
+            }
+            ApplyGenerated(decision.Session.Result, values, seed);
+        }
+
+        void SearchLonger(GenerationDecision decision)
+        {
+            if (_decision != decision) return;
+            _decision = null;
+            if (decision.Mode != _mode || !decision.IsPending || _generation != null)
+            {
+                Notify();
+                return;
+            }
+            var cts = new CancellationTokenSource();
+            _generation = cts;
+            SetProgress(0f);
+            Notify();
+            GenerationBudget budget = _ctx.Remote.Budgets.Get(_ctx.Tier);
+            long budgetMs = Math.Max(1, budget.TimeMs);
+            // The planner's clock excludes the time the user spent deciding (GenerationSession.Report).
+            long baseMs = decision.Session.Result != null ? decision.Session.Result.ElapsedMs : 0L;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            Func<long> elapsed = () =>
+            {
+                long ms = watch.ElapsedMilliseconds;
+                SetProgress(Math.Min(1f, ms / (float)budgetMs));
+                return baseMs + ms;
+            };
+            IModeDefinition mode = decision.Mode;
+            Task.Run(() =>
+            {
+                try
+                {
+                    ParamSet values = decision.SearchLonger(() => cts.IsCancellationRequested, elapsed, out ulong seed);
+                    _ctx.Main.Post(() => OnSearchedLonger(cts, decision, values, seed, null));
+                }
+                catch (Exception e)
+                {
+                    _ctx.Main.Post(() => OnSearchedLonger(cts, decision, null, 0UL, e));
+                }
+            }, cts.Token);
+        }
+
+        void OnSearchedLonger(CancellationTokenSource cts, GenerationDecision decision, ParamSet values, ulong seed, Exception error)
+        {
+            if (!FinishGeneration(cts, decision.Mode, error)) return;
+            if (decision.IsPending)
+            {
+                OfferWinnerDecision(decision);
+                Notify();
+                return;
+            }
+            ApplyGenerated(decision.Session.Result, values, seed);
+        }
+
+        /// <summary>The user dismissed the choice: the current run stays.</summary>
+        void DeclineDecision(GenerationDecision decision)
+        {
+            if (_decision != decision) return;
+            _decision = null;
+            Notify();
+        }
+
+        /// <summary>Closes a pending winner choice without acting on it (screen left, new 🎲, mode changed).</summary>
+        void DropDecision()
+        {
+            GenerationDecision d = _decision;
+            if (d == null) return;
+            _decision = null;
+            try
+            {
+                d.Dialog?.Dispose();
+            }
+            catch (Exception e)
+            {
+                _ctx.Notices.Report("sim.winner_choice_close", e);
+            }
         }
 
         void SetProgress(float value)
@@ -603,6 +784,7 @@ namespace Ballverse.App
 
         public void CancelGeneration()
         {
+            DropDecision();
             CancellationTokenSource cts = _generation;
             if (cts == null) return;
             _generation = null;
@@ -650,9 +832,18 @@ namespace Ballverse.App
             }
         }
 
+        /// <summary>The studio could not start (no clip library): runs are not recorded, nothing can become a video.</summary>
+        bool StudioMissing => _ctx.Studio is UnavailableStudioBackend || _ctx.Studio.Clips == null;
+
         public void ToVideo()
         {
             if (_mode == null) return;
+            if (StudioMissing)
+            {
+                // Keep the run the user is watching; say why instead of «Запуск слишком короткий для видео».
+                _ctx.Notices.Toast(AppStrings.StudioUnavailable);
+                return;
+            }
             CancelGeneration();
             _ctx.Ads?.At(NaturalBreakKind.ToVideo, null);
             string runId = _selectedRunId;
@@ -686,6 +877,11 @@ namespace Ballverse.App
 
         public void SaveClip()
         {
+            if (StudioMissing)
+            {
+                _ctx.Notices.Toast(AppStrings.StudioUnavailable);
+                return;
+            }
             string runId = CurrentRunId();
             if (runId == null)
             {
@@ -748,8 +944,13 @@ namespace Ballverse.App
             if (!active)
             {
                 CancelGeneration();
+                CancelSetupHint();
                 _ctx.Live.ResetInput();
                 SaveLastParams();
+            }
+            else
+            {
+                RequestSetupHint();
             }
             UpdateAwake();
             Notify();
@@ -862,8 +1063,117 @@ namespace Ballverse.App
         void OnAppPaused()
         {
             _displayRate.Reset(Math.Max(1, _ctx.FrameRate.TargetFps));
-            CancelGeneration();
+            // A finger cannot be followed across a pause: lift it (M05 gets Release, the tower does not keep spinning).
+            _ctx.Live.ResetInput();
+            // Unity pauses the app while a full-screen ad shows (Android; iOS with SetiOSAppPauseOnBackground). The 🎲 deferred
+            // behind the interstitial of the result card must survive that pause: the ad covers the screen, the user did not leave
+            // it (spec §2.4 cancels only when the user leaves the screen).
+            bool adPause = _ctx.Ads != null && _ctx.Ads.AdCoversScreen;
+            if (!adPause) CancelGeneration();
             SaveLastParams();
+        }
+
+        // ------------------------------------------------------------------ Setup hints
+
+        /// <summary>
+        /// Runs the mode's Setup hint (M01 duration probe) on a worker within the tier's 🎲 budget whenever the structural
+        /// parameters of the shown run changed (open, preset, structural edit, restart); cancelled by the next change or when the
+        /// screen hides. The same structural set is probed once.
+        /// </summary>
+        void RequestSetupHint()
+        {
+            if (!_screenActive || _mode == null || _values == null) return;
+            ISetupHintProvider provider = SetupHints?.Find(_mode.Info.Id);
+            if (provider == null)
+            {
+                CancelSetupHint();
+                ClearSetupHint();
+                return;
+            }
+            ParamSet key = SetupHintRegistry.StructuralPart(_mode, _values);
+            if (_hintFor != null && _hintFor.Equals(key)) return;
+            CancelSetupHint();
+            ClearSetupHint();
+            _hintFor = key;
+            var cts = new CancellationTokenSource();
+            _hintProbe = cts;
+            IModeDefinition mode = _mode;
+            ParamSet values = _values;
+            GenerationBudget budget = _ctx.Remote.Budgets.Get(_ctx.Tier);
+            int maxTicks = SetupHintRegistry.TickBudget(budget);
+            long budgetMs = Math.Max(1, budget.TimeMs);
+            Task.Run(() =>
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    SetupHint hint = provider.Evaluate(values, maxTicks, () => cts.IsCancellationRequested || watch.ElapsedMilliseconds >= budgetMs);
+                    _ctx.Main.Post(() => OnSetupHint(cts, mode, key, hint, null));
+                }
+                catch (Exception e)
+                {
+                    _ctx.Main.Post(() => OnSetupHint(cts, mode, key, null, e));
+                }
+            }, cts.Token);
+        }
+
+        void OnSetupHint(CancellationTokenSource cts, IModeDefinition mode, ParamSet key, SetupHint hint, Exception error)
+        {
+            if (_hintProbe != cts) return;
+            _hintProbe = null;
+            bool cancelled = cts.IsCancellationRequested;
+            cts.Dispose();
+            if (cancelled || mode != _mode || _hintFor == null || !_hintFor.Equals(key)) return;
+            if (error != null)
+            {
+                _ctx.Notices.Report("sim.setup_hint", error);
+                return;
+            }
+            _setupHint = hint;
+            if (hint != null) RaiseNotice(_ctx.Notices.TextOf(hint.TextKey));
+            Notify();
+        }
+
+        /// <summary>Stops a running Setup probe (its set will be probed again when it is shown again).</summary>
+        public void CancelSetupHint()
+        {
+            CancellationTokenSource cts = _hintProbe;
+            if (cts == null) return;
+            _hintProbe = null;
+            _hintFor = null;
+            cts.Cancel();
+        }
+
+        void ClearSetupHint()
+        {
+            if (_setupHint == null) return;
+            _setupHint = null;
+            Notify();
+        }
+
+        /// <summary>Runs an action of the current <see cref="SetupHint"/> («Шире прорези», «Меньше колец»): restart with the changed set.</summary>
+        public bool ApplySetupHintAction(string actionId)
+        {
+            SetupHint hint = _setupHint;
+            if (hint == null || _mode == null || hint.ModeId != _mode.Info.Id) return false;
+            foreach (SetupHintAction action in hint.Actions)
+            {
+                if (action.Id != actionId) continue;
+                ParamSet changed;
+                try
+                {
+                    changed = action.Apply(_values);
+                }
+                catch (ArgumentException e)
+                {
+                    _ctx.Notices.Report("sim.setup_hint_action", e);
+                    return false;
+                }
+                if (changed == null) return false;
+                RestartWith(changed);
+                return true;
+            }
+            return false;
         }
 
         internal void RaiseNotice(LocalizedText text)

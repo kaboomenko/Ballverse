@@ -28,6 +28,16 @@ namespace Ballverse.App
         // Keys the UI tables still need (English stand-ins in the App README).
         public const string GenerateWeak = "app.generate.weak";
         public const string GenerateFailed = "app.generate.failed";
+        public const string GenerateNone = "app.generate.none";
+        public const string GenerateNearestWinner = "app.generate.nearest_winner";
+        public const string GenerateGoalMissed = "app.generate.goal_missed";
+        public const string WinnerNotFoundTitle = "app.generate.winner_not_found.title";
+        public const string WinnerNotFoundBody = "app.generate.winner_not_found.body";
+        public const string SearchLonger = "app.generate.search_longer";
+        public const string TakeNearest = "app.generate.take_nearest";
+        public const string HintRingEscapeDuration = "app.hint.m01_duration";
+        public const string HintWiderGaps = "app.hint.m01_wider_gaps";
+        public const string HintFewerRings = "app.hint.m01_fewer_rings";
         public const string SimStartFailed = "app.sim.start_failed";
         public const string ModeUnavailable = "app.sim.mode_unavailable";
         public const string StudioUnavailable = "app.studio.unavailable";

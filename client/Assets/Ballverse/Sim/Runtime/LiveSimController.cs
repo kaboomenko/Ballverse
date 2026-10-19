@@ -356,10 +356,13 @@ namespace Ballverse.Sim
             return CompleteRun(end, keep);
         }
 
-        /// <summary>The ticks of the current frame have been drawn; drops pending gestures (screen hidden).</summary>
+        /// <summary>
+        /// The touch is lost (screen hidden, app paused): drops pending gestures and, when a finger was down, sends a zero-speed
+        /// release at the next tick boundary (<see cref="ArenaGestureTracker.CancelTouch"/>).
+        /// </summary>
         public void ResetInput()
         {
-            _gestures.Reset();
+            _gestures.CancelTouch();
         }
 
         public void Dispose()
