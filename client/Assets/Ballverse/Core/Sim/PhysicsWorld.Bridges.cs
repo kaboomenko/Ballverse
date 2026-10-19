@@ -13,7 +13,8 @@ namespace Ballverse.Core.Sim
     // contact with the caps (in-contact primitives are resolved discretely), and the overlap projection alone cannot tell the
     // legal side of a point. So every leg of the sweep also tests the bridges near its chord, in the body's q space like any
     // other wall: the earliest crossing stops the ball just on its start side, and the joint overlap projection (which itself
-    // never jumps across a bridge) pushes it back out.
+    // never jumps across a bridge) pushes it back out; a ball no position fits (crushed into the opening) stays on the bridge
+    // and loses its velocity through it (HoldOnBridge).
     //
     // Bridges are formed only between primitives of the same body (they move rigidly together); openings between colliders of
     // different moving bodies are not closed by this rule.

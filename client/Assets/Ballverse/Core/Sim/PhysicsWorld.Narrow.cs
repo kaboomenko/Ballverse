@@ -97,6 +97,18 @@ namespace Ballverse.Core.Sim
             Array.Resize(ref _wallMark, size);
             Array.Resize(ref _wallRejected, size);
             Array.Resize(ref _wallCandidates, size);
+            EnsureRadialCapacity(size);
+        }
+
+        void EnsureEdgeFrameCapacity()
+        {
+            if (_edgeScale.Length < _colliderCount)
+            {
+                int old = _edgeScale.Length;
+                Array.Resize(ref _edgeScale, Math.Max(_colliderCount, old * 2));
+                for (int i = old; i < _edgeScale.Length; i++) _edgeScale[i] = float.NaN;
+            }
+            if (_edgeFrames.Length < _vertexCount) Array.Resize(ref _edgeFrames, Math.Max(_vertexCount, _edgeFrames.Length * 2));
         }
 
         void CollideBallWithWalls(int bi, float h)
@@ -115,6 +127,8 @@ namespace Ballverse.Core.Sim
             float tStart = 0f;
             Vec2 wStart = _ballPrev[bi];
             int impacts = 0;
+            int heldBody = -1;
+            Vec2 heldPos = default, heldN = default;
             while (true)
             {
                 SweepHit best = SweepHit.None;
@@ -124,6 +138,7 @@ namespace Ballverse.Core.Sim
                     int c = _wallCandidates[k];
                     if (_wallRejected[c] == _wallStamp) continue;
                     if (impacts > 0 && !MayTouch(ref _colliderBounds[c], wStart, ball.Position, ball.Radius)) continue;
+                    _work.WallSweeps++;
                     if (SweepWall(bi, c, tStart, wStart, h, ref best)) bestC = c;
                 }
                 if (_capExtent >= 0f && SweepBridges(bi, n, tStart, wStart, impacts, ref best, out int bridgeC)) bestC = bridgeC;
@@ -136,8 +151,10 @@ namespace Ballverse.Core.Sim
                         continue;
                     }
                     // Stopped on the start side of a closed opening, inside both primitives: the joint overlap projection pushes
-                    // the ball back out and applies the responses of everything it touches.
-                    ball.Position = FromBodySpace(_colliders[bestC].Body, best.Pos);
+                    // the ball back out and applies the responses of everything it touches (HoldOnBridge if it cannot).
+                    heldBody = _colliders[bestC].Body;
+                    ball.Position = heldPos = FromBodySpace(heldBody, best.Pos);
+                    heldN = Vec2.Rotate(best.N, _frames[heldBody].Cos, _frames[heldBody].Sin);
                     break;
                 }
                 if (best.Transit)
@@ -173,6 +190,24 @@ namespace Ballverse.Core.Sim
             }
             if (!ball.Alive) return;
             ResolveOverlaps(bi, n, h);
+            if (heldBody >= 0 && ball.Alive) HoldOnBridge(bi, heldBody, heldPos, heldN);
+        }
+
+        /// <summary>
+        /// A ball the sweep held on the start side of a bridge that the overlap pass could not push clear of it (no position fits
+        /// the ball: a pusher crushing it into a closed opening) rests on the bridge, which is a solid centre line: its velocity
+        /// through the bridge (relative to the body) is removed, so it does not accumulate while the ball is held. A ball pushed
+        /// off the bridge got the responses of the primitives it touches.
+        /// </summary>
+        void HoldOnBridge(int bi, int body, Vec2 heldPos, Vec2 n)
+        {
+            ref BallState ball = ref _balls[bi];
+            if (Vec2.Dot(ball.Position - heldPos, n) > ContactSlop) return;
+            ref PhysicsBodyState b = ref _bodies[body];
+            ref BodyFrame f = ref _frames[body];
+            Vec2 w = WallVelocityAt(ref b, b.Position, b.Scale, heldPos - n * ContactSlop, Vec2.Zero, f.Cos, f.Sin);
+            float vn = Vec2.Dot(ball.Velocity - w, n);
+            if (vn < 0f) ball.Velocity = ball.Velocity - n * vn;
         }
 
         /// <summary>
@@ -186,6 +221,8 @@ namespace Ballverse.Core.Sim
             ref BallState b = ref _balls[bi];
             float r = b.Radius;
             float rCap = BridgeReach(r);
+            // Radial index (PhysicsWorld.Broadphase.cs): culls only colliders the bounds test below would reject.
+            if (_wallIndex.Usable && RadialRange(from, to, rCap, out float ra, out float rb)) return GatherWallCandidatesIndexed(bi, from, to, n, rCap, ra, rb);
             for (int c = 0; c < _colliderCount; c++)
             {
                 if (_wallMark[c] == _wallStamp) continue;
@@ -194,7 +231,9 @@ namespace Ballverse.Core.Sim
                 ref ColliderData cd = ref _colliders[c];
                 if (cd.Material.IsSensor) continue;
                 if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                _work.WallBoundsTests++;
                 if (!MayTouch(ref cb, from, to, rCap)) continue;
+                _work.WallCandidates++;
                 _wallMark[c] = _wallStamp;
                 int k = n++;
                 while (k > 0 && _wallCandidates[k - 1] > c)
@@ -268,6 +307,15 @@ namespace Ballverse.Core.Sim
                 {
                     bool found = false;
                     int edges = c.Closed ? c.VertexCount : c.VertexCount - 1;
+                    if (EdgeFramesValid(ci, s))
+                    {
+                        for (int k = 0; k < edges; k++)
+                        {
+                            ref EdgeFrame e = ref _edgeFrames[c.VertexStart + k];
+                            if (SweepCapsuleCore(q0, q1, e.A, e.B, e.D, e.L2, e.N, rt, k, ref best)) found = true;
+                        }
+                        return found;
+                    }
                     for (int k = 0; k < edges; k++)
                     {
                         Vec2 a = _vertices[c.VertexStart + k] * s;
@@ -311,14 +359,19 @@ namespace Ballverse.Core.Sim
         /// <summary>Sweep of the centre q0→q1 against a capsule (a, b, radius rt); keeps the earliest candidate in <paramref name="best"/>.</summary>
         static bool SweepCapsule(Vec2 q0, Vec2 q1, Vec2 a, Vec2 b, float rt, int feature, ref SweepHit best)
         {
-            Vec2 motion = q1 - q0;
             Vec2 d = b - a;
             float l2 = d.LengthSquared;
+            Vec2 n = l2 > 1e-14f ? d.Perp / MathF.Sqrt(l2) : default;
+            return SweepCapsuleCore(q0, q1, a, b, d, l2, n, rt, feature, ref best);
+        }
+
+        /// <summary><see cref="SweepCapsule"/> with the edge data precomputed: d = b − a, l2 = |d|², n = d⊥ / |d| (when l2 &gt; 1e-14).</summary>
+        static bool SweepCapsuleCore(Vec2 q0, Vec2 q1, Vec2 a, Vec2 b, Vec2 d, float l2, Vec2 n, float rt, int feature, ref SweepHit best)
+        {
+            Vec2 motion = q1 - q0;
             bool found = false;
             if (l2 > 1e-14f)
             {
-                float len = MathF.Sqrt(l2);
-                Vec2 n = d.Perp / len;
                 float s0 = Vec2.Dot(q0 - a, n);
                 float s1 = Vec2.Dot(q1 - a, n);
                 // The whole chord stays farther than rt from the capsule's line on one side: neither the face nor the end
@@ -602,6 +655,14 @@ namespace Ballverse.Core.Sim
             return ball.Velocity - n.Perp * (ball.AngularVelocity * ball.Radius);
         }
 
+        /// <summary>Restitution of a ball–wall contact approaching at <paramref name="approach"/>: max of ball and wall, 0 below the resting threshold.</summary>
+        float RestitutionOf(ref BallState ball, int collider, float approach)
+        {
+            float wall = _colliders[collider].Material.Restitution;
+            float e = ball.Restitution > wall ? ball.Restitution : wall;
+            return approach < RestingThreshold(ball.GravityScale) ? 0f : e;
+        }
+
         /// <summary>
         /// Normal impulse with restitution (max of ball and wall, 0 below the resting threshold) and Coulomb friction against the
         /// wall's surface velocity, from the ball's current velocity; records the Hit event when the ball approaches.
@@ -617,8 +678,7 @@ namespace Ballverse.Core.Sim
             Vec2 vrel = BallSurfaceVelocity(ref ball, n) - cf.WallVelocity;
             float vn = Vec2.Dot(vrel, n);
             if (vn >= 0f) return;
-            float e = ball.Restitution > c.Material.Restitution ? ball.Restitution : c.Material.Restitution;
-            if (-vn < RestingThreshold(ball.GravityScale)) e = 0f;
+            float e = RestitutionOf(ref ball, cf.Collider, -vn);
             float jn = -(1f + e) * vn * ball.Mass;
             float jt = 0f;
             float mu = MathF.Sqrt(ball.Friction * c.Material.Friction);

@@ -11,6 +11,13 @@ namespace Ballverse.Core.Sim
     // are paired with every other ball directly. One grown ball therefore costs O(n) checks instead of inflating every cell
     // (and every candidate list) to its size.
     //
+    // Sparse grid: when the balls are spread far apart (escaped Ring Escape balls falling away, a few balls across a 40 m ring
+    // stack) the cell count can exceed the ball count by orders of magnitude, and clearing / prefix-summing every cell each
+    // substep dominated the step (65 536 cells × 8 substeps for 20 balls). Above SparseGridCellsPerBall cells per ball the
+    // same grid (same cell size, same cell of every ball) is stored sparsely instead: the binned balls sorted by (cell, binning
+    // order), and a neighbourhood row is found by binary search. Both layouts list a row's balls in the same order (cell, then
+    // binning order) and the candidates are sorted by visiting rank anyway, so the pairs and their order are identical.
+    //
     // Visiting order: with gravity, balls are ranked by height along −gravity (ties by id) and every pair is solved from
     // the lower ball's rank upwards ("shock propagation", Guendelman et al. 2003): for a contact whose normal points
     // mostly up, the lower ball counts as immovable for the positional correction, and also for the impulse when the
@@ -22,6 +29,8 @@ namespace Ballverse.Core.Sim
         /// <summary>Upper bound on grid cells; the cell size grows if the balls are spread wider.</summary>
         const int MaxGridCells = 1 << 16;
         const float MinCellSize = 0.02f;
+        /// <summary>Above this many grid cells per binned ball the grid is stored sparsely (sorted cell keys).</summary>
+        const int SparseGridCellsPerBall = 8;
         /// <summary>
         /// cos(78°): contacts whose normal is within 78° of "up" are stacking contacts (random packings carry weight through
         /// contacts well beyond the 60° of a hexagonal packing).
@@ -36,6 +45,10 @@ namespace Ballverse.Core.Sim
         ulong[] _orderKeys = new ulong[16];
         ulong[] _orderScratch = new ulong[16];
         int[] _cellItems = new int[16];
+        /// <summary>Sparse grid: cell of <see cref="_cellItems"/>[k], ascending.</summary>
+        int[] _cellKeys = new int[16];
+        int _gridItemCount;
+        bool _gridSparse;
         ulong[] _candidates = new ulong[16];
         ulong[] _candidateScratch = new ulong[16];
         int[] _bigBalls = new int[16];
@@ -50,6 +63,12 @@ namespace Ballverse.Core.Sim
         int[] _cellFill = new int[64];
         int _gridDimX, _gridDimY;
         bool _shock;
+        /// <summary>Warm start of <see cref="BuildOrder"/>: <see cref="_order"/> holds the previous substep's order of the same balls.</summary>
+        bool _orderWarm;
+        int _orderVersion = -1;
+        int _orderCount;
+        /// <summary>Shift budget of the warm-started insertion sort, per ball.</summary>
+        const int WarmOrderShiftsPerBall = 4;
         Vec2 _up;
 
         void ResizeBallScratch(int size)
@@ -62,10 +81,19 @@ namespace Ballverse.Core.Sim
             Array.Resize(ref _orderKeys, size);
             Array.Resize(ref _orderScratch, size);
             Array.Resize(ref _cellItems, size);
+            Array.Resize(ref _cellKeys, size);
             Array.Resize(ref _candidates, size);
             Array.Resize(ref _candidateScratch, size);
             Array.Resize(ref _bigBalls, size);
             Array.Resize(ref _pairStart, size + 1);
+            // The dense layout is used only up to SparseGridCellsPerBall cells per binned ball: size it once here, so that
+            // switching between the layouts as balls spread and gather never allocates in steady state.
+            int cells = SparseGridCellsPerBall * size + 1;
+            if (_cellStart.Length < cells)
+            {
+                _cellStart = new int[cells];
+                _cellFill = new int[cells];
+            }
         }
 
         void SolveBallPairs()
@@ -106,6 +134,16 @@ namespace Ballverse.Core.Sim
                 int x0 = cx > 0 ? cx - 1 : 0, x1 = cx + 1 < dimX ? cx + 1 : dimX - 1;
                 for (int y = y0; y <= y1; y++)
                 {
+                    if (_gridSparse)
+                    {
+                        int last = y * dimX + x1;
+                        for (int m = FirstItemAtOrAfter(y * dimX + x0); m < _gridItemCount && _cellKeys[m] <= last; m++)
+                        {
+                            int rj = _rank[_cellItems[m]];
+                            if (rj > k) _candidates[count++] = (ulong)rj;
+                        }
+                        continue;
+                    }
                     for (int x = x0; x <= x1; x++)
                     {
                         int c = y * dimX + x;
@@ -134,6 +172,7 @@ namespace Ballverse.Core.Sim
                 }
             }
             _pairStart[n] = pairs;
+            _work.BallPairCandidates += pairs;
             int iterations = _settings.BallIterations;
             for (int it = 1; it < iterations; it++)
             {
@@ -151,25 +190,59 @@ namespace Ballverse.Core.Sim
             if (_pairBalls.Length < size) Array.Resize(ref _pairBalls, Math.Max(size, _pairBalls.Length * 2));
         }
 
-        /// <summary>Fills <see cref="_order"/> (visiting order) and <see cref="_rank"/> (inverse) for the binned balls.</summary>
+        /// <summary>
+        /// Fills <see cref="_order"/> (visiting order) and <see cref="_rank"/> (inverse) for the binned balls.
+        /// With gravity the order is the ascending (height, id) key — unique, so any correct sort gives the same order. Balls
+        /// move little within a substep, so when the set of colliding balls is unchanged since the previous substep the keys
+        /// are rebuilt in the previous visiting order (nearly sorted) and insertion-sorted, falling back to the merge sort
+        /// once that needs more than <see cref="WarmOrderShiftsPerBall"/> shifts per ball.
+        /// </summary>
         void BuildOrder(int n)
         {
             if (_shock)
             {
+                bool warm = _orderWarm && _orderVersion == _radiusVersion && _orderCount == n && !ExhaustiveBroadphase;
                 for (int k = 0; k < n; k++)
                 {
-                    int id = _gridBalls[k];
+                    int id = warm ? _order[k] : _gridBalls[k];
                     float height = Vec2.Dot(_balls[id].Position, _up);
                     _orderKeys[k] = ((ulong)SortableBits(height) << 32) | (uint)id;
                 }
-                SimSort.Sort(_orderKeys, n, _orderScratch);
+                if (!warm || !InsertionSortWithin(_orderKeys, n, WarmOrderShiftsPerBall * n)) SimSort.Sort(_orderKeys, n, _orderScratch);
                 for (int k = 0; k < n; k++) _order[k] = (int)(_orderKeys[k] & 0xFFFFFFFFUL);
+                _orderWarm = true;
+                _orderVersion = _radiusVersion;
+                _orderCount = n;
             }
             else
             {
                 for (int k = 0; k < n; k++) _order[k] = _gridBalls[k];
+                _orderWarm = false;
             }
             for (int k = 0; k < n; k++) _rank[_order[k]] = k;
+        }
+
+        /// <summary>Insertion sort giving up (false, keys partly sorted) after <paramref name="maxShifts"/> element moves.</summary>
+        static bool InsertionSortWithin(ulong[] a, int n, int maxShifts)
+        {
+            int shifts = 0;
+            for (int i = 1; i < n; i++)
+            {
+                ulong v = a[i];
+                int j = i - 1;
+                while (j >= 0 && a[j] > v)
+                {
+                    a[j + 1] = a[j];
+                    j--;
+                    if (++shifts > maxShifts)
+                    {
+                        a[j + 1] = v;
+                        return false;
+                    }
+                }
+                a[j + 1] = v;
+            }
+            return true;
         }
 
         /// <summary>Maps a float to a uint with the same ordering (IEEE 754 sign-magnitude to offset binary).</summary>
@@ -232,6 +305,12 @@ namespace Ballverse.Core.Sim
             _gridDimX = (int)dimX;
             _gridDimY = (int)dimY;
             int cells = _gridDimX * _gridDimY;
+            _gridSparse = cells > SparseGridCellsPerBall * n && !ExhaustiveBroadphase;
+            if (_gridSparse)
+            {
+                BinSparse(n, minX, minY, 1f / cellSize, cut);
+                return n;
+            }
             if (_cellStart.Length < cells + 1)
             {
                 int size = Math.Max(cells + 1, _cellStart.Length * 2);
@@ -271,6 +350,57 @@ namespace Ballverse.Core.Sim
             return n;
         }
 
+        /// <summary>
+        /// Sparse layout of the grid <see cref="BuildGrid"/> sized: every binned ball gets exactly the cell the dense layout
+        /// would give it; the balls are sorted by (cell, binning order) into <see cref="_cellItems"/> / <see cref="_cellKeys"/>.
+        /// </summary>
+        void BinSparse(int n, float minX, float minY, float inv, float cut)
+        {
+            int m = 0;
+            for (int k = 0; k < n; k++)
+            {
+                int id = _gridBalls[k];
+                if (_balls[id].Radius > cut)
+                {
+                    _gridCellOf[k] = -1;
+                    _cellOfBall[id] = -1;
+                    continue;
+                }
+                Vec2 p = _balls[id].Position;
+                int cx = (int)((p.X - minX) * inv);
+                int cy = (int)((p.Y - minY) * inv);
+                if (cx >= _gridDimX) cx = _gridDimX - 1;
+                if (cy >= _gridDimY) cy = _gridDimY - 1;
+                if (cx < 0) cx = 0;
+                if (cy < 0) cy = 0;
+                int cell = cy * _gridDimX + cx;
+                _gridCellOf[k] = cell;
+                _cellOfBall[id] = cell;
+                _orderKeys[m++] = ((ulong)(uint)cell << 32) | (uint)k;
+            }
+            SimSort.Sort(_orderKeys, m, _orderScratch);
+            for (int j = 0; j < m; j++)
+            {
+                ulong key = _orderKeys[j];
+                _cellItems[j] = _gridBalls[(int)(key & 0xFFFFFFFFUL)];
+                _cellKeys[j] = (int)(key >> 32);
+            }
+            _gridItemCount = m;
+        }
+
+        /// <summary>Sparse grid: first item index whose cell is ≥ <paramref name="cell"/>.</summary>
+        int FirstItemAtOrAfter(int cell)
+        {
+            int lo = 0, hi = _gridItemCount;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) >> 1;
+                if (_cellKeys[mid] < cell) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo;
+        }
+
         /// <summary>Grid radius = largest radius ≤ 2 × median radius of the colliding balls (<see cref="_gridBalls"/>[0..n)).</summary>
         void UpdateGridRadius(int n)
         {
@@ -299,6 +429,7 @@ namespace Ballverse.Core.Sim
         /// <summary>Solves one pair; <paramref name="ia"/> is the earlier-visited (lower) ball.</summary>
         void SolvePair(int ia, int ib)
         {
+            _work.BallPairSolves++;
             ref BallState a = ref _balls[ia];
             ref BallState b = ref _balls[ib];
             if (!a.Alive || !b.Alive) return;

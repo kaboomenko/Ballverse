@@ -45,6 +45,9 @@ namespace Ballverse.Core.Tests.Sim
             ulong[] b = HashRun(500, 2024UL, 600);
             Assert.Equal(a, b);
             _out.WriteLine("hash@600 = 0x" + a[599].ToString("X16"));
+            // Reference state of this scene that every QA round and the culling broadphase have kept bit-identical
+            // (x64 CoreCLR, Release and Debug); a change here is a change of the simulation's results.
+            Assert.Equal(0x22F125B1599F8C0BUL, a[599]);
         }
 
         [Fact]

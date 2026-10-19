@@ -554,6 +554,8 @@ namespace Ballverse.Core.Sim
             /// <summary>Body-local bounding circle of the centre-line geometry (scaled with the body; thickness added separately).</summary>
             public Vec2 BoundCentre;
             public float BoundRadius;
+            /// <summary>|BoundCentre| (constant; the per-substep bounds margin uses it twice per collider).</summary>
+            public float BoundCentreLength;
             /// <summary>Farthest point of the centre-line geometry from the body origin (body-local, unscaled): bounds the wall speed under rotation.</summary>
             public float Reach;
         }
@@ -566,6 +568,8 @@ namespace Ballverse.Core.Sim
             /// <summary>Rings: radius of the empty disc inside the wall (−1 otherwise).</summary>
             public float Inner;
             public bool Active;
+            /// <summary>Radial index the collider belongs to this substep (PhysicsWorld.Broadphase.cs).</summary>
+            public byte Member;
         }
 
         ColliderData NewCollider(ColliderKind kind, int body, float thickness, in ColliderMaterial m)
@@ -579,6 +583,7 @@ namespace Ballverse.Core.Sim
         int Register(ref ColliderData c, Vec2 boundCentre, float boundRadius, float reach)
         {
             c.BoundCentre = boundCentre;
+            c.BoundCentreLength = boundCentre.Length;
             c.BoundRadius = boundRadius;
             c.Reach = reach;
             if (_colliderCount == _colliders.Length)

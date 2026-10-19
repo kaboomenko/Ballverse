@@ -146,6 +146,11 @@ namespace Ballverse.Core.Sim
         /// <summary>Per substep: records every (sensor, ball) pair whose ball overlapped or swept across the sensor.</summary>
         void DetectSensorTouches()
         {
+            if (_sensorIndex.Usable)
+            {
+                DetectSensorTouchesIndexed();
+                return;
+            }
             for (int c = 0; c < _colliderCount; c++)
             {
                 ref ColliderData cd = ref _colliders[c];
@@ -157,10 +162,11 @@ namespace Ballverse.Core.Sim
                     ref BallState b = ref _balls[i];
                     if (!b.Alive) continue;
                     if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                    _work.SensorBoundsTests++;
                     if (!MayTouch(ref cb, _ballPrev[i], b.Position, b.Radius)) continue;
+                    _work.SensorShapeTests++;
                     if (!SensorTouches(i, c, true)) continue;
-                    if (_sensorTouchedCount == _sensorTouched.Length) Array.Resize(ref _sensorTouched, _sensorTouched.Length * 2);
-                    _sensorTouched[_sensorTouchedCount++] = SensorKey(c, i);
+                    AddSensorTouched(c, i);
                 }
             }
         }
@@ -264,11 +270,21 @@ namespace Ballverse.Core.Sim
             {
                 ref ColliderData cd = ref _colliders[c];
                 if (!cd.Material.IsSensor || !cd.Enabled || !_bodies[cd.Body].Enabled) continue;
+                // Cheap bound pre-check (skips only pairs SensorTouches would reject); the order of the pairs is unchanged.
+                Vec2 bc = default;
+                float bo = 0f, bin = -1f, bs = 0f;
+                bool bounded = !ExhaustiveBroadphase && SensorBoundsNow(c, out bc, out bo, out bin, out bs);
                 for (int i = 0; i < _ballCount; i++)
                 {
                     ref BallState b = ref _balls[i];
                     if (!b.Alive) continue;
                     if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                    if (bounded)
+                    {
+                        _work.SensorOverlapChecks++;
+                        if (!MayOverlapNow(b.Position, b.Radius, bc, bo, bin, bs)) continue;
+                    }
+                    _work.SensorOverlapTests++;
                     if (!SensorTouches(i, c, false)) continue;
                     if (_sensorNowCount == _sensorNow.Length) Array.Resize(ref _sensorNow, _sensorNow.Length * 2);
                     _sensorNow[_sensorNowCount++] = SensorKey(c, i);

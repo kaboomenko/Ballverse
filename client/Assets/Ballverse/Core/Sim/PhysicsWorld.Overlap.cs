@@ -26,7 +26,9 @@ namespace Ballverse.Core.Sim
     // ball does not fit) the nearest candidate that keeps every centre on its legal side is used; if the projection's jump
     // would cross the centre line of some other primitive, the ball stays where it was. Velocity responses then run for the
     // contacts still touching at the final position (ascending collider id, primitive order); round contacts of a joint
-    // solution take their normal at the final position.
+    // solution take their normal at the final position. A ball left approaching a wedge (touching contacts with opposing
+    // normals: an opening slightly narrower than the ball, an acute corner) gets one simultaneous response (ResolveWedge), so
+    // the velocity of a held ball follows the walls instead of accumulating what the sequential responses cannot remove.
     public sealed partial class PhysicsWorld
     {
         /// <summary>Overlapping primitives handled jointly per ball and substep; further ones are skipped for that substep.</summary>
@@ -98,6 +100,9 @@ namespace Ballverse.Core.Sim
             }
 
             float r = ball.Radius;
+            Vec2 v0 = ball.Velocity;
+            float w0 = ball.AngularVelocity;
+            int touching = 0;
             for (int i = 0; i < m; i++)
             {
                 ref ContactFrame cf = ref _overlaps[i];
@@ -110,9 +115,172 @@ namespace Ballverse.Core.Sim
                     RefreshRoundContact(ref cf, sh.Centre, p, r);
                 }
                 else if (Vec2.Dot(cf.N, p) > cf.Target + ContactSlop) continue;
+                touching |= 1 << i;
                 ApplyImpulse(bi, ref cf);
             }
+            if ((touching & (touching - 1)) != 0) ResolveWedge(bi, touching, m, v0, w0);
             ball.Position = p;
+        }
+
+        /// <summary>Velocity constraint tolerance of the wedge solve (m/s).</summary>
+        const float WedgeVelocityTolerance = 1e-5f;
+        /// <summary>Per-contact velocity targets of the wedge solve (N·v ≥ target).</summary>
+        readonly float[] _wedgeTarget = new float[MaxOverlapContacts];
+
+        /// <summary>
+        /// Wedge: the sequential responses above are exact for one contact and for contacts whose normals do not oppose each other,
+        /// but a ball pressed between two contacts with opposing normals (an opening slightly narrower than the ball: the caps of
+        /// a closed opening, a ring gap; an acute corner) loses only a sliver of its velocity into the wedge per pass — nearly
+        /// opposite normals hand the push back and forth. The position stays held by the projection while the velocity keeps
+        /// what gravity or a pusher adds every substep (phantom velocity), so the ball sticks or shoots off when the push reverses.
+        /// When, after the responses, the ball still approaches one of at least two touching contacts with opposing normals, it
+        /// gets one simultaneous response of a point mass (one or two active contacts in 2D):
+        /// <list type="number">
+        /// <item>compression: the nearest velocity to the base velocity v_b leaving no touching contact behind, N·v ≥ N·v_wall
+        /// (projection onto the feasible set); v_b is the velocity before the sequential responses when that one still
+        /// approaches a touching contact, else the velocity after them; when v_b is the velocity before them, the spin goes back
+        /// to its value before them too (the joint response is frictionless); if there is none (a pusher crushing the ball into
+        /// the opening) the sequential result stays;</item>
+        /// <item>restitution on the joint impulse (Poisson): v' = v_c + e·(v_c − v_b), e the largest restitution of the touching
+        /// contacts (as in <see cref="ApplyImpulse"/>, from their approach before the responses; zero below the resting
+        /// threshold, so a held ball only follows the walls); a v' still approaching a contact is projected again.</item>
+        /// </list>
+        /// Both steps are projections or a reflection of the removed part, so against static walls the speed never grows for
+        /// e ≤ 1 (v_c ⊥ v_b − v_c; the sequential responses never speed a ball up either): per-contact restitution targets on nearly opposite normals would intersect far out along the
+        /// opening's axis (QA: a 9.5 m/s hit left at 12.1 m/s with e = 0.9). The velocity change is added to the contacts' Hit
+        /// events (<see cref="RecordWedgeImpulse"/>).
+        /// </summary>
+        void ResolveWedge(int bi, int touching, int m, Vec2 v0, float w0)
+        {
+            ref BallState ball = ref _balls[bi];
+            Vec2 v = ball.Velocity;
+            bool opposing = false, approaching = false;
+            for (int i = 0; i < m; i++)
+            {
+                if ((touching & (1 << i)) == 0) continue;
+                ref ContactFrame ci = ref _overlaps[i];
+                if (Vec2.Dot(ci.N, v - ci.WallVelocity) < -WedgeVelocityTolerance) approaching = true;
+                for (int j = i + 1; j < m; j++)
+                {
+                    if ((touching & (1 << j)) != 0 && Vec2.Dot(ci.N, _overlaps[j].N) < 0f) opposing = true;
+                }
+            }
+            if (!opposing || !approaching) return;
+
+            float e = 0f;
+            for (int i = 0; i < m; i++)
+            {
+                if ((touching & (1 << i)) == 0) continue;
+                ref ContactFrame cf = ref _overlaps[i];
+                float wn = Vec2.Dot(cf.N, cf.WallVelocity);
+                _wedgeTarget[i] = wn;
+                float approach = wn - Vec2.Dot(cf.N, v0);
+                if (approach > 0f)
+                {
+                    float ei = RestitutionOf(ref ball, cf.Collider, approach);
+                    if (ei > e) e = ei;
+                }
+            }
+            // Base velocity: the sequential responses above act on nearly opposite normals one at a time, so where the ball came
+            // in still approaching a touching contact they have usually swapped much of its normal speed into a large component
+            // along the opening (same speed at e = 1) that the restitution step would mirror out of the narrow cone of leaving
+            // velocities (QA: an elastic ball kept 0.58 of its speed). The joint response therefore starts from the velocity
+            // before them (v0) whenever v0 still moves into a touching contact; otherwise from v.
+            bool fromV0 = !LeavesAll(v0, touching, m);
+            Vec2 vb = fromV0 ? v0 : v;
+            if (!NearestLeavingVelocity(vb, touching, m, out Vec2 solved)) return;
+            // The joint response is frictionless and replaces the sequential responses' linear result; when it starts from v0 it
+            // also drops their spin change (w0: the spin before them). Keeping that friction spin while discarding the linear
+            // friction impulse that paid for it would add energy (QA: +6.7 % in one elastic hit with friction 0.8).
+            if (fromV0) ball.AngularVelocity = w0;
+            if (e > 0f)
+            {
+                Vec2 bounced = solved + (solved - vb) * e;
+                if (LeavesAll(bounced, touching, m)) solved = bounced;
+                else if (NearestLeavingVelocity(bounced, touching, m, out Vec2 projected)) solved = projected;
+            }
+            ball.Velocity = solved;
+            RecordWedgeImpulse(bi, touching, m, v, solved - v);
+        }
+
+        /// <summary>True if <paramref name="cand"/> meets every touching contact's target (within the tolerance).</summary>
+        bool LeavesAll(Vec2 cand, int touching, int m)
+        {
+            for (int k = 0; k < m; k++)
+            {
+                if ((touching & (1 << k)) == 0) continue;
+                if (Vec2.Dot(_overlaps[k].N, cand) < _wedgeTarget[k] - WedgeVelocityTolerance) return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Adds the wedge response's momentum change m·|Δv| to the Hit events of the touching contacts (the sound / haptics
+        /// intensity), split in proportion to each contact's share N·Δv &gt; 0; the speed is the contact's approach before the
+        /// wedge response. <see cref="RecordContact"/> merges into the contact's event of this tick.
+        /// </summary>
+        void RecordWedgeImpulse(int bi, int touching, int m, Vec2 v, Vec2 dv)
+        {
+            float sum = 0f;
+            for (int i = 0; i < m; i++)
+            {
+                if ((touching & (1 << i)) == 0) continue;
+                float s = Vec2.Dot(_overlaps[i].N, dv);
+                if (s > 0f) sum += s;
+            }
+            if (sum <= 0f) return;
+            ref BallState ball = ref _balls[bi];
+            float total = ball.Mass * dv.Length;
+            for (int i = 0; i < m; i++)
+            {
+                if ((touching & (1 << i)) == 0) continue;
+                ref ContactFrame cf = ref _overlaps[i];
+                float s = Vec2.Dot(cf.N, dv);
+                if (s <= 0f) continue;
+                float approach = Vec2.Dot(cf.N, cf.WallVelocity - v);
+                RecordContact(SimEventKind.Hit, bi, cf.Collider, cf.Body, cf.Cp, cf.N, total * (s / sum), approach > 0f ? approach : 0f, cf.LocalAngle, cf.Feature);
+            }
+        }
+
+        /// <summary>
+        /// Nearest velocity to <paramref name="v"/> with N·v ≥ target for every touching contact: the single projections and the
+        /// pairwise intersections of the constraint lines (fixed order, first minimum wins). False if none is feasible.
+        /// </summary>
+        bool NearestLeavingVelocity(Vec2 v, int touching, int m, out Vec2 best)
+        {
+            best = v;
+            float bestD = float.MaxValue;
+            for (int i = 0; i < m; i++)
+            {
+                if ((touching & (1 << i)) == 0) continue;
+                ref ContactFrame ci = ref _overlaps[i];
+                float violation = _wedgeTarget[i] - Vec2.Dot(ci.N, v);
+                if (violation > 0f) ConsiderVelocity(v + ci.N * violation, v, touching, m, ref best, ref bestD);
+            }
+            for (int i = 0; i < m; i++)
+            {
+                if ((touching & (1 << i)) == 0) continue;
+                ref ContactFrame ci = ref _overlaps[i];
+                for (int j = i + 1; j < m; j++)
+                {
+                    if ((touching & (1 << j)) == 0) continue;
+                    ref ContactFrame cj = ref _overlaps[j];
+                    float det = ci.N.X * cj.N.Y - ci.N.Y * cj.N.X;
+                    if (det > -1e-6f && det < 1e-6f) continue;
+                    float ti = _wedgeTarget[i], tj = _wedgeTarget[j];
+                    var cand = new Vec2((ti * cj.N.Y - ci.N.Y * tj) / det, (ci.N.X * tj - ti * cj.N.X) / det);
+                    ConsiderVelocity(cand, v, touching, m, ref best, ref bestD);
+                }
+            }
+            return bestD < float.MaxValue;
+        }
+
+        void ConsiderVelocity(Vec2 cand, Vec2 v, int touching, int m, ref Vec2 best, ref float bestD)
+        {
+            float d = (cand - v).LengthSquared;
+            if (d >= bestD || !LeavesAll(cand, touching, m)) return;
+            best = cand;
+            bestD = d;
         }
 
         /// <summary>Adds the overlaps of every candidate at <paramref name="pWorld"/> not listed yet. False if the ball died.</summary>
@@ -165,6 +333,15 @@ namespace Ballverse.Core.Sim
                 case ColliderKind.Polyline:
                 {
                     int edges = c.Closed ? c.VertexCount : c.VertexCount - 1;
+                    if (EdgeFramesValid(ci, s))
+                    {
+                        for (int k = 0; k < edges; k++)
+                        {
+                            ref EdgeFrame e = ref _edgeFrames[c.VertexStart + k];
+                            if (!GatherCapsuleCore(bi, ci, q, qStart, e.A, e.B, e.D, e.L2, e.N, true, rt, k, h)) return false;
+                        }
+                        return true;
+                    }
                     for (int k = 0; k < edges; k++)
                     {
                         Vec2 a = _vertices[c.VertexStart + k] * s;
@@ -199,6 +376,15 @@ namespace Ballverse.Core.Sim
         {
             Vec2 d = b - a;
             float l2 = d.LengthSquared;
+            return GatherCapsuleCore(bi, ci, q, qStart, a, b, d, l2, default, false, rt, feature, h);
+        }
+
+        /// <summary>
+        /// <see cref="GatherCapsule"/> with d = b − a and l2 = |d|² given; with <paramref name="hasNormal"/>, <paramref name="ln"/> is
+        /// the precomputed face normal d⊥ / |d| (otherwise computed here the same way).
+        /// </summary>
+        bool GatherCapsuleCore(int bi, int ci, Vec2 q, Vec2 qStart, Vec2 a, Vec2 b, Vec2 d, float l2, Vec2 ln, bool hasNormal, float rt, int feature, float h)
+        {
             float u = 0f;
             if (l2 > 1e-14f) u = Vec2.Dot(q - a, d) / l2;
             float uc = u < 0f ? 0f : (u > 1f ? 1f : u);
@@ -211,7 +397,7 @@ namespace Ballverse.Core.Sim
             if (l2 > 1e-14f && (face || dist2 <= NormalEpsilon * NormalEpsilon))
             {
                 // Face: the side the centre is on now (legal after the sweep); exactly on the line — the side it came from.
-                Vec2 ln = d.Perp / MathF.Sqrt(l2);
+                if (!hasNormal) ln = d.Perp / MathF.Sqrt(l2);
                 float side = Vec2.Dot(q - a, ln);
                 if (side > -SideEpsilon && side < SideEpsilon) side = Vec2.Dot(qStart - a, ln);
                 n = side >= 0f ? ln : -ln;
