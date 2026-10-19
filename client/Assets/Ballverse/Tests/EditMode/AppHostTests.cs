@@ -242,7 +242,9 @@ namespace Ballverse.Tests
                 IReadOnlyList<IAppModule> modules = AppModuleCatalog.Create(platform);
                 Assert.IsInstanceOf<PlatformModule>(modules[0]);
 
-                var host = new AppHost(modules, Report);
+                // The other device modules need Play Mode (DontDestroyOnLoad runners, SDKs); the whole catalog boots with
+                // fakes in Ballverse.App.Tests (AppFlowTests).
+                var host = new AppHost(new[] { modules[0] }, Report);
                 host.Boot();
                 Assert.AreSame(platform.Lifecycle, host.Services.Get<IAppLifecycle>());
                 Assert.AreSame(platform.FrameRate, host.Services.Get<IFrameRatePolicy>());

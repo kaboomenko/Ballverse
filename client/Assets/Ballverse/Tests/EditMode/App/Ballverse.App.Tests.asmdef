@@ -1,0 +1,33 @@
+{
+    "name": "Ballverse.App.Tests",
+    "rootNamespace": "Ballverse.App.Tests",
+    "references": [
+        "Ballverse.Core",
+        "Ballverse.Platform",
+        "Ballverse.App",
+        "Ballverse.UI",
+        "Ballverse.Services",
+        "Ballverse.Studio",
+        "Ballverse.Media",
+        "Ballverse.Render",
+        "Ballverse.Sim",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

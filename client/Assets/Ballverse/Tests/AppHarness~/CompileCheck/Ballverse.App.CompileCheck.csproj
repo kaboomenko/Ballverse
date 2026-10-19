@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Compile-only check of Ballverse.App and Ballverse.Sim outside Unity (the Unity editor is not available in the development
+    container; Unity compiles them in GameCI). Compiles App + Sim together with the REAL sources of every assembly they wire
+    (Studio, Media, Services, Render runtime, UI view models and model, Platform) against Core and Unity API stand-ins
+    (../Stubs). Only the UI Toolkit shell types the App calls are signature stubs (../Stubs/UiRuntimeStubs.cs, copied from
+    UI/Runtime). The App EditMode tests are type-checked too. GameCI's Unity compile remains the authority.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>Ballverse.App.CompileCheck</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591;CS0618</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Stubs/*.cs" />
+    <Compile Include="../../../App/**/*.cs" />
+    <Compile Include="../../../Sim/**/*.cs" />
+    <Compile Include="../../../Studio/**/*.cs" Exclude="../../../Studio/Tests/**" />
+    <Compile Include="../../../Media/Api/*.cs;../../../Media/Common/*.cs;../../../Media/Internal/*.cs;../../../Media/Fake/*.cs" />
+    <Compile Include="../../../Services/**/*.cs" Exclude="../../../Services/Tests/**;../../../Services/Editor/**" />
+    <Compile Include="../../../Render/Runtime/*.cs" />
+    <Compile Include="../../../UI/ViewModels/*.cs;../../../UI/Model/**/*.cs" />
+    <Compile Include="../../EditMode/App/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../../../core-tests/Ballverse.Core/Ballverse.Core.csproj" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+  </ItemGroup>
+</Project>
