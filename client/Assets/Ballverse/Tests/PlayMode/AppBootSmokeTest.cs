@@ -175,7 +175,9 @@ namespace Ballverse.PlayModeTests
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<AppRunner>(), "AppRunner (per-frame Tick / LateTick)");
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<ServicesRunner>(), "ServicesRunner");
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<LiveAudioOutput>(), "LiveAudioOutput");
-            Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<AudioListener>(), "an AudioListener (LiveAudioOutput adds one to the camera-less boot scene)");
+            // DeviceAudio adds the app's only listener to the camera-less boot scene, on an object of its own.
+            string audioPlacement = DeviceAudio.FindPlacementProblem();
+            Assert.IsNull(audioPlacement, audioPlacement);
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<BallverseUIRoot>(), "BallverseUIRoot");
             Assert.IsNotNull(UnityEngine.Object.FindAnyObjectByType<StudioRunner>(), "StudioRunner (export / preview loop)");
             _notices = ctx.Notices;
@@ -242,6 +244,10 @@ namespace Ballverse.PlayModeTests
             long budgetMs = ctx.Remote.Budgets.Get(ctx.Tier).TimeMs;
             LiveRunSnapshot beforeDice = LiveRunSnapshot.Of(sim, ctx);
             int noticesBeforeDice = _shownNotices.Count;
+            // A session seed proven to select a candidate: with a random one, "nothing found" is a legitimate outcome on a slow
+            // runner, and this step checks the wiring, not luck. Everything else (budget, worker, posting back) stays real.
+            var pinnedSeeds = new List<ulong>();
+            sim.SessionSeedSource = SmokeChecks.ViableSessionSeedSource(sim, ctx, pinnedSeeds);
             sim.Generate();
             Assert.IsTrue(sim.IsGenerating, "🎲 started (the result is posted back to the main thread on a later frame)");
             double generationTimeout = Math.Max(FrameStepTimeoutS, 20.0 * budgetMs / 1000.0);
@@ -258,7 +264,7 @@ namespace Ballverse.PlayModeTests
                 return !sim.IsGenerating && !sim.AwaitingWinnerDecision;
             }, generationTimeout);
             LiveRunSnapshot afterDice = LiveRunSnapshot.Of(sim, ctx);
-            Info("generation took " + generating.ElapsedMilliseconds + " ms; style " + sim.LastGenerationStyle + ", phase " + sim.Phase
+            Info("generation took " + generating.ElapsedMilliseconds + " ms; session seed " + string.Join(", ", pinnedSeeds) + ", style " + sim.LastGenerationStyle + ", phase " + sim.Phase
                  + ", " + beforeDice + " → " + afterDice + (declinedChoice ? " (winner choice closed)" : "") + ", toasts so far: " + string.Join(", ", _toasts));
             Assert.IsTrue(ctx.Live.HasRun, "a run is shown after 🎲");
             string diceFailure = SmokeChecks.DiceFailure(beforeDice, afterDice, declinedChoice,
@@ -447,6 +453,9 @@ namespace Ballverse.PlayModeTests
                 yield return null;
                 if (host != null) Assert.AreEqual(AppHostState.ShutDown, host.State, "host shut down with Bootstrap");
                 Assert.IsNull(Bootstrap.Host, "Bootstrap.Host after shutdown");
+                // DeviceEnvironment.Shutdown releases the app's listener (a leak would be reused by the next PlayMode test).
+                Assert.IsNull(DeviceAudio.OwnedListener, "DeviceAudio.OwnedListener after shutdown");
+                Assert.IsNull(DeviceAudio.CurrentListener, "DeviceAudio.CurrentListener after shutdown");
                 ReportLeftovers();
             }
             try
@@ -590,6 +599,11 @@ namespace Ballverse.PlayModeTests
             Collect<LiveAudioOutput>();
             Collect<BallverseUIRoot>();
             Collect<StudioRunner>();
+            // Only the app's own listener object: a listener the test runner's scene might carry is not the app's leftover.
+            foreach (AudioListener listener in UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None))
+            {
+                if (listener.gameObject.name == DeviceAudio.ListenerObjectName) left.Add(listener);
+            }
             if (left.Count == 0) return;
             _softFindings.Add("objects left after shutdown: " + string.Join(", ", left.Select(o => o.GetType().Name)));
             foreach (UnityEngine.Object o in left)

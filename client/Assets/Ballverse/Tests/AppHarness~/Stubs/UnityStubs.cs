@@ -166,6 +166,7 @@ namespace UnityEngine
         public static void DestroyImmediate(Object obj) { }
         public static void DontDestroyOnLoad(Object target) { }
         public static T FindAnyObjectByType<T>() where T : Object => default;
+        public static T[] FindObjectsByType<T>(FindObjectsSortMode sortMode) where T : Object => new T[0];
         public static implicit operator bool(Object exists) => !ReferenceEquals(exists, null);
         public static bool operator ==(Object x, Object y) => ReferenceEquals(x, y);
         public static bool operator !=(Object x, Object y) => !ReferenceEquals(x, y);
@@ -201,6 +202,7 @@ namespace UnityEngine
         public GameObject(string name) { }
         public Transform transform => default;
         public T AddComponent<T>() where T : Component => default;
+        public T[] GetComponents<T>() => new T[0];
     }
 
     public class Texture : Object

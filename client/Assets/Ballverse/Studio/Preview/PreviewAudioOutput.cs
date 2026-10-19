@@ -10,8 +10,12 @@ namespace Ballverse.Studio
     /// <see cref="AudibleUs"/> (cursor position minus the DSP buffer latency) through Core <see cref="PreviewAudioSync"/> and
     /// <see cref="PlaybackClock"/>, which fall back to the frame clock whenever the audio thread stops pulling samples.
     /// <para>The filter only runs when the source does not bypass effects (<c>bypassEffects</c> also bypasses the custom
-    /// <see cref="OnAudioFilterRead"/> filter) and an enabled <see cref="AudioListener"/> exists: when the scene has none, one is
-    /// added to this object for the preview's lifetime.</para>
+    /// <see cref="OnAudioFilterRead"/> filter) and an enabled <see cref="AudioListener"/> exists. This object never carries the
+    /// listener. Unity inserts the filter into the DSP chain of the AudioSource or AudioListener on the same object, and only
+    /// one of them can have it ("GameObject has multiple AudioSources and/or AudioListeners attached"). On a listener the filter
+    /// would also overwrite the final mix. The app's only listener is created on its own object by the App
+    /// (<c>DeviceAudio.EnsureListener</c>) before the studio starts. Without a listener the preview plays silent, and
+    /// <see cref="PreviewAudioSync"/> falls back to the frame clock.</para>
     /// </summary>
     [RequireComponent(typeof(AudioSource))]
     public sealed class PreviewAudioOutput : MonoBehaviour
@@ -22,7 +26,6 @@ namespace Ballverse.Studio
         volatile int _outputRate = 48000;
         long _latencyUs;
         long _blockUs;
-        AudioListener _ownListener;
 
         public PcmPlaybackCursor Cursor => _cursor;
 
@@ -68,15 +71,6 @@ namespace Ballverse.Studio
             _source.bypassListenerEffects = true;
             _source.bypassReverbZones = true;
             AudioSettings.OnAudioConfigurationChanged += OnAudioConfigurationChanged;
-            EnsureListener();
-        }
-
-        /// <summary>Unity mixes nothing without an enabled AudioListener; the studio may run in a scene without a camera listener.</summary>
-        void EnsureListener()
-        {
-            AudioListener existing = Object.FindAnyObjectByType<AudioListener>();
-            if (existing != null && existing.isActiveAndEnabled) return;
-            _ownListener = gameObject.AddComponent<AudioListener>();
         }
 
         void OnEnable()
@@ -120,7 +114,6 @@ namespace Ballverse.Studio
         {
             _cursor.SeekUs(outputUs);
             _cursor.Playing = true;
-            if (_ownListener == null) EnsureListener(); // a listener found at start may have been destroyed with its scene
             if (_source != null && !_source.isPlaying) _source.Play();
         }
 

@@ -56,15 +56,47 @@ namespace Ballverse.App.Tests
         [Test]
         public void LiveAudioOutputKeepsItsOwnFilterAudibleAndAnAppWideListener()
         {
-            string path = FindSource(Path.Combine("Sim", "Unity", "LiveAudioOutput.cs"));
-            if (path == null) Assert.Ignore("LiveAudioOutput.cs source not found from the test directory");
-            string code = File.ReadAllText(path);
+            string live = FindSource(Path.Combine("Sim", "Unity", "LiveAudioOutput.cs"));
+            if (live == null) Assert.Ignore("LiveAudioOutput.cs source not found from the test directory");
+            string code = File.ReadAllText(live);
             // bypassEffects also bypasses the component's own OnAudioFilterRead (the only thing producing sound).
             Assert.IsFalse(Regex.IsMatch(code, @"bypassEffects\s*=\s*true"), "the source must not bypass effects");
             StringAssert.Contains("OnAudioFilterRead", code);
-            // Unity mixes nothing without an enabled AudioListener; the boot scene has no camera.
-            StringAssert.Contains("AddComponent<AudioListener>()", code);
-            StringAssert.Contains("EnsureListener();", code);
+
+            // PlayMode smoke test (GameCI): a listener added next to the AudioSource + OnAudioFilterRead script made Unity log
+            // "GameObject has multiple AudioSources and/or AudioListeners attached" on every boot (and the filter would have
+            // overwritten the final mix). The outputs add no listener; the App's DeviceAudio owns the only one, on its own object.
+            string preview = FindSource(Path.Combine("Studio", "Preview", "PreviewAudioOutput.cs"));
+            string deviceAudio = FindSource(Path.Combine("App", "Unity", "DeviceAudio.cs"));
+            string environment = FindSource(Path.Combine("App", "Unity", "DeviceEnvironment.cs"));
+            Assert.IsNotNull(preview, "PreviewAudioOutput.cs");
+            Assert.IsNotNull(deviceAudio, "DeviceAudio.cs");
+            Assert.IsNotNull(environment, "DeviceEnvironment.cs");
+            string previewCode = File.ReadAllText(preview);
+            StringAssert.Contains("OnAudioFilterRead", previewCode);
+            Assert.IsFalse(Regex.IsMatch(previewCode, @"bypassEffects\s*=\s*true"), "the preview source must not bypass effects");
+            foreach (string output in new[] { code, previewCode })
+            {
+                StringAssert.DoesNotContain("AudioListener>", output, "an output object (AudioSource + OnAudioFilterRead) never gets a listener");
+            }
+            string ownerCode = File.ReadAllText(deviceAudio);
+            StringAssert.IsMatch(@"new GameObject\(ListenerObjectName\);\s*(//[^\n]*\s*)*(if \(Application\.isPlaying\) UnityEngine\.Object\.DontDestroyOnLoad\(go\);\s*)?s_owned = go\.AddComponent<AudioListener>\(\);",
+                ownerCode, "the listener gets a fresh object of its own");
+            string environmentCode = File.ReadAllText(environment);
+            StringAssert.Contains("CreateAudioOutput = DeviceAudio.CreateLiveOutput,", environmentCode);
+            StringAssert.Contains("DeviceAudio.EnsureListener();", environmentCode, "the studio (preview output) starts with the listener in place");
+            // QA round 1: a reused listener destroyed with its scene is replaced (every frame), and shutdown releases the app's own.
+            StringAssert.Contains("RunLoop = (tick, late) => AppRunner.Create(DeviceAudio.KeepingListener(tick), late),", environmentCode);
+            StringAssert.Contains("DeviceAudio.ReleaseListener();", environmentCode, "host shutdown destroys the app's listener object");
+
+            // No other runtime code adds a listener.
+            string root = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(deviceAudio)));
+            var adders = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+                .Where(f => !f.Contains(Path.DirectorySeparatorChar + "Tests" + Path.DirectorySeparatorChar))
+                .Where(f => File.ReadAllText(f).Contains("AddComponent<AudioListener>"))
+                .Select(Path.GetFileName)
+                .ToList();
+            CollectionAssert.AreEqual(new[] { "DeviceAudio.cs" }, adders);
         }
 
         // ------------------------------------------------------------------ mode-owned input (blocker)
@@ -553,6 +585,7 @@ namespace Ballverse.App.Tests
             TestApp app = Boot();
             app.OpenQuickRun();
             for (int i = 0; i < 30; i++) app.Frame();
+            app.PinViableSessionSeeds(); // the generated run must start (a random seed may find nothing)
             ulong before = app.Context.Live.Seed;
             int evaluated = 0;
             app.Context.Ads.Evaluated += (k, d) => evaluated++;

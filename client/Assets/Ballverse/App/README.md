@@ -44,8 +44,10 @@ frame time, so a 30 FPS device still plays at 1×; touch → `ArenaGestureTracke
 the **mode's own** `IArenaInputMapper` → `SimInput` at tick boundaries; replay / render stream / events written while
 playing; runs kept in the studio's ring of the last 5), `LiveAudioEngine` (Core `EventMixer`, SPSC queue, rendered in
 `OnAudioFilterRead` without locks or allocation, resampled to the device rate), `LiveAudioOutput` (silent looping
-`AudioSource` that does **not** set `bypassEffects` — that would bypass its own `OnAudioFilterRead` — plus the app-wide
-`AudioListener` the camera-less boot scene lacks; Studio's preview output reuses it), `LiveHaptics` (Core
+`AudioSource` that does **not** set `bypassEffects` — that would bypass its own `OnAudioFilterRead`; it never carries an
+`AudioListener`: Ballverse.App's `DeviceAudio` owns the app's only listener, on a dedicated persistent `BallverseAudioListener`
+object, because a script's `OnAudioFilterRead` attaches to only one of the AudioSource or AudioListener on its object and on a
+listener it would overwrite the final mix; the listener is re-checked every frame and released at shutdown), `LiveHaptics` (Core
 `HapticsLimiter`; off by the setting, the run's `haptics` parameter or the system power saver), procedural sample banks
 and music, `LiveSimView` (Ballverse.Render presenter), `GalleryPreviewRenderer` (at most one loop restart per frame),
 `UnityHapticsDevice` (+ iOS plugin).

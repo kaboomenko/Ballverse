@@ -140,9 +140,80 @@ namespace Ballverse.App.Tests
         }
 
         [Test]
+        public void PinnedSeedHelpersMirrorTheViewModelsGenerationRequest()
+        {
+            // TestApp.PinViableSessionSeeds and SmokeChecks.ViableSessionSeedSource search seeds for a copy of the request
+            // SimulationViewModel.StartGeneration sends (the view model has no seam that hands out the real one, and the PlayMode
+            // assembly cannot reference this editor-only one). QA round 1: if StartGeneration starts setting another request field,
+            // the copies would pick seeds for a different request and the flakiness would come back silently. This static check
+            // fails instead: every field the view model sets must be set by both copies (the cancellation and progress callbacks
+            // excepted: they do not change the candidates), and the generator / duration rules they mirror must be unchanged.
+            string vm = FindSource(System.IO.Path.Combine("App", "ViewModels", "SimulationViewModel.cs"));
+            string testApp = FindSource(System.IO.Path.Combine("Tests", "EditMode", "App", "TestApp.cs"));
+            string smoke = FindSource(System.IO.Path.Combine("Tests", "PlayMode", "SmokeChecks.cs"));
+            if (vm == null) Assert.Ignore("SimulationViewModel.cs source not found from the test directory");
+            Assert.IsNotNull(testApp, "TestApp.cs");
+            Assert.IsNotNull(smoke, "SmokeChecks.cs");
+
+            string vmCode = System.IO.File.ReadAllText(vm);
+            int start = vmCode.IndexOf("void StartGeneration(", StringComparison.Ordinal);
+            Assert.GreaterOrEqual(start, 0, "SimulationViewModel.StartGeneration");
+            int end = vmCode.IndexOf("Task.Run(", start, StringComparison.Ordinal);
+            Assert.Greater(end, start, "StartGeneration starts the worker with Task.Run");
+            string body = vmCode.Substring(start, end - start);
+            var vmFields = new HashSet<string>(InitializerFields(body));
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(body, @"\brequest\.(\w+)\s*="))
+                vmFields.Add(m.Groups[1].Value);
+            CollectionAssert.IsSupersetOf(vmFields, new[] { "BaseValues", "Tier", "SessionSeed", "Style", "Goal", "Budgets", "Profiles" },
+                "the request parser still reads StartGeneration");
+            StringAssert.Contains("IModeDefinition generatorMode = lastSecond ? new ParticipantsKeepingMode(mode) : mode;", body);
+            StringAssert.Contains("ModeGenerator.Generate(generatorMode, request)", vmCode.Substring(end));
+            StringAssert.Contains("if (durationId != \"auto\" && mode.Schema.Contains(CommonParams.TargetDuration))", body);
+            StringAssert.Contains("baseValues = baseValues.With(CommonParams.TargetDuration, ParamValue.Int(int.Parse(durationId, System.Globalization.CultureInfo.InvariantCulture)));", body);
+            vmFields.Remove("IsCancelled");
+            vmFields.Remove("ElapsedMs");
+
+            foreach (string helper in new[] { testApp, smoke })
+            {
+                string code = System.IO.File.ReadAllText(helper);
+                string name = System.IO.Path.GetFileName(helper);
+                int search = code.IndexOf("ModeGenerator.Generate(generator, new ModeGenerationRequest", StringComparison.Ordinal);
+                Assert.GreaterOrEqual(search, 0, name + ": the seed search");
+                var helperFields = new HashSet<string>(InitializerFields(code.Substring(search)));
+                CollectionAssert.IsSubsetOf(vmFields, helperFields,
+                    name + " must set every request field StartGeneration sets (" + string.Join(", ", vmFields.Except(helperFields)) + " missing)");
+                StringAssert.Contains("IModeDefinition generator = goal == DirectorGoal.LastSecond ? new ParticipantsKeepingMode(mode) : mode;", code, name);
+                StringAssert.Contains("if (duration != \"auto\" && mode.Schema.Contains(CommonParams.TargetDuration))", code, name);
+                StringAssert.Contains("values = values.With(CommonParams.TargetDuration, ParamValue.Int(int.Parse(duration, System.Globalization.CultureInfo.InvariantCulture)));", code, name);
+            }
+        }
+
+        /// <summary>Member names assigned in the first <c>new ModeGenerationRequest { ... }</c> initializer of <paramref name="code"/>.</summary>
+        static IEnumerable<string> InitializerFields(string code)
+        {
+            int at = code.IndexOf("new ModeGenerationRequest", StringComparison.Ordinal);
+            Assert.GreaterOrEqual(at, 0, "new ModeGenerationRequest");
+            int open = code.IndexOf('{', at);
+            int depth = 0;
+            int close = -1;
+            for (int i = open; i < code.Length && close < 0; i++)
+            {
+                if (code[i] == '{') depth++;
+                else if (code[i] == '}' && --depth == 0) close = i;
+            }
+            Assert.Greater(close, open, "end of the ModeGenerationRequest initializer");
+            string block = code.Substring(open + 1, close - open - 1);
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(block, @"(?m)^\s*(\w+)\s*=(?!=)"))
+                yield return m.Groups[1].Value;
+        }
+
+        [Test]
         public void LastSecondChoiceWithoutColoursFallsBackToTenseFinaleWithoutAGoal()
         {
             TestApp app = BootTinyBudgets();
+            // Every 🎲 below must start a run: a random session seed sometimes gets no acceptable candidate from the 2-candidate
+            // budget («Couldn't find a working variant», flaky on a GitHub runner).
+            app.PinViableSessionSeeds();
             Assert.IsTrue(app.Context.Modes.TryGet("ring_escape", out IModeDefinition mode));
             Assert.IsTrue(app.Sim.OpenWith(mode, ColorRace(mode, app.Context.Tier)));
             app.Sim.SetScreenActive(true);
@@ -179,6 +250,7 @@ namespace Ballverse.App.Tests
             app.Sim.Generate("chaos", "auto");
             WaitUntil(app, () => !app.Sim.IsGenerating, "chaos generation done");
             Assert.AreEqual("chaos", app.Context.Settings.Data.GenerationStyle);
+            Assert.AreEqual(4, app.PinnedSessionSeeds.Count, "every 🎲 got a proven session seed");
             Assert.IsEmpty(app.Errors, Errors(app));
         }
 
@@ -200,6 +272,7 @@ namespace Ballverse.App.Tests
         {
             var tracking = new FakeTrackingAuthorization { Answer = TrackingAuthorizationStatus.Denied };
             TestApp app = BootAtResultCardWithAttPending(tracking);
+            app.PinViableSessionSeeds(); // the generated run must start (a random seed may find nothing)
             ulong before = app.Context.Live.Seed;
 
             app.Sim.Generate();
