@@ -202,6 +202,7 @@ namespace Ballverse.Core.Sim
 
         void UpdateColliderBounds(float h)
         {
+            _capExtent = -1f;
             for (int c = 0; c < _colliderCount; c++)
             {
                 ref ColliderData cd = ref _colliders[c];
@@ -209,6 +210,11 @@ namespace Ballverse.Core.Sim
                 ref PhysicsBodyState b = ref _bodies[cd.Body];
                 cb.Active = cd.Enabled && b.Enabled;
                 if (!cb.Active) continue;
+                if (!cd.Material.IsSensor && HasFreeCaps(ref cd))
+                {
+                    float extent = cd.Kind == ColliderKind.Circle ? cd.Radius * b.Scale : cd.HalfThickness;
+                    if (extent > _capExtent) _capExtent = extent;
+                }
                 ref BodyFrame f = ref _frames[cd.Body];
                 float s = b.Scale;
                 cb.Centre = b.Position + Vec2.Rotate(cd.BoundCentre * s, f.Cos, f.Sin);

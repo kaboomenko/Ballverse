@@ -177,7 +177,7 @@ namespace Ballverse.Core.Tests.Monetization
                 var list = ProductIds.All.Where(_ => rng.NextUInt(3) != 0).ToArray();
                 var build = AllModes.Where(_ => rng.NextUInt(4) != 0).ToArray();
                 var disabled = AllModes.Where(_ => rng.NextUInt(8) == 0).ToArray();
-                var c = new MonetizationConfig(new ModeCode[0], list.Reverse(), build, disabled);
+                var c = new MonetizationConfig(new ModeCode[0], Enumerable.Reverse(list), build, disabled);
                 var playable = build.Except(disabled).OrderBy(m => m).ToArray();
                 Assert.Equal(playable, c.ReleasedModes.ToArray());
                 var expectedSold = ProductIds.All.Where(id => list.Contains(id) && ProductCatalog.Get(id).Grants.ToArray()

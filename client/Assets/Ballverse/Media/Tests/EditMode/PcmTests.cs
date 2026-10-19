@@ -78,6 +78,15 @@ namespace Ballverse.Media.Tests
         }
 
         [Test]
+        public void PcmFile_UsesCoreAudioFormat()
+        {
+            Assert.AreEqual(Ballverse.Core.Audio.AudioConstants.SampleRate, PcmFile.SampleRate);
+            Assert.AreEqual(Ballverse.Core.Audio.AudioConstants.Channels, PcmFile.Channels);
+            Assert.AreEqual(48000, VideoWriterOptions.AudioSampleRate);
+            Assert.AreEqual(8, PcmFile.BytesPerFrame);
+        }
+
+        [Test]
         public void PcmFile_WriteRead_RoundTrip_IsAtomic()
         {
             using (var dir = new TempDir())

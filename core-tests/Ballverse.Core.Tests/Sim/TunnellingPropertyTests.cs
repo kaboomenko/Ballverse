@@ -132,15 +132,20 @@ namespace Ballverse.Core.Tests.Sim
             SegmentPolygon,
             Ring,
             DoubleRing,
+            /// <summary>Polygon with an opening narrower than the ball in one side (open polyline, M02 «Открытая грань»).</summary>
+            OpenPolygon,
+            /// <summary>Ring with 1–3 gaps narrower than the ball.</summary>
+            GappedRing,
         }
 
         /// <summary>
         /// Spec §6.5 property test: 10 000 random throws over the whole velocity envelope — balls up to 60 m/s (half of them at
         /// exactly 60, half of those aimed at a corner), walls up to 360°/s with surface speed up to 25 m/s, radial motion up
         /// to 5 m/s, ball radius ≥ 0.05 m, wall thickness ≥ 0.04 m, 4–8 substeps, closed polygons, stars, polygons of separate
-        /// segments, gapless rings and ring pairs at the minimum spacing; one scene in four at the worst corner of the
-        /// envelope, one in four with gravity, one in three with ball–ball contacts on. No ball centre may ever cross a wall's
-        /// centre line.
+        /// segments, gapless rings and ring pairs at the minimum spacing, polygons with an opening and rings with gaps narrower
+        /// than the ball (QA round 3: both are closed for the ball, the side across an opening being decided by the chord between
+        /// its edge caps); one scene in four at the worst corner of the envelope, one in four with gravity, one in three with
+        /// ball–ball contacts on. No ball centre may ever cross a wall's centre line or a closed opening.
         /// </summary>
         [Fact]
         public void TenThousandRandomThrowsAcrossTheEnvelopeNeverTunnel()
@@ -163,7 +168,7 @@ namespace Ballverse.Core.Tests.Sim
 
         long RunEnvelopeScene(Rng rng, int scene, int balls, int ticks)
         {
-            var arena = (Arena)(scene % 5);
+            var arena = (Arena)(scene % 7);
             bool worst = scene % 4 == 0;
             bool gravity = scene % 4 == 1;
             // One scene in three with ball–ball contacts on (pushes into corners and against walls before the wall pass).
@@ -184,6 +189,8 @@ namespace Ballverse.Core.Tests.Sim
             int body = w.AddBody(BodyDef.Kinematic(Vec2.Zero, 0f, omega));
             Vec2[] verts = null;
             float innerR = 0f, outerR = 0f;
+            Vec2 opening = Vec2.Zero;
+            AngularGap[] ringGaps = null;
             switch (arena)
             {
                 case Arena.Polygon:
@@ -209,6 +216,35 @@ namespace Ballverse.Core.Tests.Sim
                     int outerBody = w.AddBody(BodyDef.Kinematic(Vec2.Zero, 0f, -omega));
                     w.AddRing(outerBody, Vec2.Zero, outerR, t, ReadOnlySpan<AngularGap>.Empty, wall);
                     break;
+                case Arena.OpenPolygon:
+                {
+                    verts = ShapeBuilder.RegularPolygon(rng.NextInt(3, 9), radius);
+                    Vec2 a = verts[verts.Length - 1], b = verts[0];
+                    float free = 2f * r * rng.NextFloat(0.3f, 0.95f);
+                    float half = (free + t) * 0.5f / (b - a).Length;
+                    var pts = new Vec2[verts.Length + 2];
+                    pts[0] = Vec2.Lerp(a, b, 0.5f + half);
+                    for (int k = 0; k < verts.Length; k++) pts[k + 1] = verts[k];
+                    pts[pts.Length - 1] = Vec2.Lerp(a, b, 0.5f - half);
+                    opening = Vec2.Lerp(a, b, 0.5f);
+                    w.AddPolyline(body, pts, false, t, wall);
+                    break;
+                }
+                case Arena.GappedRing:
+                {
+                    outerR = radius;
+                    int gapCount = rng.NextInt(1, 4);
+                    var gaps = new AngularGap[gapCount];
+                    for (int g = 0; g < gapCount; g++)
+                    {
+                        float free = 2f * r * rng.NextFloat(0.3f, 0.95f);
+                        gaps[g] = AngularGap.Centered(g * SimMath.TwoPi / gapCount + rng.NextFloat(-0.3f, 0.3f), 2f * MathF.Asin((free + t) / (2f * radius)));
+                    }
+                    int ring = w.AddRing(body, Vec2.Zero, radius, t, gaps, wall);
+                    ringGaps = new AngularGap[w.GetColliderInfo(ring).GapCount];
+                    for (int g = 0; g < ringGaps.Length; g++) ringGaps[g] = w.GetGap(ring, g);
+                    break;
+                }
             }
 
             w.ReserveBalls(balls);
@@ -216,10 +252,17 @@ namespace Ballverse.Core.Tests.Sim
             {
                 Vec2 p;
                 if (arena == Arena.DoubleRing) p = Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi)) * ((innerR + outerR) * 0.5f);
-                else if (arena == Arena.Ring) p = Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi)) * rng.NextFloat(0f, radius * 0.7f);
+                else if (arena == Arena.Ring || arena == Arena.GappedRing) p = Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi)) * rng.NextFloat(0f, radius * 0.7f);
                 else p = RandomPointInside(rng, verts, r + t + 0.05f);
                 float speed = i % 2 == 0 ? EnvelopeBallSpeed : rng.NextFloat(5f, EnvelopeBallSpeed);
                 Vec2 dir = verts != null && i % 4 == 0 ? AimedOrRandomDirection(rng, p, verts) : Vec2.FromAngle(rng.NextFloat(0f, SimMath.TwoPi));
+                // A quarter of the balls straight at the opening / a gap.
+                if (arena == Arena.OpenPolygon && i % 4 == 1) dir = (opening - p).Normalized;
+                if (arena == Arena.GappedRing && i % 4 == 1)
+                {
+                    AngularGap g = ringGaps[rng.NextInt(0, ringGaps.Length)];
+                    dir = (Vec2.FromAngle(g.Start + g.Span * 0.5f) * radius - p).Normalized;
+                }
                 var d = SimTestUtil.Ball(p, dir * speed, r, restitution, friction);
                 if (!ballBall)
                 {
@@ -253,6 +296,10 @@ namespace Ballverse.Core.Tests.Sim
                     if (arena == Arena.Ring)
                     {
                         ok = pos.Length < radius * scale;
+                    }
+                    else if (arena == Arena.GappedRing)
+                    {
+                        ok = NarrowOpeningTests.InsideGappedRing(SimTestUtil.ToLocal(w, body, pos) / scale, radius, ringGaps);
                     }
                     else if (arena == Arena.DoubleRing)
                     {

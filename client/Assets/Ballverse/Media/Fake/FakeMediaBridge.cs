@@ -132,19 +132,27 @@ namespace Ballverse.Media.Fake
             }
         }
 
-        protected override VideoWriterBase CreateWriter(string outputPath, VideoWriterOptions options)
+        protected override VideoWriterBase CreateWriter(string outputPath, string workPath, VideoWriterOptions options)
         {
-            return new FakeVideoWriter(outputPath, options, Math.Max(1, _options.PngFrameStride));
+            return new FakeVideoWriter(outputPath, workPath, options, Math.Max(1, _options.PngFrameStride), Math.Max(0, _options.SimulatedReleaseDelayMs));
         }
 
-        protected override string ResultPathOf(VideoWriterBase writer)
+        protected override string ResultPathFor(string mp4Path)
         {
-            return ((FakeVideoWriter)writer).FramesDirectory;
+            return mp4Path + FakeVideoWriter.FramesSuffix;
         }
 
-        protected override string ConcatResultPath(string outFile)
+        protected override void CommitOutput(string workResult, string resultPath)
         {
-            return outFile + FakeVideoWriter.FramesSuffix;
+            try
+            {
+                if (Directory.Exists(resultPath)) Directory.Delete(resultPath, true);
+                Directory.Move(workResult, resultPath);
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                throw new MediaException(MediaErrorCode.Io, "cannot move the finished frames to " + resultPath + ": " + e.Message, e);
+            }
         }
 
         protected override void RequireSegment(string path)
@@ -166,7 +174,7 @@ namespace Ballverse.Media.Fake
         protected override Task<WriterFinish> ConcatNativeAsync(IReadOnlyList<string> segments, string pcmPath, string outFile,
             SegmentConcatOptions options, CancellationToken ct)
         {
-            string outDir = ConcatResultPath(outFile);
+            string outDir = ResultPathFor(outFile);
             return Task.Run(() => FakeVideoWriter.Concat(segments, pcmPath, outDir, options, ct), ct);
         }
 
@@ -321,6 +329,7 @@ namespace Ballverse.Media.Fake
         const string AudioName = "audio.wav";
 
         readonly int _stride;
+        readonly int _releaseDelayMs;
         readonly SemaphoreSlim _slots = new SemaphoreSlim(3, 3);
         readonly ConcurrentBag<byte[]> _buffers = new ConcurrentBag<byte[]>();
         readonly BlockingCollection<(byte[] data, int index)> _queue = new BlockingCollection<(byte[] data, int index)>();
@@ -329,15 +338,18 @@ namespace Ballverse.Media.Fake
         int _frames;
         volatile Exception _workerError;
 
-        public FakeVideoWriter(string outputPath, VideoWriterOptions options, int stride) : base(outputPath, options)
+        public FakeVideoWriter(string outputPath, string workPath, VideoWriterOptions options, int stride, int releaseDelayMs)
+            : base(outputPath, workPath, options)
         {
             _stride = stride;
-            FramesDirectory = outputPath + FramesSuffix;
+            _releaseDelayMs = releaseDelayMs;
+            FramesDirectory = workPath + FramesSuffix;
             if (Directory.Exists(FramesDirectory)) Directory.Delete(FramesDirectory, true);
             Directory.CreateDirectory(FramesDirectory);
             _worker = Task.Run(WorkerLoop);
         }
 
+        /// <summary>The work directory this writer fills (renamed to "&lt;output&gt;.frames" by a successful FinalizeAsync).</summary>
         public string FramesDirectory { get; }
 
         public override int FramesInFlight => 3 - _slots.CurrentCount;
@@ -487,25 +499,22 @@ namespace Ballverse.Media.Fake
             return new WriterFinish(total, durationUs);
         }
 
-        protected override void ReleaseCore()
+        /// <summary>
+        /// The "native" side has stopped once the PNG worker drained; like the device writers, an unfinished writer then
+        /// deletes its own work directory before it reports the release. <see cref="FakeMediaOptions.SimulatedReleaseDelayMs"/>
+        /// models a slow codec teardown in between.
+        /// </summary>
+        protected override async Task ReleaseCoreAsync()
         {
             if (!_queue.IsAddingCompleted) _queue.CompleteAdding();
-            if (!IsFinalizing)
-            {
-                // Unfinished: discard the partial output once the worker has drained.
-                string dir = FramesDirectory;
-                _worker.ContinueWith(_ =>
-                {
-                    try
-                    {
-                        if (Directory.Exists(dir)) Directory.Delete(dir, true);
-                    }
-                    catch (Exception)
-                    {
-                        // best effort
-                    }
-                }, TaskScheduler.Default);
-            }
+            await _worker.ConfigureAwait(false);
+            if (!NativeFinished) DeleteDirectory(FramesDirectory);
+            if (_releaseDelayMs > 0) await Task.Delay(_releaseDelayMs).ConfigureAwait(false);
+        }
+
+        protected override void DeleteWorkOutput()
+        {
+            DeleteDirectory(FramesDirectory);
         }
     }
 }

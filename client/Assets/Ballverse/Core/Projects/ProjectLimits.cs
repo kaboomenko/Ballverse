@@ -44,9 +44,9 @@ namespace Ballverse.Core.Projects
         public const long MaxOffsetUs = MaxDurationUs;
         /// <summary>
         /// Longest accepted source video (spec §3.2 "до 10 мин на входе"): <c>userVideo.trimOutUs</c> never exceeds it.
-        /// Mirrors <c>Ballverse.Core.Timeline.UserVideoTiming.MaxSourceDurationUs</c>, which rejects trims past it.
+        /// Is <c>Ballverse.Core.Timeline.UserVideoTiming.MaxSourceDurationUs</c> (one source of truth), which rejects trims past it.
         /// </summary>
-        public const long MaxSourceVideoUs = 600 * MicrosPerSecond;
+        public const long MaxSourceVideoUs = Ballverse.Core.Timeline.UserVideoTiming.MaxSourceDurationUs;
 
         // §3.5 texts
         public const int MaxTextLayers = 5;

@@ -28,6 +28,93 @@ namespace Ballverse.UI.Glass
         public const string LightSuccessText = "#0A5E31";
         public const string LightWarningText = "#6E4300";
 
+        /// <summary>
+        /// Opaque control fills inside <c>.bv-glass</c> (<c>--color-control</c>, <c>--color-control-pressed</c>) for the
+        /// dark, light and Contrast themes. A translucent fill under a label would be blended over the tinted glass and lift
+        /// it above <see cref="BackgroundTarget"/> (UI Toolkit blends in linear space in this project, so 12% white alone
+        /// adds 0.12 luminance); an opaque fill takes the backdrop out of the equation, and each of these keeps 4.5:1 with
+        /// every glass text colour (<see cref="Colors"/>).
+        /// </summary>
+        public const string DarkControl = "#2A2F40";
+        public const string DarkControlPressed = "#363C50";
+        public const string DarkContrastControl = "#3A4157";
+        public const string DarkContrastControlPressed = "#474F68";
+        public const string LightControl = "#E3E6ED";
+        public const string LightControlPressed = "#D2D6E0";
+        public const string LightContrastControl = "#D6DAE3";
+        public const string LightContrastControlPressed = "#CDD1DB";
+
+        /// <summary>Fill tokens redefined (opaque) inside <c>.bv-glass</c>, in the order of <see cref="GlassFills"/>.</summary>
+        public static readonly string[] FillTokenNames = { "--color-control", "--color-control-pressed" };
+
+        /// <summary>Glass values of <see cref="FillTokenNames"/> for a theme (and the Contrast modifier).</summary>
+        public static string[] GlassFills(bool darkTheme, bool contrast)
+        {
+            if (darkTheme) return contrast ? new[] { DarkContrastControl, DarkContrastControlPressed } : new[] { DarkControl, DarkControlPressed };
+            return contrast ? new[] { LightContrastControl, LightContrastControlPressed } : new[] { LightControl, LightControlPressed };
+        }
+
+        /// <summary>
+        /// Smallest opacity of a frosted glass fill (no backdrop pass, so no adaptive tint) that keeps 4.5:1 for the weakest
+        /// glass text colour over the worst content behind it: white under light text (dark theme), black under dark text
+        /// (light theme), whether the renderer blends in linear or in gamma space: the larger of
+        /// <see cref="MinFrostedAlphaLinear"/> and <see cref="MinFrostedAlphaGamma"/>. Linear blending decides in dark theme
+        /// (a dark fill over white is darker when blended in gamma space); gamma blending decides in light theme (a light
+        /// fill over black is darker when blended in gamma space: #FAFAFC needs 0.825 there against 0.647 linear).
+        /// Returns positive infinity when no opacity suffices.
+        /// </summary>
+        public static double MinFrostedAlpha(bool darkTheme, string fillHex)
+        {
+            return Math.Max(MinFrostedAlphaLinear(darkTheme, fillHex), MinFrostedAlphaGamma(darkTheme, fillHex));
+        }
+
+        /// <summary>
+        /// <see cref="MinFrostedAlpha"/> for linear blending only: panel = (1 − α)·content + α·fill in linear light.
+        /// Positive infinity when no opacity suffices.
+        /// </summary>
+        public static double MinFrostedAlphaLinear(bool darkTheme, string fillHex)
+        {
+            double fill = Luminance(fillHex);
+            double target = BackgroundTarget(darkTheme);
+            if (darkTheme)
+            {
+                // (1 − α)·1 + α·fill ≤ target
+                if (fill >= target) return double.PositiveInfinity;
+                return (1.0 - target) / (1.0 - fill);
+            }
+            // (1 − α)·0 + α·fill ≥ target
+            if (fill <= 0) return double.PositiveInfinity;
+            return target / fill;
+        }
+
+        /// <summary>
+        /// <see cref="MinFrostedAlpha"/> for gamma blending only: each sRGB channel is (1 − α)·content + α·fill before it is
+        /// linearised (<see cref="GlassContrast.GammaBlendLuminance"/>). The luminance is monotonic in α (every channel moves
+        /// from the content towards the fill), so a bisection finds the bound; the value returned is never below it.
+        /// Positive infinity when no opacity suffices (at α = 1 both models give the fill itself).
+        /// </summary>
+        public static double MinFrostedAlphaGamma(bool darkTheme, string fillHex)
+        {
+            ParseHex(fillHex, out double r, out double g, out double b);
+            double target = BackgroundTarget(darkTheme);
+            double content = darkTheme ? 1.0 : 0.0;
+            bool Ok(double a)
+            {
+                double lum = GlassContrast.GammaBlendLuminance(content, content, content, r, g, b, a);
+                return darkTheme ? lum <= target : lum >= target;
+            }
+            if (!Ok(1.0)) return double.PositiveInfinity;
+            if (Ok(0.0)) return 0.0;
+            double lo = 0.0, hi = 1.0;
+            for (int i = 0; i < 60; i++)
+            {
+                double mid = (lo + hi) / 2;
+                if (Ok(mid)) hi = mid;
+                else lo = mid;
+            }
+            return hi;
+        }
+
         /// <summary>The USS custom properties redefined inside <c>.bv-glass</c>, in the order of <see cref="GlassTokens"/>.</summary>
         public static readonly string[] TokenNames =
         {
@@ -81,11 +168,17 @@ namespace Ballverse.UI.Glass
         /// <summary>Relative luminance of an opaque "#RRGGBB" colour.</summary>
         public static double Luminance(string hex)
         {
+            ParseHex(hex, out double r, out double g, out double b);
+            return GlassContrast.LinearLuminance(GlassContrast.SrgbToLinear(r), GlassContrast.SrgbToLinear(g), GlassContrast.SrgbToLinear(b));
+        }
+
+        /// <summary>sRGB components (0–1) of an opaque "#RRGGBB" colour.</summary>
+        static void ParseHex(string hex, out double r, out double g, out double b)
+        {
             if (hex == null || hex.Length != 7 || hex[0] != '#') throw new FormatException("Expected #RRGGBB: " + hex);
-            double r = GlassContrast.SrgbToLinear(int.Parse(hex.Substring(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0);
-            double g = GlassContrast.SrgbToLinear(int.Parse(hex.Substring(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0);
-            double b = GlassContrast.SrgbToLinear(int.Parse(hex.Substring(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0);
-            return GlassContrast.LinearLuminance(r, g, b);
+            r = int.Parse(hex.Substring(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
+            g = int.Parse(hex.Substring(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
+            b = int.Parse(hex.Substring(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
         }
     }
 }

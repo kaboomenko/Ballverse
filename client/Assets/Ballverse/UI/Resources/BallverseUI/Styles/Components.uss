@@ -203,10 +203,19 @@
     border-radius: var(--radius-pill);
     padding-left: var(--space-1);
     padding-right: var(--space-1);
+    border-width: 2px;
+    border-color: rgba(0, 0, 0, 0);
 }
 
+/* Selection must not rely on the fill: the track (--color-control) and --color-surface-3 are the same or nearly the
+   same colour (on glass both are #2A2F40 in dark theme), so the selected segment carries a --color-text outline (like
+   the selected swatch) that keeps >= 3:1 against the track in every theme, on and off glass, in linear and gamma
+   blending; its label and icon turn accent-text (>= 4.5:1 on the opaque --color-surface-3) and the label is bold, so
+   the state is never colour alone (spec §4.8, SelectionOnGlassTests). Every item has a transparent border of the same
+   width, so selecting one does not shift the layout. */
 .bv-segmented__item--selected {
     background-color: var(--color-surface-3);
+    border-color: var(--color-text);
 }
 
 .bv-segmented__label {
@@ -219,6 +228,11 @@
 
 .bv-segmented__item--selected .bv-segmented__label {
     -unity-font-style: bold;
+    color: var(--color-accent-text);
+}
+
+.bv-segmented__item--selected .bv-segmented__icon {
+    color: var(--color-accent-text);
 }
 
 .bv-segmented__icon {
@@ -389,9 +403,19 @@
     color: var(--color-text-3);
 }
 
+/* The selected row's fill (--color-control) is close to the glass behind it (1.33:1 in dark theme), so the selection
+   is carried by a --color-text bar on the leading edge (>= 3:1 against the fill and the surface around it in every
+   theme, SelectionOnGlassTests) and a bold label. */
 .bv-row--selected {
     background-color: var(--color-control);
     border-radius: var(--radius-s);
+    border-left-width: 4px;
+    border-left-color: var(--color-text);
+    padding-left: var(--space-2);
+}
+
+.bv-row--selected .bv-row__label {
+    -unity-font-style: bold;
 }
 
 .bv-row--destructive .bv-row__label,

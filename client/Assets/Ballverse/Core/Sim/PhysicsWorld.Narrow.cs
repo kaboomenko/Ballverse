@@ -17,10 +17,11 @@ namespace Ballverse.Core.Sim
     // continuous. The number of resolved impacts per substep is bounded (MaxSweepPasses); the last allowed impact stops the
     // ball at the contact for the rest of the substep (conservative advancement) instead of letting it travel unswept. If
     // the ball already overlaps a wall and its centre crosses the wall's centre line, it is put back just off the centre line
-    // on the side it came from ("corrected" hit). Invariant after the sweep: the ball centre has not crossed any solid centre
-    // line during the substep. The overlap pass (PhysicsWorld.Overlap.cs) keeps that invariant while pushing the ball out of
-    // every wall it still overlaps at once (acute corners), and spin platforms decide pass / bounce once per entry
-    // (PhysicsWorld.Platform.cs).
+    // on the side it came from ("corrected" hit). Openings narrower than the ball are closed by bridges between the caps (and
+    // faces) of one body, which the sweep treats like centre lines (PhysicsWorld.Bridges.cs). Invariant after the sweep: the
+    // ball centre has not crossed any solid centre line or bridge during the substep. The overlap pass
+    // (PhysicsWorld.Overlap.cs) keeps that invariant while pushing the ball out of every wall it still overlaps at once (acute
+    // corners), and spin platforms decide pass / bounce once per entry (PhysicsWorld.Platform.cs).
     public sealed partial class PhysicsWorld
     {
         const float NormalEpsilon = 1e-7f;
@@ -54,6 +55,13 @@ namespace Ballverse.Core.Sim
             public bool Corrected;
             /// <summary>Spin platform entered with the ball's footprint inside a gap: a transit starts, no contact.</summary>
             public bool Transit;
+            /// <summary>Centre would cross a bridge (PhysicsWorld.Bridges.cs): held at <see cref="Pos"/>, the overlap pass responds.</summary>
+            public bool Bridge;
+            /// <summary>Bridge: the other end's collider and feature (the hit's collider owns the cap at <see cref="EndA"/>).</summary>
+            public int Partner;
+            public int PartnerFeature;
+            /// <summary>Bridge end points (q space).</summary>
+            public Vec2 EndA, EndB;
 
             public static SweepHit None => new SweepHit { T = 2f };
         }
@@ -118,7 +126,20 @@ namespace Ballverse.Core.Sim
                     if (impacts > 0 && !MayTouch(ref _colliderBounds[c], wStart, ball.Position, ball.Radius)) continue;
                     if (SweepWall(bi, c, tStart, wStart, h, ref best)) bestC = c;
                 }
+                if (_capExtent >= 0f && SweepBridges(bi, n, tStart, wStart, impacts, ref best, out int bridgeC)) bestC = bridgeC;
                 if (bestC < 0) break;
+                if (best.Bridge)
+                {
+                    if (!AcceptBridge(bi, bestC, ref best, h))
+                    {
+                        if (!ball.Alive) return;
+                        continue;
+                    }
+                    // Stopped on the start side of a closed opening, inside both primitives: the joint overlap projection pushes
+                    // the ball back out and applies the responses of everything it touches.
+                    ball.Position = FromBodySpace(_colliders[bestC].Body, best.Pos);
+                    break;
+                }
                 if (best.Transit)
                 {
                     // The path is unchanged; the platform no longer collides with this ball, so sweep the rest again.
@@ -156,12 +177,15 @@ namespace Ballverse.Core.Sim
 
         /// <summary>
         /// Adds every eligible collider not yet listed whose bounds the path <paramref name="from"/>→<paramref name="to"/> may
-        /// touch, keeping <see cref="_wallCandidates"/>[0..n) in ascending id order. Returns the new count.
+        /// touch, keeping <see cref="_wallCandidates"/>[0..n) in ascending id order. Returns the new count. When some collider
+        /// has free caps, colliders are gathered within the bridge reach (<see cref="BridgeReach"/>), so the partner of a bridge
+        /// whose other end the ball touches is a candidate too.
         /// </summary>
         int GatherWallCandidates(int bi, Vec2 from, Vec2 to, int n)
         {
             ref BallState b = ref _balls[bi];
             float r = b.Radius;
+            float rCap = BridgeReach(r);
             for (int c = 0; c < _colliderCount; c++)
             {
                 if (_wallMark[c] == _wallStamp) continue;
@@ -170,7 +194,7 @@ namespace Ballverse.Core.Sim
                 ref ColliderData cd = ref _colliders[c];
                 if (cd.Material.IsSensor) continue;
                 if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
-                if (!MayTouch(ref cb, from, to, r)) continue;
+                if (!MayTouch(ref cb, from, to, rCap)) continue;
                 _wallMark[c] = _wallStamp;
                 int k = n++;
                 while (k > 0 && _wallCandidates[k - 1] > c)
@@ -378,7 +402,10 @@ namespace Ballverse.Core.Sim
             float g0 = side * (d0 - radius);
             float g1 = side * (d1 - radius);
             bool found = false;
-            if (g0 >= rt + ContactSlop && g1 < rt)
+            // Entry into the inflated band from clear. Inside the ring the free disc (radius R − rt) is convex, so the chord
+            // reaches the band only if it ends there; outside, a chord can dip into the band (radius R + rt) and leave it again
+            // within one substep, so the entering root is taken wherever the chord ends (QA: missed outer-face grazes).
+            if (g0 >= rt + ContactSlop && (side > 0f || g1 < rt))
             {
                 float ro = radius + side * rt;
                 if (ro > 0f)
@@ -530,14 +557,7 @@ namespace Ballverse.Core.Sim
                 surfaceLocal = new Vec2(w * SimMath.Cos(alpha) * body.SpinVelocity, 0f);
             }
 
-            Vec2 wallVelocity = Vec2.Zero;
-            if (body.Motion == BodyMotion.Kinematic)
-            {
-                Vec2 arm = cp - bodyPos;
-                wallVelocity = body.LinearVelocity + Vec2.Cross(body.AngularVelocity, arm);
-                if (body.ScaleVelocity != 0f) wallVelocity = wallVelocity + arm * (body.ScaleVelocity / scaleNow);
-                if (surfaceLocal.X != 0f) wallVelocity = wallVelocity + Vec2.Rotate(surfaceLocal, cos, sin);
-            }
+            Vec2 wallVelocity = WallVelocityAt(ref body, bodyPos, scaleNow, cp, surfaceLocal, cos, sin);
 
             cf.Collider = ci;
             cf.Body = c.Body;
@@ -559,6 +579,20 @@ namespace Ballverse.Core.Sim
                 if (!ball.Alive) return false;
             }
             return true;
+        }
+
+        /// <summary>
+        /// Velocity of a body's surface at world point <paramref name="cp"/> (body at <paramref name="bodyPos"/>, scale
+        /// <paramref name="scaleNow"/>, rotation cos/sin): linear + ω × r + scale rate + platform surface motion; zero for static bodies.
+        /// </summary>
+        static Vec2 WallVelocityAt(ref PhysicsBodyState body, Vec2 bodyPos, float scaleNow, Vec2 cp, Vec2 surfaceLocal, float cos, float sin)
+        {
+            if (body.Motion != BodyMotion.Kinematic) return Vec2.Zero;
+            Vec2 arm = cp - bodyPos;
+            Vec2 wallVelocity = body.LinearVelocity + Vec2.Cross(body.AngularVelocity, arm);
+            if (body.ScaleVelocity != 0f) wallVelocity = wallVelocity + arm * (body.ScaleVelocity / scaleNow);
+            if (surfaceLocal.X != 0f) wallVelocity = wallVelocity + Vec2.Rotate(surfaceLocal, cos, sin);
+            return wallVelocity;
         }
 
         /// <summary>Velocity of the ball's surface at the contact with normal <paramref name="n"/>: v + ω × (−r·n) = v − ω·r·t.</summary>
