@@ -138,6 +138,7 @@ namespace Ballverse.Core.Sim
                     int c = _wallCandidates[k];
                     if (_wallRejected[c] == _wallStamp) continue;
                     if (impacts > 0 && !MayTouch(ref _colliderBounds[c], wStart, ball.Position, ball.Radius)) continue;
+                    _work.WallSweeps++;
                     if (SweepWall(bi, c, tStart, wStart, h, ref best)) bestC = c;
                 }
                 if (_capExtent >= 0f && SweepBridges(bi, n, tStart, wStart, impacts, ref best, out int bridgeC)) bestC = bridgeC;
@@ -230,7 +231,9 @@ namespace Ballverse.Core.Sim
                 ref ColliderData cd = ref _colliders[c];
                 if (cd.Material.IsSensor) continue;
                 if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                _work.WallBoundsTests++;
                 if (!MayTouch(ref cb, from, to, rCap)) continue;
+                _work.WallCandidates++;
                 _wallMark[c] = _wallStamp;
                 int k = n++;
                 while (k > 0 && _wallCandidates[k - 1] > c)

@@ -162,7 +162,9 @@ namespace Ballverse.Core.Sim
                     ref BallState b = ref _balls[i];
                     if (!b.Alive) continue;
                     if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                    _work.SensorBoundsTests++;
                     if (!MayTouch(ref cb, _ballPrev[i], b.Position, b.Radius)) continue;
+                    _work.SensorShapeTests++;
                     if (!SensorTouches(i, c, true)) continue;
                     AddSensorTouched(c, i);
                 }
@@ -277,7 +279,12 @@ namespace Ballverse.Core.Sim
                     ref BallState b = ref _balls[i];
                     if (!b.Alive) continue;
                     if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
-                    if (bounded && !MayOverlapNow(b.Position, b.Radius, bc, bo, bin, bs)) continue;
+                    if (bounded)
+                    {
+                        _work.SensorOverlapChecks++;
+                        if (!MayOverlapNow(b.Position, b.Radius, bc, bo, bin, bs)) continue;
+                    }
+                    _work.SensorOverlapTests++;
                     if (!SensorTouches(i, c, false)) continue;
                     if (_sensorNowCount == _sensorNow.Length) Array.Resize(ref _sensorNow, _sensorNow.Length * 2);
                     _sensorNow[_sensorNowCount++] = SensorKey(c, i);

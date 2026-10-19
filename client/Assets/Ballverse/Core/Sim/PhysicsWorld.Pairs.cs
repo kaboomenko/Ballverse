@@ -172,6 +172,7 @@ namespace Ballverse.Core.Sim
                 }
             }
             _pairStart[n] = pairs;
+            _work.BallPairCandidates += pairs;
             int iterations = _settings.BallIterations;
             for (int it = 1; it < iterations; it++)
             {
@@ -428,6 +429,7 @@ namespace Ballverse.Core.Sim
         /// <summary>Solves one pair; <paramref name="ia"/> is the earlier-visited (lower) ball.</summary>
         void SolvePair(int ia, int ib)
         {
+            _work.BallPairSolves++;
             ref BallState a = ref _balls[ia];
             ref BallState b = ref _balls[ib];
             if (!a.Alive || !b.Alive) return;

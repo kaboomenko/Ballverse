@@ -42,6 +42,7 @@ namespace Ballverse.Core.Sim
 
         void StepCore()
         {
+            _work.Ticks++;
             BeginTickEvents();
             EnsureColliderScratch();
             EnsureEdgeFrameCapacity();
@@ -89,6 +90,7 @@ namespace Ballverse.Core.Sim
 
         void Substep(float h)
         {
+            _work.Substeps++;
             for (int i = 0; i < _bodyCount; i++)
             {
                 ref PhysicsBodyState b = ref _bodies[i];

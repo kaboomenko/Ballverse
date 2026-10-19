@@ -61,6 +61,22 @@ namespace Ballverse.Core.Sim
 
         int _radialRebuilds, _radialMembershipChanges;
 
+        /// <summary>
+        /// Test diagnostics: machine-independent work done since the world was created (or since
+        /// <see cref="ResetWorkCounters"/>). The simulation is deterministic, so these counts are identical on every machine and
+        /// build configuration; the budget-scene work tests bound them per tick, which catches a culling or algorithmic
+        /// regression (a broadphase that stops culling, a wider pair search, more substeps) without wall-clock timing.
+        /// They are not part of the simulation state.
+        /// </summary>
+        internal SimWorkCounters WorkCounters => _work;
+
+        internal void ResetWorkCounters()
+        {
+            _work = default;
+        }
+
+        SimWorkCounters _work;
+
         /// <summary>Test diagnostics: index entries of the last substep whose radial interval meets the path inflated by <paramref name="reach"/> (−1 if the index is not in use).</summary>
         internal int CountRadialCandidates(Vec2 p0, Vec2 p1, float reach, bool sensors)
         {
@@ -262,7 +278,9 @@ namespace Ballverse.Core.Sim
             ref BallState b = ref _balls[bi];
             RadialIndex ix = _wallIndex;
             int count = ix.Count;
-            for (int k = ix.FirstReaching(a); k < count && ix.Lo[k] <= bEnd; k++)
+            int k = ix.FirstReaching(a);
+            int first = k;
+            for (; k < count && ix.Lo[k] <= bEnd; k++)
             {
                 if (ix.Hi[k] < a) continue;
                 int c = ix.Ids[k];
@@ -272,7 +290,9 @@ namespace Ballverse.Core.Sim
                 ref ColliderData cd = ref _colliders[c];
                 if (cd.Material.IsSensor) continue;
                 if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                _work.WallBoundsTests++;
                 if (!MayTouch(ref cb, from, to, rCap)) continue;
+                _work.WallCandidates++;
                 _wallMark[c] = _wallStamp;
                 int j = n++;
                 while (j > 0 && _wallCandidates[j - 1] > c)
@@ -282,6 +302,7 @@ namespace Ballverse.Core.Sim
                 }
                 _wallCandidates[j] = c;
             }
+            _work.RadialIndexVisits += k - first;
             return n;
         }
 
@@ -300,7 +321,9 @@ namespace Ballverse.Core.Sim
                     DetectSensorTouchesOfBall(i);
                     continue;
                 }
-                for (int k = ix.FirstReaching(a); k < count && ix.Lo[k] <= bEnd; k++)
+                int k = ix.FirstReaching(a);
+                int first = k;
+                for (; k < count && ix.Lo[k] <= bEnd; k++)
                 {
                     if (ix.Hi[k] < a) continue;
                     int c = ix.Ids[k];
@@ -308,10 +331,13 @@ namespace Ballverse.Core.Sim
                     if (!cb.Active) continue;
                     ref ColliderData cd = ref _colliders[c];
                     if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                    _work.SensorBoundsTests++;
                     if (!MayTouch(ref cb, p0, p1, b.Radius)) continue;
+                    _work.SensorShapeTests++;
                     if (!SensorTouches(i, c, true)) continue;
                     AddSensorTouched(c, i);
                 }
+                _work.RadialIndexVisits += k - first;
             }
         }
 
@@ -326,7 +352,9 @@ namespace Ballverse.Core.Sim
                 ref ColliderBounds cb = ref _colliderBounds[c];
                 if (!cb.Active) continue;
                 if ((b.Mask & cd.Material.Category) == 0u || (cd.Material.Mask & b.Category) == 0u) continue;
+                _work.SensorBoundsTests++;
                 if (!MayTouch(ref cb, _ballPrev[i], b.Position, b.Radius)) continue;
+                _work.SensorShapeTests++;
                 if (!SensorTouches(i, c, true)) continue;
                 AddSensorTouched(c, i);
             }
@@ -434,5 +462,24 @@ namespace Ballverse.Core.Sim
         {
             return _edgeScale[ci] == s && !ExhaustiveBroadphase;
         }
+    }
+
+    /// <summary>Machine-independent work counts of a <see cref="PhysicsWorld"/> (test diagnostics, see <see cref="PhysicsWorld.WorkCounters"/>).</summary>
+    internal struct SimWorkCounters
+    {
+        /// <summary>Ticks and substeps stepped.</summary>
+        public long Ticks, Substeps;
+        /// <summary>Wall bounds tests (MayTouch in the candidate gather) and the candidates that passed them (narrow-phase candidates).</summary>
+        public long WallBoundsTests, WallCandidates;
+        /// <summary>Swept narrow-phase tests of a ball against one wall collider.</summary>
+        public long WallSweeps;
+        /// <summary>Per substep: sensor bounds tests (MayTouch) and the swept sensor shape tests that passed them.</summary>
+        public long SensorBoundsTests, SensorShapeTests;
+        /// <summary>End of tick: sensor–ball bound pre-checks and the exact overlap tests that passed them (or ran without one).</summary>
+        public long SensorOverlapChecks, SensorOverlapTests;
+        /// <summary>Radial index entries visited by wall and sensor queries (cheap interval checks before the bounds test).</summary>
+        public long RadialIndexVisits;
+        /// <summary>Ball pairs gathered from the grid in the first ball–ball pass, and pair solves over all passes.</summary>
+        public long BallPairCandidates, BallPairSolves;
     }
 }
