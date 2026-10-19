@@ -444,7 +444,12 @@ namespace Ballverse.Studio
                                 }
                                 string segPath = _exports.FullPath(StudioFiles.SegmentPath(state.JobId, flow.Segment, attempt++));
                                 Directory.CreateDirectory(Path.GetDirectoryName(segPath));
-                                writer = _media.OpenWriter(segPath, VideoWriterOptions.ForSegment(job.Settings));
+                                // Never the synchronous OpenWriter here: after a redo (pause, encoder error, stall) the disposed
+                                // writer's codec may still be stopping, and the Android native open would wait for it (up to
+                                // 3 s) on the main thread. OpenWriterAsync awaits every writer being released first (§3.8).
+                                writer = await _media.OpenWriterAsync(segPath, VideoWriterOptions.ForSegment(job.Settings), ct);
+                                lastProgressMs = _host.NowMs; // waiting for a release is not a stall
+                                tickStart = _host.NowMs;
                             }
                             if (writer != null && Drain(job, renderer, writer, flow) > 0) lastProgressMs = _host.NowMs;
                             if (flow.SegmentComplete)

@@ -17,12 +17,18 @@ namespace Ballverse.Studio.Tests
         public int Calls;
         public bool WriteGarbage;
         public TaskCompletionSource<bool> Gate;
+        public CancellationToken LastToken;
 
         public async Task RebuildAsync(string replayPath, string renderStreamPath, string eventsPath, IProgress<double> progress, CancellationToken ct)
         {
             Calls++;
+            LastToken = ct;
             if (!File.Exists(replayPath)) throw new FileNotFoundException("replay", replayPath);
-            if (Gate != null) await Gate.Task;
+            if (Gate != null)
+            {
+                var stop = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (ct.Register(() => stop.TrySetResult(true))) await Task.WhenAny(Gate.Task, stop.Task);
+            }
             ct.ThrowIfCancellationRequested();
             if (WriteGarbage)
             {
@@ -85,10 +91,66 @@ namespace Ballverse.Studio.Tests
             string dir = ClipDir();
             Task<bool> a = repair.EnsureAsync(dir, null, CancellationToken.None);
             Task<bool> b = repair.EnsureAsync(dir, null, CancellationToken.None);
-            Assert.Same(a, b);
             rebuilder.Gate.SetResult(true);
             Assert.True(a.Wait(10000) && a.Result);
+            Assert.True(b.Wait(10000) && b.Result);
             Assert.Equal(1, rebuilder.Calls);
+        }
+
+        sealed class SyncProgress : IProgress<double>
+        {
+            public double Last = -1;
+            public void Report(double value) => Last = value;
+        }
+
+        [Fact]
+        public void FirstCallerCancellingDoesNotCancelASecondWaiter()
+        {
+            // QA round 2: the shared rebuild ran with the first caller's token, so leaving "Подготовка клипа" cancelled the export
+            // that awaited the same rebuild, and only the first caller's progress was reported.
+            var rebuilder = new FakeRebuilder { Gate = new TaskCompletionSource<bool>() };
+            var repair = new RenderStreamRepair(rebuilder);
+            string dir = ClipDir();
+            var previewCts = new CancellationTokenSource();
+            var previewProgress = new SyncProgress();
+            var exportProgress = new SyncProgress();
+            Task<bool> preview = repair.EnsureAsync(dir, previewProgress, previewCts.Token);
+            Task<bool> export = repair.EnsureAsync(dir, exportProgress, CancellationToken.None);
+            previewCts.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() => preview.GetAwaiter().GetResult());
+            Assert.False(rebuilder.LastToken.IsCancellationRequested);
+            rebuilder.Gate.SetResult(true);
+            Assert.True(export.Wait(10000));
+            Assert.True(export.Result);
+            Assert.True(RenderStreamRepair.HasReadableStream(dir));
+            Assert.Equal(1.0, exportProgress.Last);
+            Assert.Equal(-1, previewProgress.Last); // the cancelled waiter's sink was removed
+            Assert.Equal(1, rebuilder.Calls);
+        }
+
+        [Fact]
+        public void RebuildStopsWhenEveryWaiterCancelsAndANewCallerStartsAgain()
+        {
+            var rebuilder = new FakeRebuilder { Gate = new TaskCompletionSource<bool>() };
+            var repair = new RenderStreamRepair(rebuilder);
+            string dir = ClipDir();
+            var a = new CancellationTokenSource();
+            var b = new CancellationTokenSource();
+            Task<bool> ta = repair.EnsureAsync(dir, null, a.Token);
+            Task<bool> tb = repair.EnsureAsync(dir, null, b.Token);
+            a.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() => ta.GetAwaiter().GetResult());
+            Assert.False(rebuilder.LastToken.IsCancellationRequested); // b still waits
+            b.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() => tb.GetAwaiter().GetResult());
+            Assert.True(rebuilder.LastToken.IsCancellationRequested);
+
+            rebuilder.Gate = null;
+            Task<bool> again = repair.EnsureAsync(dir, null, CancellationToken.None);
+            Assert.True(again.Wait(10000));
+            Assert.True(again.Result);
+            Assert.Equal(2, rebuilder.Calls);
+            Assert.Empty(Directory.GetFiles(dir, "*" + StudioFiles.TempSuffix));
         }
 
         [Fact]

@@ -13,12 +13,15 @@ namespace Ballverse.Studio
     /// Makes sure a clip folder (project, run or saved clip) has a readable render stream before it is drawn (spec §7.5
     /// preparation step 2): a missing or unreadable <c>clip.bvs</c> is rebuilt from <c>clip.bvr</c> through the App's
     /// <see cref="IRenderStreamRebuilder"/> into temporary files that are renamed into place only when complete and readable.
-    /// One rebuild per folder at a time (later callers await the running one). Start calls on the main thread.
+    /// One rebuild per folder at a time: later callers join the running one. The shared rebuild runs with a token of its own that
+    /// is cancelled only when every waiter has cancelled (each caller waits with its own token), and its progress reaches every
+    /// waiter (QA round 2: the first caller leaving "Подготовка клипа" cancelled the export that waited for the same rebuild).
+    /// Start calls on the main thread.
     /// </summary>
     public sealed class RenderStreamRepair
     {
         readonly IRenderStreamRebuilder _rebuilder;
-        readonly Dictionary<string, Task<bool>> _running = new Dictionary<string, Task<bool>>(StringComparer.Ordinal);
+        readonly Dictionary<string, SharedRebuild> _running = new Dictionary<string, SharedRebuild>(StringComparer.Ordinal);
         readonly object _gate = new object();
 
         /// <param name="rebuilder">The App's rebuilder, or null (missing streams then stay missing).</param>
@@ -66,21 +69,71 @@ namespace Ballverse.Studio
             if (string.IsNullOrEmpty(clipDir)) throw new ArgumentException("folder required", nameof(clipDir));
             if (HasReadableStream(clipDir)) return Task.FromResult(true);
             if (_rebuilder == null || !File.Exists(Path.Combine(clipDir, ProjectPaths.ClipReplayFile))) return Task.FromResult(false);
+            ct.ThrowIfCancellationRequested();
             string key = Path.GetFullPath(clipDir);
-            Task<bool> running;
+            SharedRebuild shared;
             lock (_gate)
             {
-                if (!_running.TryGetValue(key, out running))
+                if (!_running.TryGetValue(key, out shared) || shared.Cts.IsCancellationRequested)
                 {
-                    running = RebuildAsync(key, progress, ct);
-                    if (!running.IsCompleted) _running[key] = running;
+                    // A rebuild that every earlier waiter abandoned is still stopping: the new one starts after it (same temp files).
+                    Task previous = shared?.Task;
+                    shared = new SharedRebuild();
+                    shared.Join(progress);
+                    _running[key] = shared;
+                    shared.Task = RebuildAsync(key, shared, previous);
+                }
+                else
+                {
+                    shared.Join(progress);
                 }
             }
-            return running;
+            return WaitAsync(shared, progress, ct);
         }
 
-        async Task<bool> RebuildAsync(string clipDir, IProgress<double> progress, CancellationToken ct)
+        async Task<bool> WaitAsync(SharedRebuild shared, IProgress<double> progress, CancellationToken ct)
         {
+            try
+            {
+                if (!ct.CanBeCanceled || shared.Task.IsCompleted) return await shared.Task;
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (ct.Register(() => cancelled.TrySetResult(true)))
+                {
+                    Task first = await Task.WhenAny(shared.Task, cancelled.Task);
+                    if (first != shared.Task) throw new OperationCanceledException(ct);
+                }
+                return await shared.Task;
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    // The last waiter leaving an unfinished rebuild stops it.
+                    if (shared.Leave(progress) == 0 && !shared.Task.IsCompleted) shared.Cts.Cancel();
+                }
+            }
+        }
+
+        async Task<bool> RebuildAsync(string clipDir, SharedRebuild shared, Task previous)
+        {
+            if (previous != null)
+            {
+                try
+                {
+                    await previous;
+                }
+                catch (Exception)
+                {
+                    // the abandoned rebuild's outcome does not matter; it only must have stopped writing the temp files
+                }
+                if (HasReadableStream(clipDir))
+                {
+                    lock (_gate) Remove(clipDir, shared);
+                    return true;
+                }
+            }
+            CancellationToken ct = shared.Cts.Token;
+            IProgress<double> progress = shared;
             string stream = Path.Combine(clipDir, ProjectPaths.ClipRenderFile);
             string events = Path.Combine(clipDir, StudioFiles.ClipEventsFile);
             string streamTmp = stream + StudioFiles.TempSuffix;
@@ -105,7 +158,45 @@ namespace Ballverse.Studio
             {
                 Delete(streamTmp);
                 Delete(eventsTmp);
-                lock (_gate) _running.Remove(clipDir);
+                lock (_gate) Remove(clipDir, shared);
+            }
+        }
+
+        void Remove(string clipDir, SharedRebuild shared)
+        {
+            if (_running.TryGetValue(clipDir, out SharedRebuild current) && ReferenceEquals(current, shared)) _running.Remove(clipDir);
+        }
+
+        /// <summary>One running rebuild: its own cancellation, its waiters and their progress sinks (fan-out). Guarded by <c>_gate</c>.</summary>
+        sealed class SharedRebuild : IProgress<double>
+        {
+            public readonly CancellationTokenSource Cts = new CancellationTokenSource();
+            readonly List<IProgress<double>> _sinks = new List<IProgress<double>>();
+            readonly object _sinkGate = new object();
+            int _waiters;
+            public Task<bool> Task;
+
+            public void Join(IProgress<double> progress)
+            {
+                _waiters++;
+                if (progress == null) return;
+                lock (_sinkGate) _sinks.Add(progress);
+            }
+
+            public int Leave(IProgress<double> progress)
+            {
+                if (progress != null)
+                {
+                    lock (_sinkGate) _sinks.Remove(progress);
+                }
+                return --_waiters;
+            }
+
+            public void Report(double value)
+            {
+                IProgress<double>[] sinks;
+                lock (_sinkGate) sinks = _sinks.ToArray();
+                foreach (IProgress<double> sink in sinks) sink.Report(value);
             }
         }
 

@@ -242,8 +242,10 @@ namespace Ballverse.Studio
                 StartRemix();
             }
             bool wasPlaying = _clock.IsPlaying;
-            _sync.Advance(_clock, dtUs, AudioAvailable, _audio.CursorUs, _audio.LatencyUs);
-            if (_sync.NeedsAudioResync) StartAudioAtClock(); // the audio output runs again: continue it at the picture
+            long audioEndUs = _audio.Cursor.FrameCount * 1000000L / Ballverse.Core.Audio.AudioConstants.SampleRate;
+            _sync.Advance(_clock, dtUs, AudioAvailable, _audio.CursorUs, _audio.LatencyUs, audioEndUs);
+            // The audio output runs again, or the clock wrapped (Loop): continue the mix at the picture.
+            if (_sync.NeedsAudioResync) StartAudioAtClock();
             if (wasPlaying && !_clock.IsPlaying) _audio.Pause();
             if (wasPlaying && _governor.OnFrame(dtUs)) RebuildPlans();
             PollReader();
