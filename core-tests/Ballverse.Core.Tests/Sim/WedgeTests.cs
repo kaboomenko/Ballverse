@@ -118,15 +118,17 @@ namespace Ballverse.Core.Tests.Sim
         static (PhysicsWorld w, int body, int ball, int plate) PlateScene(bool ring, float freeFraction)
         {
             var w = new PhysicsWorld(SimSettings.Default);
-            var m = SimTestUtil.Wall(0.3f, 0.3f);
+            var m = SimTestUtil.Wall(PlateRestitution, 0.3f);
             int body = AddOpening(w, ring, freeFraction, m);
             int plate = w.AddBody(BodyDef.Kinematic(new Vec2(0f, 0.8f)));
             w.AddSegment(plate, new Vec2(-0.6f, 0f), new Vec2(0.6f, 0f), T, m);
-            int b = w.AddBall(SimTestUtil.Ball(new Vec2(0f, 0.3f), Vec2.Zero, R, 0.3f, 0.3f));
+            int b = w.AddBall(SimTestUtil.Ball(new Vec2(0f, 0.3f), Vec2.Zero, R, PlateRestitution, 0.3f));
             return (w, body, b, plate);
         }
 
         const float PlateSpeed = 1f;
+        /// <summary>Restitution of every material in <see cref="PlateScene"/>.</summary>
+        const float PlateRestitution = 0.3f;
 
         /// <summary>One tick; from tick 30 the plate descends at <see cref="PlateSpeed"/> until its centre line reaches <paramref name="plateY"/>.</summary>
         static void StepPlate(PhysicsWorld w, int plate, int tick, float plateY)
@@ -185,6 +187,13 @@ namespace Ballverse.Core.Tests.Sim
         /// Once the squeeze has played out (from 2 s; the plate stops after about 1.1 s) the held ball does not move into the
         /// opening and its velocity stays within the plate's speed — old code: gravity accumulated through the bridge, −8.8 m/s
         /// at 2.2 s and −25 m/s at 3.8 s on the ring gap.
+        /// During the squeeze itself (from the plate's start) a ball over the opening never moves into it faster than the
+        /// plate can send it — the plate's speed plus its restitution bounce, (1 + e)·u: a ball held on the bridge loses its
+        /// velocity through it (HoldOnBridge). QA (residual minors, round 2): without that the ball shows up to 1.6 m/s into the
+        /// opening at 60 % free width in the ticks around the plate's stop (segments: (0, −1.62) at tick 68; this test fails
+        /// on the segments 60 % case with HoldOnBridge disabled), while the overlap pass cannot push it clear of the bridge. In
+        /// the ring the plate squeezes the ball sideways along the curved wall (lateral speeds of several m/s, real motion),
+        /// and a ring-gap ball the plate itself has just hit on the bridge legitimately shows (1 + e)·u for one tick.
         /// </summary>
         [Theory]
         [InlineData(false, 0.9f, 0.2f)]
@@ -195,9 +204,16 @@ namespace Ballverse.Core.Tests.Sim
         {
             var (w, body, b, plate) = PlateScene(ring, freeFraction);
             float tol = s_substepGravity + 1e-3f;
+            float halfGap = (2f * R * freeFraction + T) * 0.5f;
             for (int tick = 0; tick < 4 * SimConstants.TickRate; tick++)
             {
                 StepPlate(w, plate, tick, plateY);
+                Vec2 at = SimTestUtil.ToLocal(w, body, w.GetBall(b).Position);
+                if (tick >= 30 && MathF.Abs(at.X) <= halfGap)
+                {
+                    Vec2 vs = w.GetBall(b).Velocity;
+                    Assert.True(vs.Y >= -(1f + PlateRestitution) * PlateSpeed - tol, "ball over the opening pressed into it faster than the plate: velocity " + vs + " at " + at + ", tick " + tick);
+                }
                 if (tick < 2 * SimConstants.TickRate) continue;
                 Assert.Equal(plateY, w.GetBody(plate).Position.Y, 4);
                 Vec2 v = w.GetBall(b).Velocity;
@@ -206,24 +222,30 @@ namespace Ballverse.Core.Tests.Sim
             Vec2 local = SimTestUtil.ToLocal(w, body, w.GetBall(b).Position);
             Assert.True(local.Y > 0f && local.Y < 0.1f, "ball is not pressed into the opening: " + local);
         }
+
         /// <summary>
-        /// Wedge responses (held balls, plates crushing balls, bouncing hits whose wedge impulse joins the Hit events) allocate
-        /// nothing in steady state.
+        /// Wedge responses (held balls, plates crushing balls, bouncing hits whose wedge response applies restitution and whose
+        /// impulse joins the Hit events) allocate nothing in steady state. The crushed and swinging-plate balls settle into
+        /// resting wedge contacts (restitution 0 below the resting threshold), so drop stations re-launch their ball straight
+        /// at a narrow opening every half second throughout the measured window: each re-launch is an energetic two-cap hit
+        /// that goes through the wedge response's restitution step.
         /// </summary>
         [Fact]
         public void WedgeSceneDoesNotAllocateInSteadyState()
         {
             var w = new PhysicsWorld(SimSettings.Default);
             var m = SimTestUtil.Wall(0.9f, 0.3f);
-            const int openings = 8;
+            const int openings = 8, drops = 4, stations = openings + drops;
             var plates = new int[openings];
+            var dropBalls = new int[drops];
+            var dropX = new float[drops];
             // A closed box keeps every ball in a bounded region (a ball squeezed out sideways falls onto its floor).
             int box = w.AddBody(BodyDef.Static(new Vec2(0f, 0.5f)));
-            w.AddPolyline(box, ShapeBuilder.Rectangle(openings * 2.5f + 2f, 4f), true, T, m);
-            for (int i = 0; i < openings; i++)
+            w.AddPolyline(box, ShapeBuilder.Rectangle(stations * 2.5f + 2f, 4f), true, T, m);
+            for (int i = 0; i < stations; i++)
             {
                 bool ring = (i & 1) == 1;
-                float x = (i - (openings - 1) * 0.5f) * 2.5f;
+                float x = (i - (stations - 1) * 0.5f) * 2.5f;
                 int body = w.AddBody(BodyDef.Kinematic(new Vec2(x, 0f)));
                 float halfGap = (2f * R * 0.99f + T) * 0.5f;
                 if (ring)
@@ -235,7 +257,13 @@ namespace Ballverse.Core.Tests.Sim
                     w.AddSegment(body, new Vec2(-1f, 0f), new Vec2(-halfGap, 0f), T, m);
                     w.AddSegment(body, new Vec2(halfGap, 0f), new Vec2(1f, 0f), T, m);
                 }
-                w.AddBall(SimTestUtil.Ball(new Vec2(x, 0.4f), new Vec2(0f, -6f), R, 0.9f, 0.3f));
+                int ball = w.AddBall(SimTestUtil.Ball(new Vec2(x, 0.4f), new Vec2(0f, -6f), R, 0.9f, 0.3f));
+                if (i >= openings)
+                {
+                    dropBalls[i - openings] = ball;
+                    dropX[i - openings] = x;
+                    continue;
+                }
                 plates[i] = w.AddBody(BodyDef.Kinematic(new Vec2(x, 0.8f)));
                 w.AddSegment(plates[i], new Vec2(-0.6f, 0f), new Vec2(0.6f, 0f), T, m);
             }
@@ -249,6 +277,15 @@ namespace Ballverse.Core.Tests.Sim
                 {
                     float y = i < openings / 2 ? MathF.Max(0.2f, 0.8f - tick * 0.01f) : 0.45f + 0.3f * MathF.Sin(tick * 0.05f);
                     w.MoveBodyTo(plates[i], new Vec2(w.GetBody(plates[i]).Position.X, y), 0f);
+                }
+                if (tick % 30 == 0)
+                {
+                    for (int k = 0; k < drops; k++)
+                    {
+                        w.SetBallPosition(dropBalls[k], new Vec2(dropX[k], 0.3f));
+                        w.SetBallVelocity(dropBalls[k], new Vec2(0f, -7f));
+                        w.SetBallAngularVelocity(dropBalls[k], 0f);
+                    }
                 }
                 w.Step();
             }
